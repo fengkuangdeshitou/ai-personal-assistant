@@ -1,0 +1,16 @@
+# 日志文件
+logs/*.log
+*.log
+
+# 备份文件
+backup/*
+!backup/.gitkeep
+
+# 个人配置
+profile.json
+reminders.json
+
+# 临时文件
+*.tmp
+*.swp
+.DS_Store
