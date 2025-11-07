@@ -1,0 +1,99 @@
+{
+  "workbench.colorTheme": "GitHub Dark",
+  "workbench.iconTheme": "vscode-icons",
+  "workbench.startupEditor": "none",
+  "workbench.editor.enablePreview": false,
+  
+  "editor.fontSize": 16,
+  "editor.fontFamily": "SF Mono, Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace",
+  "editor.lineHeight": 1.6,
+  "editor.wordWrap": "on",
+  "editor.minimap.enabled": true,
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": true,
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll": true,
+    "source.organizeImports": true
+  },
+  
+  "terminal.integrated.fontSize": 15,
+  "terminal.integrated.fontFamily": "SF Mono, Monaco, 'Cascadia Code'",
+  "terminal.integrated.inheritEnv": true,
+  "terminal.integrated.defaultProfile.osx": "zsh",
+  
+  "files.associations": {
+    "*.js": "javascriptreact",
+    "*.vue": "vue",
+    "*.swift": "swift"
+  },
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/build": true,
+    "**/dist": true,
+    "**/.git": true,
+    "**/DerivedData": true,
+    "**/*.xcworkspace": false,
+    "**/*.xcodeproj": false
+  },
+  
+  "git.autofetch": true,
+  "git.enableSmartCommit": true,
+  "git.confirmSync": false,
+  "git.suggestSmartCommit": true,
+  
+  "github.copilot.enable": {
+    "*": true,
+    "yaml": true,
+    "plaintext": true,
+    "markdown": true
+  },
+  "github.copilot.editor.enableAutoCompletions": true,
+  
+  "security.workspace.trust.enabled": false,
+  "security.workspace.trust.banner": "never",
+  "security.workspace.trust.startupPrompt": "never",
+  
+  "extensions.autoCheckUpdates": true,
+  "extensions.autoUpdate": true,
+  
+  "ai.assistant.personalProfile": "/Users/maiyou001/.ai-assistant/profile.json",
+  "ai.assistant.autoGreeting": true,
+  "ai.assistant.smartSuggestions": true,
+  "ai.assistant.contextAware": true,
+  
+  "chat.instructionsFilesLocations": {
+    ".github/instructions": true,
+    "/Users/maiyou001/.ai-assistant/instructions/": true,
+    "/Users/maiyou001/.aitk/instructions/": true
+  },
+  
+  "javascript.preferences.includePackageJsonAutoImports": "on",
+  "typescript.preferences.includePackageJsonAutoImports": "on",
+  "typescript.suggest.autoImports": true,
+  
+  "python.defaultInterpreterPath": "/usr/bin/python3",
+  "python.terminal.activateEnvironment": true,
+  
+  "java.configuration.runtimes": [],
+  "java.compile.nullAnalysis.mode": "automatic",
+  
+  "swift.languageServerPath": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/sourcekit-lsp",
+  
+  "vue.server.hybridMode": false,
+  
+  "emmet.includeLanguages": {
+    "javascript": "javascriptreact",
+    "vue-html": "html"
+  },
+  
+  "explorer.confirmDelete": false,
+  "explorer.confirmDragAndDrop": false,
+  
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/build": true,
+    "**/dist": true,
+    "**/DerivedData": true
+  }
+}

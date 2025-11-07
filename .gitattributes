@@ -1,0 +1,2 @@
+server/tools/ndk/** filter=lfs diff=lfs merge=lfs -text
+gui/server/tools/ndk/** filter=lfs diff=lfs merge=lfs -text
