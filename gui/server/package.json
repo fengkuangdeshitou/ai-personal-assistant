@@ -1,0 +1,16 @@
+{
+  "name": "ai-personal-assistant-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "simple-git": "^3.24.0"
+  }
+}

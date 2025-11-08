@@ -1,0 +1,13 @@
+#!/bin/bash
+cd "/Users/maiyou001/.ai-assistant/gui"
+
+# 启动后端服务（如果未运行）
+if ! lsof -i :5178 > /dev/null 2>&1; then
+    cd server
+    node server.js > /tmp/ai-assistant-server.log 2>&1 &
+    cd ..
+    sleep 2
+fi
+
+# 打开前端页面
+open index.html

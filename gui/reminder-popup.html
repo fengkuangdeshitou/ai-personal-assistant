@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 助理 - 提醒</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .reminder-card {
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            width: 100%;
+            padding: 60px 40px;
+            text-align: center;
+            animation: slideIn 0.5s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-30px) scale(0.9);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .icon {
+            font-size: 80px;
+            margin-bottom: 30px;
+            animation: bounce 2s ease-in-out infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .title {
+            font-size: 36px;
+            font-weight: bold;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 20px;
+        }
+
+        .time {
+            font-size: 24px;
+            color: #666;
+            margin-bottom: 30px;
+        }
+
+        .message {
+            font-size: 18px;
+            color: #888;
+            line-height: 1.6;
+            margin-bottom: 40px;
+        }
+
+        .countdown {
+            font-size: 16px;
+            color: #999;
+            margin-bottom: 20px;
+        }
+
+        .close-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 18px;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .close-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .close-btn:active {
+            transform: translateY(0);
+        }
+
+        .closed-message {
+            display: none;
+            font-size: 20px;
+            color: #667eea;
+            margin-top: 20px;
+            font-weight: bold;
+        }
+
+        .instruction {
+            font-size: 14px;
+            color: #999;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="reminder-card">
+        <div class="icon" id="reminderIcon">☕</div>
+        <div class="title" id="reminderTitle">早安时刻</div>
+        <div class="time" id="reminderTime">09:30</div>
+        <div class="message" id="reminderMessage">
+            新的一天开始了！<br>
+            保持好心情，加油工作！💪
+        </div>
+        <div class="countdown" id="countdown">30秒后自动关闭</div>
+        <button class="close-btn" id="closeBtn" onclick="closeWindow()">
+            ❌ 关闭
+        </button>
+        <div class="closed-message" id="closedMessage">✅ 提醒已关闭</div>
+        <div class="instruction" id="instruction">按 ⌘W 可关闭窗口</div>
+    </div>
+
+    <script>
+        // 提醒配置
+        const reminders = {
+            morning: {
+                time: '09:30',
+                title: '早安时刻',
+                icon: '☕',
+                message: '新的一天开始了！<br>保持好心情，加油工作！💪'
+            },
+            lunch: {
+                time: '12:30',
+                title: '午休时间',
+                icon: '🍱',
+                message: '该吃午饭啦！<br>记得休息一下，补充能量！😋'
+            },
+            afternoon: {
+                time: '14:00',
+                title: '下午工作时间',
+                icon: '💼',
+                message: '下午继续加油！<br>保持专注，高效工作！🚀'
+            },
+            evening: {
+                time: '18:30',
+                title: '下班啦',
+                icon: '🎉',
+                message: '辛苦一天了！<br>好好休息，享受晚上的时光！🌙'
+            }
+        };
+
+        // 获取URL参数
+        const urlParams = new URLSearchParams(window.location.search);
+        const reminderType = urlParams.get('type') || 'morning';
+        const config = reminders[reminderType] || reminders.morning;
+
+        // 设置提醒内容
+        document.getElementById('reminderIcon').textContent = config.icon;
+        document.getElementById('reminderTitle').textContent = config.title;
+        document.getElementById('reminderTime').textContent = config.time;
+        document.getElementById('reminderMessage').innerHTML = config.message;
+
+        // 倒计时
+        let countdown = 30;
+        const countdownElement = document.getElementById('countdown');
+        
+        const countdownInterval = setInterval(() => {
+            countdown--;
+            if (countdown > 0) {
+                countdownElement.textContent = `${countdown}秒后自动关闭`;
+            } else {
+                countdownElement.textContent = '正在关闭...';
+                closeWindow();
+                clearInterval(countdownInterval);
+            }
+        }, 1000);
+
+        // 关闭窗口函数
+        function closeWindow() {
+            document.getElementById('closeBtn').style.display = 'none';
+            document.getElementById('countdown').style.display = 'none';
+            document.getElementById('closedMessage').style.display = 'block';
+            document.getElementById('instruction').style.display = 'block';
+            
+            // 尝试关闭窗口
+            setTimeout(() => {
+                window.close();
+            }, 500);
+        }
+
+        // 键盘快捷键
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') {
+                e.preventDefault();
+                closeWindow();
+            }
+        });
+    </script>
+</body>
+</html>
