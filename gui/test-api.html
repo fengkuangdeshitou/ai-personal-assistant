@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API 测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        pre {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+        .chart {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+            height: 200px;
+            margin: 20px 0;
+        }
+        .bar {
+            flex: 1;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 4px 4px 0 0;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+        .bar:hover {
+            opacity: 0.8;
+        }
+        .bar-label {
+            position: absolute;
+            bottom: -25px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+        }
+        .bar-value {
+            position: absolute;
+            top: -25px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 11px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .commit-item {
+            padding: 10px;
+            margin: 10px 0;
+            background: #f8f9fa;
+            border-left: 3px solid #667eea;
+            border-radius: 4px;
+        }
+        .commit-time {
+            color: #999;
+            font-size: 12px;
+        }
+        .commit-message {
+            color: #333;
+            margin: 5px 0;
+        }
+        .commit-stats {
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        .insertions {
+            color: #28a745;
+        }
+        .deletions {
+            color: #dc3545;
+        }
+        .loading {
+            text-align: center;
+            color: #999;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 AI 助理 API 测试</h1>
+
+    <div class="section">
+        <h2>📊 本周代码趋势（真实数据）</h2>
+        <div id="weeklyChart" class="chart"></div>
+        <pre id="weeklyData">加载中...</pre>
+    </div>
+
+    <div class="section">
+        <h2>💼 今日工作记录（真实数据）</h2>
+        <div id="todayCommits">
+            <div class="loading">加载中...</div>
+        </div>
+    </div>
+
+    <script>
+        // 获取本周统计
+        async function loadWeeklyStats() {
+            try {
+                const response = await fetch('http://localhost:5178/api/commits/weekly');
+                const data = await response.json();
+                
+                // 显示原始数据
+                document.getElementById('weeklyData').textContent = JSON.stringify(data, null, 2);
+                
+                // 绘制图表
+                const chartDiv = document.getElementById('weeklyChart');
+                const days = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+                
+                // 获取本周日期范围
+                const now = new Date();
+                const dayOfWeek = now.getDay();
+                const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+                
+                const weeklyData = [];
+                for (let i = 0; i < 7; i++) {
+                    const date = new Date(now);
+                    date.setDate(now.getDate() + mondayOffset + i);
+                    const dayKey = date.toISOString().split('T')[0];
+                    weeklyData.push(data.dailyStats[dayKey]?.lines || 0);
+                }
+                
+                const maxValue = Math.max(...weeklyData, 1);
+                
+                chartDiv.innerHTML = weeklyData.map((value, i) => {
+                    const height = (value / maxValue) * 100;
+                    return `
+                        <div class="bar" style="height: ${height}%">
+                            <div class="bar-value">${value}</div>
+                            <div class="bar-label">${days[i]}</div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                console.error('加载本周统计失败:', error);
+                document.getElementById('weeklyData').textContent = '错误: ' + error.message;
+            }
+        }
+        
+        // 获取今日提交
+        async function loadTodayCommits() {
+            try {
+                const response = await fetch('http://localhost:5178/api/commits/today');
+                const data = await response.json();
+                
+                const commitsDiv = document.getElementById('todayCommits');
+                
+                if (data.commits.length === 0) {
+                    commitsDiv.innerHTML = '<div class="loading">今日暂无提交记录</div>';
+                    return;
+                }
+                
+                commitsDiv.innerHTML = data.commits.map(commit => {
+                    const time = new Date(commit.date).toLocaleTimeString('zh-CN', { 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                    });
+                    
+                    return `
+                        <div class="commit-item">
+                            <div class="commit-time">
+                                ⏰ ${time} | 👤 ${commit.author} | 📌 ${commit.hash}
+                                ${commit.project ? `| 📁 ${commit.project}` : ''}
+                            </div>
+                            <div class="commit-message">
+                                📝 ${commit.message}
+                            </div>
+                            <div class="commit-stats">
+                                <span class="insertions">+${commit.insertions}</span>
+                                <span class="deletions">-${commit.deletions}</span>
+                                | 📄 ${commit.files} 个文件
+                                ${commit.changedFiles?.length > 0 ? `<br>📁 ${commit.changedFiles.join(', ')}` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                console.error('加载今日提交失败:', error);
+                document.getElementById('todayCommits').innerHTML = 
+                    '<div class="loading">错误: ' + error.message + '</div>';
+            }
+        }
+        
+        // 页面加载时执行
+        loadWeeklyStats();
+        loadTodayCommits();
+    </script>
+</body>
+</html>
