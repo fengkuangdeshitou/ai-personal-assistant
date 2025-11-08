@@ -1,0 +1,25 @@
+{
+  "projects": [
+    { "name": ".ai-assistant", "path": "/Users/maiyou001/.ai-assistant" },
+    { "name": "ios_maiyou_new_sdk", "path": "/Users/maiyou001/Project/ios_maiyou_new_sdk" },
+    { "name": "android-sdk-group-chat", "path": "/Users/maiyou001/Project/android-sdk-group-chat" },
+    { "name": "CPS_APP_IOS", "path": "/Users/maiyou001/Project/CPS_APP_IOS" },
+    { "name": "wheatgame-ios", "path": "/Users/maiyou001/Project/wheatgame-ios" },
+    { "name": "react-agent-website", "path": "/Users/maiyou001/Project/react-agent-website" },
+    { "name": "yunyou-bookmark", "path": "/Users/maiyou001/Project/yunyou-bookmark" },
+    { "name": "hg-bookmark", "path": "/Users/maiyou001/Project/hg-bookmark" },
+    { "name": "apple-overseas-sdk", "path": "/Users/maiyou001/Project/apple-overseas-sdk" },
+    { "name": "milu_sdk_ios", "path": "/Users/maiyou001/Project/milu_sdk_ios" },
+    { "name": "agent-pro", "path": "/Users/maiyou001/Project/agent-pro" },
+    { "name": "apple-overseas-sdk-third", "path": "/Users/maiyou001/Project/apple-overseas-sdk-third" },
+    { "name": "ios-package-signature", "path": "/Users/maiyou001/Project/ios-package-signature" },
+    { "name": "mall", "path": "/Users/maiyou001/Project/mall" },
+    { "name": "discount-box-ios", "path": "/Users/maiyou001/Project/discount-box-ios" },
+    { "name": "sdk-document", "path": "/Users/maiyou001/Project/sdk-document" },
+    { "name": "milu-hmos", "path": "/Users/maiyou001/Project/milu-hmos" },
+    { "name": "wheatname-yunyou", "path": "/Users/maiyou001/Project/wheatname-yunyou" },
+    { "name": "games-52-play-web", "path": "/Users/maiyou001/Project/games-52-play-web" },
+    { "name": "game_sdk_ios", "path": "/Users/maiyou001/Project/game_sdk_ios" },
+    { "name": "test", "path": "/Users/maiyou001/Desktop/test" }
+  ]
+}
