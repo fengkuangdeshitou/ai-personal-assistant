@@ -1535,55 +1535,38 @@
 
         // 获取本周每天的提交数据
         async function fetchWeeklyStats() {
-            // 优先从后端API获取本地Git仓库的统计数据
+            // 优先从后端API获取真实Git提交历史
             try {
-                const response = await fetch('http://localhost:5178/api/projects');
+                const response = await fetch('http://localhost:5178/api/commits/weekly');
                 if (response.ok) {
                     const data = await response.json();
-                    if (data.projects && data.projects.length > 0) {
+                    if (data.dailyStats) {
                         const weeklyData = [0, 0, 0, 0, 0, 0, 0]; // 周一到周日
                         
-                        // 获取本周的开始日期（周一）
+                        // 获取本周的日期范围
                         const now = new Date();
                         const dayOfWeek = now.getDay();
                         const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-                        const monday = new Date(now);
-                        monday.setDate(now.getDate() + mondayOffset);
-                        monday.setHours(0, 0, 0, 0);
                         
-                        // 统计每个项目的本周提交
-                        for (const project of data.projects) {
-                            if (project.lastCommitTime) {
-                                const commitDate = new Date(project.lastCommitTime);
-                                
-                                // 检查是否在本周内
-                                if (commitDate >= monday) {
-                                    const commitDayOfWeek = commitDate.getDay();
-                                    const adjustedIndex = commitDayOfWeek === 0 ? 6 : commitDayOfWeek - 1;
-                                    
-                                    // 获取项目状态作为代码行数的估算
-                                    try {
-                                        const statusRes = await fetch(`http://localhost:5178/api/status?path=${encodeURIComponent(project.path)}`);
-                                        if (statusRes.ok) {
-                                            const status = await statusRes.json();
-                                            const lines = (status.added || 0) + (status.modified || 0) * 0.5;
-                                            weeklyData[adjustedIndex] += Math.round(lines);
-                                        } else {
-                                            // 如果无法获取状态，按提交计数
-                                            weeklyData[adjustedIndex] += 50;
-                                        }
-                                    } catch (e) {
-                                        weeklyData[adjustedIndex] += 50;
-                                    }
-                                }
+                        // 填充本周每天的真实数据
+                        for (let i = 0; i < 7; i++) {
+                            const date = new Date(now);
+                            date.setDate(now.getDate() + mondayOffset + i);
+                            const dayKey = date.toISOString().split('T')[0];
+                            
+                            if (data.dailyStats[dayKey]) {
+                                // 使用真实的代码行数变化（插入+删除）
+                                weeklyData[i] = data.dailyStats[dayKey].lines;
                             }
                         }
                         
-                        // 如果本周有数据，保存并返回
-                        if (weeklyData.some(v => v > 0)) {
-                            localStorage.setItem('weeklyStats', JSON.stringify(weeklyData));
-                            return weeklyData;
-                        }
+                        // 保存到localStorage
+                        localStorage.setItem('weeklyStats', JSON.stringify(weeklyData));
+                        localStorage.setItem('weeklyCommits', JSON.stringify(data.commits));
+                        localStorage.setItem('weeklyStatsTime', Date.now().toString());
+                        
+                        console.log('✅ 本周代码统计（真实数据）:', weeklyData);
+                        return weeklyData;
                     }
                 }
             } catch (error) {
@@ -3203,12 +3186,31 @@ ${release.body || '• 性能优化和错误修复\n• 查看 GitHub Release �
                     const timeStr = commitTime.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
                     const message = commit.commit.message.split('\n')[0]; // 只取第一行
 
+                    let desc = `📝 ${message}`;
+                    
+                    // 添加项目名称（如果有）
+                    if (commit.project) {
+                        desc = `📝 [${commit.project}] ${message}`;
+                    }
+                    
+                    // 添加代码统计
+                    if (commit.stats) {
+                        const insertions = commit.stats.insertions || 0;
+                        const deletions = commit.stats.deletions || 0;
+                        desc += `<br><span style="color: #28a745;">+${insertions}</span> <span style="color: #dc3545;">-${deletions}</span>`;
+                    }
+                    
+                    // 添加修改的文件
+                    if (commit.files && commit.files.length > 0) {
+                        desc += `<br><span style="color: #999; font-size: 0.85em;">📁 ${commit.files.join(', ')}</span>`;
+                    }
+
                     timeline.push({
                         time: timeStr,
-                        desc: `📝 ${message}`,
+                        desc: desc,
                         timestamp: commitTime.getTime(),
                         author: commit.commit.author.name,
-                        sha: commit.sha.substring(0, 7)
+                        sha: commit.sha
                     });
                 });
 
@@ -3311,6 +3313,39 @@ ${release.body || '• 性能优化和错误修复\n• 查看 GitHub Release �
 
         // 获取今日的提交记录
         async function fetchTodayCommits() {
+            // 优先从后端API获取真实Git提交历史
+            try {
+                const response = await fetch('http://localhost:5178/api/commits/today');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.commits) {
+                        console.log('✅ 今日提交记录（真实数据）:', data.commits);
+                        // 转换为GitHub API格式以保持兼容性
+                        return data.commits.map(c => ({
+                            sha: c.hash,
+                            commit: {
+                                message: c.message,
+                                author: {
+                                    name: c.author,
+                                    email: c.email,
+                                    date: c.date
+                                }
+                            },
+                            stats: {
+                                insertions: c.insertions,
+                                deletions: c.deletions,
+                                total: c.insertions + c.deletions
+                            },
+                            files: c.changedFiles || [],
+                            project: c.project
+                        }));
+                    }
+                }
+            } catch (error) {
+                console.warn('后端API获取今日提交失败，尝试GitHub API:', error);
+            }
+
+            // 如果后端失败，回退到GitHub API
             const settings = getSettings();
             const owner = settings.githubUser;
             const repo = settings.githubRepo;
