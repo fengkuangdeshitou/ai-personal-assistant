@@ -15,9 +15,74 @@ const PORT = process.env.PORT || 5178;
 app.use(cors());
 app.use(express.json());
 
+// 提供静态文件服务 - 从上级gui目录提供HTML文件
+app.use(express.static(path.join(__dirname, '..')));
+
 // Config: projects.json mapping or directory scan
 const CONFIG_PATH = path.join(__dirname, 'projects.json');
-const DEFAULT_DIR = process.env.PROJECTS_DIR || path.join(os.homedir(), 'Projects');
+const CHANNEL_CONFIG_PATH = path.join(__dirname, 'channel-config.json');
+const PROJECT_BUCKETS_PATH = path.join(__dirname, 'project-buckets.json');
+const OSS_CONFIG_PATH = path.join(__dirname, 'oss-connection-config.json');
+const DEFAULT_DIR = process.env.PROJECTS_DIR || '/Users/maiyou001/Project';
+
+// 从新的配置结构中获取 bucket 配置
+function getBucketConfig(ossConfigs, projectName, channelId = null, env = 'dev') {
+  try {
+    const projectConfig = ossConfigs.projects?.[projectName];
+    if (!projectConfig) {
+      return null;
+    }
+    
+    // 多渠道项目
+    if (projectConfig.channels && channelId) {
+      const channelConfig = projectConfig.channels[channelId];
+      if (!channelConfig) return null;
+      
+      const bucketInfo = channelConfig.buckets?.[env];
+      if (!bucketInfo) return null;
+      
+      // 返回包含 name 的完整配置
+      return {
+        name: bucketInfo.name,
+        region: bucketInfo.region,
+        prefix: bucketInfo.prefix || '',
+        url: bucketInfo.url,
+        enabled: bucketInfo.enabled !== false
+      };
+    }
+    
+    // 单渠道项目
+    if (projectConfig.buckets) {
+      const bucketInfo = projectConfig.buckets[env];
+      if (!bucketInfo) return null;
+      
+      // 处理数组（多个生产环境）
+      if (Array.isArray(bucketInfo)) {
+        return bucketInfo.map(b => ({
+          name: b.name,
+          region: b.region,
+          prefix: b.prefix || '',
+          url: b.url,
+          description: b.description
+        }));
+      }
+      
+      // 单个 bucket
+      return {
+        name: bucketInfo.name,
+        region: bucketInfo.region,
+        prefix: bucketInfo.prefix || '',
+        url: bucketInfo.url
+      };
+    }
+    
+    return null;
+  } catch (e) {
+    console.error('Error getting bucket config:', e);
+    return null;
+  }
+}
+
 
 function readConfig() {
   try {
@@ -304,6 +369,443 @@ app.post('/api/git/push', async (req, res) => {
     const counts = await getStatusCounts(repoPath);
     const lastCommitTime = await getLastCommitTime(repoPath);
     res.json({ ok: true, result, status: counts, lastCommitTime });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 获取项目的渠道配置
+app.get('/api/channels/:projectName', (req, res) => {
+  try {
+    const { projectName } = req.params;
+    if (!fs.existsSync(CHANNEL_CONFIG_PATH)) {
+      return res.status(404).json({ error: 'Channel config not found' });
+    }
+    
+    const config = JSON.parse(fs.readFileSync(CHANNEL_CONFIG_PATH, 'utf-8'));
+    const projectConfig = config.projects[projectName];
+    
+    if (!projectConfig) {
+      return res.json({ channels: {} });
+    }
+    
+    res.json({ channels: projectConfig.channels });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 获取项目的 bucket 配置（非多渠道项目）
+app.get('/api/project-buckets/:projectName', (req, res) => {
+  try {
+    const { projectName } = req.params;
+    if (!fs.existsSync(PROJECT_BUCKETS_PATH)) {
+      return res.status(404).json({ error: 'Project buckets config not found' });
+    }
+    
+    const config = JSON.parse(fs.readFileSync(PROJECT_BUCKETS_PATH, 'utf-8'));
+    const projectConfig = config.projects[projectName];
+    
+    if (!projectConfig) {
+      return res.json({ buckets: null });
+    }
+    
+    res.json({ 
+      name: projectConfig.name,
+      buckets: projectConfig.buckets,
+      description: projectConfig.description 
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 切换项目渠道配置
+app.post('/api/switch-channel', async (req, res) => {
+  try {
+    const { projectName, channel } = req.body;
+    
+    if (!projectName || !channel) {
+      return res.status(400).json({ error: 'Missing projectName or channel' });
+    }
+    
+    const config = JSON.parse(fs.readFileSync(CHANNEL_CONFIG_PATH, 'utf-8'));
+    const projectConfig = config.projects[projectName];
+    
+    if (!projectConfig || !projectConfig.channels[channel]) {
+      return res.status(404).json({ error: 'Project or channel not found' });
+    }
+    
+    const channelConfig = projectConfig.channels[channel];
+    const projectPath = path.join(DEFAULT_DIR, projectName);
+    
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ error: 'Project path not found' });
+    }
+    
+    const results = [];
+    
+    // 处理每个文件的规则
+    for (const [filePath, fileConfig] of Object.entries(channelConfig.files)) {
+      const fullPath = path.join(projectPath, filePath);
+      
+      if (!fs.existsSync(fullPath)) {
+        results.push({ file: filePath, status: 'skipped', reason: 'File not found' });
+        continue;
+      }
+      
+      let content = fs.readFileSync(fullPath, 'utf-8');
+      let modified = false;
+      
+      for (const rule of fileConfig.rules) {
+        const regex = new RegExp(rule.pattern, 'gm');
+        
+        if (rule.action === 'comment') {
+          // 添加注释（如果还没有注释）
+          const newContent = content.replace(regex, (match, captured) => {
+            if (match.startsWith('//') || match.startsWith('<!--')) {
+              return match; // 已经是注释了
+            }
+            modified = true;
+            // 根据文件类型选择注释符号
+            if (fullPath.endsWith('.html')) {
+              return `<!-- ${captured} -->`;
+            } else {
+              return `// ${captured}`;
+            }
+          });
+          content = newContent;
+        } else if (rule.action === 'uncomment') {
+          // 移除注释
+          const newContent = content.replace(regex, (match, captured) => {
+            modified = true;
+            return captured;
+          });
+          content = newContent;
+        }
+      }
+      
+      if (modified) {
+        fs.writeFileSync(fullPath, content, 'utf-8');
+        results.push({ file: filePath, status: 'modified' });
+      } else {
+        results.push({ file: filePath, status: 'unchanged' });
+      }
+    }
+    
+    res.json({ 
+      ok: true, 
+      channel: channelConfig.name,
+      results 
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 构建项目（带渠道切换）
+app.post('/api/build-channel', async (req, res) => {
+  try {
+    const { projectName, channel } = req.body;
+    
+    if (!projectName) {
+      return res.status(400).json({ error: 'Missing projectName' });
+    }
+    
+    const projectPath = path.join(DEFAULT_DIR, projectName);
+    
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    
+    // 如果指定了渠道，先切换配置
+    if (channel) {
+      const switchResponse = await fetch(`http://localhost:${PORT}/api/switch-channel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectName, channel })
+      });
+      
+      if (!switchResponse.ok) {
+        return res.status(500).json({ error: 'Failed to switch channel' });
+      }
+    }
+    
+    // 执行构建
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+    
+    const { stdout, stderr } = await execAsync('npm run build', {
+      cwd: projectPath,
+      timeout: 300000 // 5分钟超时
+    });
+    
+    res.json({ 
+      ok: true, 
+      channel,
+      stdout, 
+      stderr,
+      buildPath: path.join(projectPath, 'build')
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message, stderr: e.stderr });
+  }
+});
+
+// 按渠道和环境上传到 OSS
+app.post('/api/oss/upload-channel', async (req, res) => {
+  try {
+    const { projectName, path: projectPath, channelId, env } = req.body;
+    
+    if (!projectName || !channelId || !env) {
+      return res.status(400).json({ ok: false, error: 'Missing required parameters' });
+    }
+    
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ ok: false, error: 'Project not found' });
+    }
+    
+    // 读取渠道配置
+    let channelConfig;
+    try {
+      const configData = fs.readFileSync(CHANNEL_CONFIG_PATH, 'utf-8');
+      const config = JSON.parse(configData);
+      channelConfig = config.projects?.[projectName]?.channels?.[channelId];
+      
+      if (!channelConfig) {
+        return res.status(404).json({ ok: false, error: 'Channel configuration not found' });
+      }
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: 'Failed to load channel config: ' + e.message });
+    }
+    
+    // 获取 bucket 名称（从旧的 channel-config.json）
+    const bucketName = typeof channelConfig.buckets === 'object' 
+      ? channelConfig.buckets[env] 
+      : channelConfig.buckets?.[0];
+    
+    if (!bucketName) {
+      return res.status(400).json({ ok: false, error: `No bucket configured for ${channelId}-${env}` });
+    }
+    
+    // 读取 OSS 连接配置（新结构）
+    if (!fs.existsSync(OSS_CONFIG_PATH)) {
+      return res.status(500).json({ ok: false, error: 'OSS connection config not found' });
+    }
+    
+    let ossConfig, bucketConfig;
+    try {
+      const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
+      const ossConfigs = JSON.parse(ossData);
+      ossConfig = ossConfigs.connection;
+      
+      // 使用新的查找函数
+      bucketConfig = getBucketConfig(ossConfigs, projectName, channelId, env);
+      
+      if (!bucketConfig) {
+        return res.status(404).json({ ok: false, error: `Bucket config not found for ${projectName}-${channelId}-${env}` });
+      }
+      
+      if (bucketConfig.enabled === false) {
+        return res.status(400).json({ ok: false, error: `Bucket is not enabled (待配置)` });
+      }
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: 'Failed to load OSS config: ' + e.message });
+    }
+    
+    // 检查构建目录
+    const buildPath = path.join(projectPath, 'build');
+    if (!fs.existsSync(buildPath)) {
+      return res.status(404).json({ ok: false, error: 'Build directory not found. Please build first.' });
+    }
+    
+    // 动态导入 ali-oss
+    const OSS = (await import('ali-oss')).default;
+    
+    // 创建 OSS 客户端
+    const client = new OSS({
+      region: ossConfig.region,
+      accessKeyId: ossConfig.accessKeyId,
+      accessKeySecret: ossConfig.accessKeySecret,
+      bucket: bucketName
+    });
+    
+    // 上传文件
+    const uploadDir = async (dirPath, prefix = '') => {
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      const results = [];
+      
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        const ossPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        
+        if (entry.isDirectory()) {
+          const subResults = await uploadDir(fullPath, ossPath);
+          results.push(...subResults);
+        } else {
+          try {
+            const result = await client.put(ossPath, fullPath);
+            results.push({ file: entry.name, path: ossPath, url: result.url, status: 'success' });
+          } catch (err) {
+            results.push({ file: entry.name, path: ossPath, status: 'failed', error: err.message });
+          }
+        }
+      }
+      
+      return results;
+    };
+    
+    const uploadResults = await uploadDir(buildPath, bucketConfig.prefix || '');
+    
+    const successCount = uploadResults.filter(r => r.status === 'success').length;
+    const failCount = uploadResults.filter(r => r.status === 'failed').length;
+    
+    res.json({ 
+      ok: true, 
+      bucket: bucketName,
+      channel: channelConfig.name,
+      env,
+      uploaded: successCount,
+      failed: failCount,
+      url: bucketConfig.url || `https://${bucketName}.oss-cn-hangzhou.aliyuncs.com`,
+      results: uploadResults
+    });
+  } catch (e) {
+    console.error('OSS upload error:', e);
+    res.status(500).json({ ok: false, error: e.message, stack: e.stack });
+  }
+});
+
+// 简单项目上传（无渠道，但有环境区分）
+app.post('/api/oss/upload-simple', async (req, res) => {
+  try {
+    const { projectName, path: projectPath, env, bucket: bucketName } = req.body;
+    
+    if (!projectName || !env || !bucketName) {
+      return res.status(400).json({ ok: false, error: 'Missing required parameters' });
+    }
+    
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ ok: false, error: 'Project not found' });
+    }
+    
+    // 检查 bucket 是否为占位符
+    if (bucketName.includes('placeholder')) {
+      return res.status(400).json({ ok: false, error: `Bucket ${bucketName} 尚未配置，请先配置实际的 bucket 名称` });
+    }
+    
+    // 读取 OSS 连接配置（新结构）
+    if (!fs.existsSync(OSS_CONFIG_PATH)) {
+      return res.status(500).json({ ok: false, error: 'OSS connection config not found' });
+    }
+    
+    let ossConfig, bucketConfig;
+    try {
+      const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
+      const ossConfigs = JSON.parse(ossData);
+      ossConfig = ossConfigs.connection;
+      
+      // 使用新的查找函数
+      bucketConfig = getBucketConfig(ossConfigs, projectName, null, env);
+      
+      if (!bucketConfig) {
+        return res.status(404).json({ ok: false, error: `Bucket config not found for ${projectName}-${env}` });
+      }
+      
+      // 如果是数组（多个生产环境），需要匹配指定的 bucket
+      if (Array.isArray(bucketConfig)) {
+        bucketConfig = bucketConfig.find(b => b.name === bucketName);
+        if (!bucketConfig) {
+          return res.status(404).json({ ok: false, error: `Bucket ${bucketName} not found` });
+        }
+      }
+      
+      if (bucketConfig.enabled === false) {
+        return res.status(400).json({ ok: false, error: `Bucket is disabled (未配置)` });
+      }
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: 'Failed to load OSS config: ' + e.message });
+    }
+    
+    // 检查构建目录
+    const buildPath = path.join(projectPath, 'build');
+    if (!fs.existsSync(buildPath)) {
+      return res.status(404).json({ ok: false, error: 'Build directory not found. Please build first.' });
+    }
+    
+    // 动态导入 ali-oss
+    const OSS = (await import('ali-oss')).default;
+    
+    // 创建 OSS 客户端（单项目上传）
+    const client = new OSS({
+      region: ossConfig.region,
+      accessKeyId: ossConfig.accessKeyId,
+      accessKeySecret: ossConfig.accessKeySecret,
+      bucket: bucketConfig.name
+    });
+    
+    // 上传文件
+    const uploadDir = async (dirPath, prefix = '') => {
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      const results = [];
+      
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        const ossPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        
+        if (entry.isDirectory()) {
+          const subResults = await uploadDir(fullPath, ossPath);
+          results.push(...subResults);
+        } else {
+          try {
+            const result = await client.put(ossPath, fullPath);
+            results.push({ file: entry.name, path: ossPath, url: result.url, status: 'success' });
+          } catch (err) {
+            results.push({ file: entry.name, path: ossPath, status: 'failed', error: err.message });
+          }
+        }
+      }
+      
+      return results;
+    };
+    
+    const uploadResults = await uploadDir(buildPath, bucketConfig.prefix || '');
+    
+    const successCount = uploadResults.filter(r => r.status === 'success').length;
+    const failCount = uploadResults.filter(r => r.status === 'failed').length;
+    
+    res.json({ 
+      ok: true, 
+      bucket: bucketConfig.name,
+      project: projectName,
+      env,
+      uploaded: successCount,
+      failed: failCount,
+      url: bucketConfig.url || `https://${bucketConfig.name}.oss-cn-hangzhou.aliyuncs.com`,
+      results: uploadResults
+    });
+  } catch (e) {
+    console.error('OSS upload error:', e);
+    res.status(500).json({ ok: false, error: e.message, stack: e.stack });
+  }
+});
+
+// 无渠道项目的默认上传（已废弃）
+app.post('/api/oss/upload', async (req, res) => {
+  try {
+    const { projectName, path: projectPath } = req.body;
+    
+    if (!projectName) {
+      return res.status(400).json({ ok: false, error: 'Missing projectName' });
+    }
+    
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ ok: false, error: 'Project not found' });
+    }
+    
+    // 已废弃，使用 upload-simple 代替
+    res.status(501).json({ ok: false, error: 'Please use /api/oss/upload-simple with environment selection.' });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
