@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import simpleGit from 'simple-git';
+import archiver from 'archiver';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -392,6 +393,52 @@ app.get('/api/channels/:projectName', (req, res) => {
     res.json({ channels: projectConfig.channels });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// 检查 build 目录是否存在
+app.post('/api/check-build', (req, res) => {
+  try {
+    const { projectName, path: projectPath } = req.body;
+    
+    if (!projectPath) {
+      return res.status(400).json({ ok: false, error: 'Missing project path' });
+    }
+    
+    const buildPath = path.join(projectPath, 'build');
+    const exists = fs.existsSync(buildPath);
+    
+    let fileCount = 0;
+    if (exists) {
+      try {
+        // 统计文件数量
+        const countFiles = (dir) => {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          let count = 0;
+          for (const entry of entries) {
+            if (entry.isDirectory()) {
+              count += countFiles(path.join(dir, entry.name));
+            } else {
+              count++;
+            }
+          }
+          return count;
+        };
+        fileCount = countFiles(buildPath);
+      } catch (e) {
+        // ignore error
+      }
+    }
+    
+    res.json({ 
+      ok: true,
+      exists,
+      buildPath,
+      fileCount,
+      isEmpty: exists && fileCount === 0
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -806,6 +853,230 @@ app.post('/api/oss/upload', async (req, res) => {
     
     // 已废弃，使用 upload-simple 代替
     res.status(501).json({ ok: false, error: 'Please use /api/oss/upload-simple with environment selection.' });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 复制文件到 agent-pro 并 git push
+app.post('/api/copy-and-push', async (req, res) => {
+  try {
+    const { sourcePath, targetProjectPath, commitMessage } = req.body;
+    
+    if (!sourcePath || !targetProjectPath) {
+      return res.status(400).json({ ok: false, error: 'Missing required parameters' });
+    }
+    
+    const sourceDir = path.join(sourcePath, 'build');
+    
+    // 检查源目录是否存在
+    if (!fs.existsSync(sourceDir)) {
+      return res.status(400).json({ ok: false, error: 'Build directory not found' });
+    }
+    
+    // 检查目标项目是否存在
+    if (!fs.existsSync(targetProjectPath)) {
+      return res.status(400).json({ ok: false, error: 'Target project not found' });
+    }
+    
+    // 复制文件
+    const copyRecursive = (src, dest) => {
+      const exists = fs.existsSync(src);
+      const stats = exists && fs.statSync(src);
+      const isDirectory = exists && stats.isDirectory();
+      
+      if (isDirectory) {
+        if (!fs.existsSync(dest)) {
+          fs.mkdirSync(dest, { recursive: true });
+        }
+        fs.readdirSync(src).forEach(childItemName => {
+          copyRecursive(
+            path.join(src, childItemName),
+            path.join(dest, childItemName)
+          );
+        });
+      } else {
+        fs.copyFileSync(src, dest);
+      }
+    };
+    
+    // 删除目标目录中的旧文件（除了 .git 目录）
+    const cleanTarget = (targetPath) => {
+      if (!fs.existsSync(targetPath)) return;
+      
+      const items = fs.readdirSync(targetPath);
+      for (const item of items) {
+        if (item === '.git') continue; // 保留 .git 目录
+        
+        const itemPath = path.join(targetPath, item);
+        const stats = fs.statSync(itemPath);
+        
+        if (stats.isDirectory()) {
+          fs.rmSync(itemPath, { recursive: true, force: true });
+        } else {
+          fs.unlinkSync(itemPath);
+        }
+      }
+    };
+    
+    // 清理目标目录
+    cleanTarget(targetProjectPath);
+    
+    // 复制所有文件
+    const files = fs.readdirSync(sourceDir);
+    let copiedCount = 0;
+    
+    for (const file of files) {
+      const srcFile = path.join(sourceDir, file);
+      const destFile = path.join(targetProjectPath, file);
+      copyRecursive(srcFile, destFile);
+      copiedCount++;
+    }
+    
+    // Git 操作
+    const git = simpleGit(targetProjectPath);
+    
+    // 添加所有文件
+    await git.add('.');
+    
+    // 检查是否有改动
+    const status = await git.status();
+    
+    if (status.files.length === 0) {
+      return res.json({
+        ok: true,
+        message: 'No changes to commit',
+        copiedFiles: copiedCount,
+        pushed: false
+      });
+    }
+    
+    // 提交
+    const message = commitMessage || `Update from react-agent-website build at ${new Date().toLocaleString('zh-CN')}`;
+    await git.commit(message);
+    
+    // Push
+    await git.push('origin', 'main');
+    
+    res.json({
+      ok: true,
+      message: 'Files copied and pushed successfully',
+      copiedFiles: copiedCount,
+      changedFiles: status.files.length,
+      pushed: true
+    });
+    
+  } catch (e) {
+    console.error('Copy and push error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 压缩 build 文件夹并上传到 OSS 的"以往版本"目录
+app.post('/api/backup-build', async (req, res) => {
+  try {
+    const { projectName, projectPath, bucketName } = req.body;
+    
+    if (!projectName || !projectPath || !bucketName) {
+      return res.status(400).json({ ok: false, error: 'Missing required parameters' });
+    }
+    
+    const buildPath = path.join(projectPath, 'build');
+    
+    // 检查 build 目录是否存在
+    if (!fs.existsSync(buildPath)) {
+      return res.status(400).json({ ok: false, error: 'Build directory not found' });
+    }
+    
+    // 生成日期格式的文件名 YYYY-MM-DD
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const zipFileName = `${dateStr}.zip`;
+    const tempZipPath = path.join(os.tmpdir(), `${projectName}-${dateStr}-${Date.now()}.zip`);
+    
+    // 创建压缩文件
+    await new Promise((resolve, reject) => {
+      const output = fs.createWriteStream(tempZipPath);
+      const archive = archiver('zip', { zlib: { level: 9 } });
+      
+      output.on('close', () => {
+        console.log(`Archive created: ${archive.pointer()} bytes`);
+        resolve();
+      });
+      
+      archive.on('error', (err) => {
+        reject(err);
+      });
+      
+      archive.pipe(output);
+      archive.directory(buildPath, false);
+      archive.finalize();
+    });
+    
+    // 读取 OSS 配置
+    const ossConfigData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
+    const ossConfigs = JSON.parse(ossConfigData);
+    
+    if (!ossConfigs.connection) {
+      return res.status(500).json({ ok: false, error: 'OSS connection config not found' });
+    }
+    
+    // 导入 ali-oss
+    const OSS = (await import('ali-oss')).default;
+    
+    // 创建 OSS 客户端
+    const client = new OSS({
+      region: ossConfigs.connection.region,
+      accessKeyId: ossConfigs.connection.accessKeyId,
+      accessKeySecret: ossConfigs.connection.accessKeySecret,
+      bucket: bucketName
+    });
+    
+    // 上传到 OSS 的"以往版本"目录
+    const ossPath = `以往版本/${zipFileName}`;
+    const result = await client.put(ossPath, tempZipPath);
+    
+    // 获取文件大小（在删除前）
+    const zipStats = fs.statSync(tempZipPath);
+    const fileSizeInMB = (zipStats.size / (1024 * 1024)).toFixed(2);
+    
+    // 删除临时文件
+    fs.unlinkSync(tempZipPath);
+    
+    res.json({
+      ok: true,
+      message: 'Build backup uploaded successfully',
+      fileName: zipFileName,
+      ossPath: ossPath,
+      url: result.url,
+      size: fileSizeInMB + ' MB'
+    });
+    
+  } catch (e) {
+    console.error('Backup build error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 获取 bucket 信息（用于多渠道项目备份）
+app.post('/api/oss/get-bucket-info', async (req, res) => {
+  try {
+    const { projectName, channelId, env } = req.body;
+    
+    const ossConfigData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
+    const ossConfigs = JSON.parse(ossConfigData);
+    
+    const bucketConfig = getBucketConfig(ossConfigs, projectName, channelId, env);
+    
+    if (!bucketConfig) {
+      return res.status(404).json({ ok: false, error: 'Bucket config not found' });
+    }
+    
+    res.json({
+      ok: true,
+      bucket: bucketConfig.name
+    });
+    
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
