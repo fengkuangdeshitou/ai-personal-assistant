@@ -14,3 +14,13 @@ reminders.json
 *.tmp
 *.swp
 .DS_Store
+
+# OSS 配置文件（包含敏感信息）
+gui/server/oss-connection-config.json
+gui/server/oss-config.json
+gui/server/bucket-config.json
+gui/server/server.log
+
+# Node modules
+gui/node_modules/
+gui/server/node_modules/
