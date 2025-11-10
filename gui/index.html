@@ -341,6 +341,108 @@
             transition: filter 0.2s;
         }
 
+        .channel-selector {
+            position: relative;
+            display: inline-block;
+        }
+
+        .channel-btn {
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+        }
+
+        .channel-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.5);
+        }
+
+        .channel-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            margin-top: 8px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+            z-index: 1000;
+            min-width: 180px;
+            display: none;
+            overflow: hidden;
+        }
+
+        .channel-dropdown.show {
+            display: block;
+            animation: fadeInDown 0.3s;
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .channel-item {
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: background 0.2s;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .channel-item:last-child {
+            border-bottom: none;
+        }
+
+        .channel-item:hover {
+            background: #f8f9ff;
+        }
+
+        .channel-item .channel-name {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .channel-item .channel-id {
+            font-size: 0.85em;
+            color: #999;
+            margin-top: 2px;
+        }
+
+        .build-btn {
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+            box-shadow: 0 2px 8px rgba(245, 87, 108, 0.3);
+        }
+
+        .build-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(245, 87, 108, 0.5);
+        }
+
+        .build-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         .project-status {
             display: inline-flex;
             align-items: center;
@@ -1823,6 +1925,312 @@
             showNotification(`📁 打开 ${projectName} 目录...`);
         }
 
+        // 构建项目
+        function buildProject(projectName) {
+            const path = getProjectPath(projectName);
+            const command = `cd ${path} && npm run build`;
+            const message = `🔨 构建 ${projectName}\n\n命令：${command}`;
+            
+            showCommandModal('Build Project', message, command);
+            showNotification(`🔨 开始构建 ${projectName}...`);
+        }
+
+        // 显示构建选项（如果有渠道配置则显示渠道选择）
+        async function showBuildOptions(projectName) {
+            try {
+                const response = await fetch(`http://localhost:5178/api/channels/${projectName}`);
+                const data = await response.json();
+                
+                if (data.channels && Object.keys(data.channels).length > 0) {
+                    // 有渠道配置，显示渠道选择弹窗
+                    showChannelSelectionModal(projectName, data.channels);
+                } else {
+                    // 没有渠道配置，直接构建
+                    buildProject(projectName);
+                }
+            } catch (err) {
+                console.error('Failed to load channels:', err);
+                // 出错时直接构建
+                buildProject(projectName);
+            }
+        }
+
+        // 显示渠道选择弹窗（仅用于构建，简化版）
+        function showChannelSelectionModal(projectName, channels) {
+            const channelOptions = Object.entries(channels).map(([id, config]) => `
+                <div class="channel-item" onclick="buildWithChannel('${projectName}', '${id}'); closeModal();" style="cursor: pointer; padding: 12px; border-bottom: 1px solid #f0f0f0; transition: background 0.2s;" 
+                     onmouseover="this.style.background='#f8f9ff'" 
+                     onmouseout="this.style.background='white'">
+                    <div style="font-weight: 500; color: #333;">${config.name}</div>
+                    <div style="font-size: 0.85em; color: #999; margin-top: 2px;">${id}</div>
+                </div>
+            `).join('');
+
+            const modalContent = `
+                <div style="padding: 20px;">
+                    <h3 style="margin: 0 0 20px 0; color: #333;">🔨 选择构建渠道</h3>
+                    <div style="border-radius: 12px; overflow: hidden; border: 1px solid #e0e0e0;">
+                        ${channelOptions}
+                    </div>
+                    <div style="margin-top: 20px; text-align: right;">
+                        <button onclick="closeModal();" 
+                                style="padding: 10px 20px; background: #e0e0e0; color: #666; border: none; border-radius: 8px; cursor: pointer; margin-right: 10px;">
+                            取消
+                        </button>
+                        <button onclick="buildProject('${projectName}'); closeModal();" 
+                                style="padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                            直接构建
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            showCustomModal('构建选项', modalContent);
+        }
+
+        // 显示自定义弹窗
+        function showCustomModal(title, content) {
+            const modal = document.createElement('div');
+            modal.id = 'customModal';
+            modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;';
+            
+            modal.innerHTML = `
+                <div style="background: white; border-radius: 16px; max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+                    ${content}
+                </div>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // 点击背景关闭
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    closeModal();
+                }
+            });
+        }
+
+        // 关闭弹窗
+        function closeModal() {
+            const modal = document.getElementById('customModal');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+        // 上传到 OSS
+        function uploadToOSS(projectName) {
+            // 已废弃，使用 showUploadOptions
+            showUploadOptions(projectName);
+        }
+
+        // 显示上传选项（渠道和环境选择）
+        async function showUploadOptions(projectName) {
+            try {
+                const response = await fetch(`http://localhost:5178/api/channels/${projectName}`);
+                const data = await response.json();
+                
+                if (data.channels && Object.keys(data.channels).length > 0) {
+                    // 有渠道配置，显示渠道和环境选择弹窗
+                    showChannelEnvSelectionModal(projectName, data.channels, 'upload');
+                } else {
+                    // 没有渠道配置，使用默认上传
+                    uploadWithoutChannel(projectName);
+                }
+            } catch (err) {
+                console.error('Failed to load channels:', err);
+                // 出错时使用默认上传
+                uploadWithoutChannel(projectName);
+            }
+        }
+
+        // 无渠道项目的默认上传（显示环境选择）
+        async function uploadWithoutChannel(projectName) {
+            try {
+                // 获取项目的 bucket 配置
+                const response = await fetch(`http://localhost:5178/api/project-buckets/${projectName}`);
+                const data = await response.json();
+                
+                if (data.buckets) {
+                    // 有配置，显示环境选择
+                    showSimpleEnvSelectionModal(projectName, data.buckets);
+                } else {
+                    // 没有配置，提示用户
+                    showNotification(`❌ 项目 ${projectName} 未配置 OSS bucket`);
+                }
+            } catch (err) {
+                console.error('Failed to load project buckets:', err);
+                showNotification(`❌ 加载配置失败: ${err.message}`);
+            }
+        }
+
+        // 显示简单的环境选择弹窗（非多渠道项目）
+        function showSimpleEnvSelectionModal(projectName, buckets) {
+            const devBucket = buckets.dev || '未配置';
+            const prodBuckets = Array.isArray(buckets.prod) ? buckets.prod : [buckets.prod];
+            
+            let prodButtons = '';
+            if (prodBuckets.length > 1) {
+                // 多个生产环境 bucket
+                prodButtons = prodBuckets.map((bucket, index) => `
+                    <button onclick="uploadSimpleProject('${projectName}', 'prod', '${bucket}'); closeModal();"
+                            style="flex: 1; padding: 10px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9em; margin-top: ${index > 0 ? '8px' : '0'};">
+                        🚀 生产环境 ${index + 1}<br><span style="font-size: 0.8em; opacity: 0.9;">${bucket}</span>
+                    </button>
+                `).join('');
+            } else {
+                prodButtons = `
+                    <button onclick="uploadSimpleProject('${projectName}', 'prod', '${prodBuckets[0]}'); closeModal();"
+                            style="flex: 1; padding: 10px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9em;">
+                        🚀 生产环境<br><span style="font-size: 0.8em; opacity: 0.9;">${prodBuckets[0]}</span>
+                    </button>
+                `;
+            }
+            
+            const modalContent = `
+                <div style="padding: 20px;">
+                    <h3 style="margin: 0 0 20px 0; color: #333;">☁️ 选择上传环境</h3>
+                    <div style="padding: 16px; border: 1px solid #e0e0e0; border-radius: 12px;">
+                        <div style="font-weight: 500; color: #333; margin-bottom: 12px;">${projectName}</div>
+                        <div style="display: flex; gap: 10px; flex-direction: column;">
+                            <button onclick="uploadSimpleProject('${projectName}', 'dev', '${devBucket}'); closeModal();"
+                                    style="flex: 1; padding: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9em;">
+                                📦 开发环境<br><span style="font-size: 0.8em; opacity: 0.9;">${devBucket}</span>
+                            </button>
+                            ${prodButtons}
+                        </div>
+                    </div>
+                    <div style="margin-top: 20px; text-align: right;">
+                        <button onclick="closeModal();" 
+                                style="padding: 10px 20px; background: #e0e0e0; color: #666; border: none; border-radius: 8px; cursor: pointer;">
+                            取消
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            showCustomModal('上传到 OSS', modalContent);
+        }
+
+        // 简单项目上传（无渠道）
+        function uploadSimpleProject(projectName, env, bucket) {
+            const path = getProjectPath(projectName);
+            
+            showNotification(`☁️ 正在上传 ${projectName} (环境: ${env}, bucket: ${bucket})...`);
+            
+            fetch('http://localhost:5178/api/oss/upload-simple', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    projectName,
+                    path,
+                    env,
+                    bucket
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    showNotification(`✅ 上传成功: ${projectName} (${env})`);
+                    if (data.url) {
+                        showNotification(`🔗 访问地址: ${data.url}`);
+                    }
+                } else {
+                    showNotification(`❌ 上传失败: ${data.error}`);
+                }
+            })
+            .catch(err => {
+                showNotification(`❌ 上传失败: ${err.message}`);
+            });
+        }
+
+
+        // 显示渠道和环境选择弹窗
+        function showChannelEnvSelectionModal(projectName, channels, action) {
+            const channelOptions = Object.entries(channels).map(([id, config]) => {
+                const hasBuckets = config.buckets && typeof config.buckets === 'object';
+                const devBucket = hasBuckets ? config.buckets.dev : '未配置';
+                const prodBucket = hasBuckets ? config.buckets.prod : '未配置';
+                
+                return `
+                    <div class="channel-item" style="padding: 16px; border-bottom: 1px solid #f0f0f0;">
+                        <div style="font-weight: 500; color: #333; margin-bottom: 12px;">${config.name}</div>
+                        <div style="display: flex; gap: 10px;">
+                            <button onclick="executeChannelAction('${projectName}', '${id}', 'dev', '${action}'); closeModal();"
+                                    style="flex: 1; padding: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9em;">
+                                📦 开发环境<br><span style="font-size: 0.8em; opacity: 0.9;">${devBucket}</span>
+                            </button>
+                            <button onclick="executeChannelAction('${projectName}', '${id}', 'prod', '${action}'); closeModal();"
+                                    style="flex: 1; padding: 10px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9em;">
+                                🚀 生产环境<br><span style="font-size: 0.8em; opacity: 0.9;">${prodBucket}</span>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            const modalContent = `
+                <div style="padding: 20px;">
+                    <h3 style="margin: 0 0 20px 0; color: #333;">
+                        ${action === 'upload' ? '☁️ 选择上传渠道和环境' : '🔨 选择构建渠道'}
+                    </h3>
+                    <div style="border-radius: 12px; overflow: hidden; border: 1px solid #e0e0e0;">
+                        ${channelOptions}
+                    </div>
+                    <div style="margin-top: 20px; text-align: right;">
+                        <button onclick="closeModal();" 
+                                style="padding: 10px 20px; background: #e0e0e0; color: #666; border: none; border-radius: 8px; cursor: pointer;">
+                            取消
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            showCustomModal(action === 'upload' ? '上传到 OSS' : '构建项目', modalContent);
+        }
+
+        // 执行渠道相关操作（构建或上传）
+        function executeChannelAction(projectName, channelId, env, action) {
+            if (action === 'upload') {
+                uploadWithChannel(projectName, channelId, env);
+            } else if (action === 'build') {
+                buildWithChannel(projectName, channelId);
+            }
+        }
+
+        // 按渠道和环境上传
+        function uploadWithChannel(projectName, channelId, env) {
+            const path = getProjectPath(projectName);
+            
+            showNotification(`☁️ 正在上传 ${projectName} (渠道: ${channelId}, 环境: ${env})...`);
+            
+            fetch('http://localhost:5178/api/oss/upload-channel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    projectName,
+                    path,
+                    channelId,
+                    env
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    showNotification(`✅ 上传成功: ${projectName} (${channelId}-${env})`);
+                    if (data.url) {
+                        showNotification(`🔗 访问地址: ${data.url}`);
+                    }
+                } else {
+                    showNotification(`❌ 上传失败: ${data.error}`);
+                }
+            })
+            .catch(err => {
+                showNotification(`❌ 上传失败: ${err.message}`);
+            });
+        }
+
+
         // 通过后端执行拉取
         function backendPull(projectName) {
             const path = getProjectPath(projectName);
@@ -2016,6 +2424,103 @@
             }
         }
 
+        // 加载项目的渠道配置
+        async function loadProjectChannels(projectName) {
+            try {
+                const response = await fetch(`http://localhost:5178/api/channels/${projectName}`);
+                const data = await response.json();
+                
+                if (data.channels && Object.keys(data.channels).length > 0) {
+                    // 显示渠道选择器
+                    const selector = document.querySelector(`.channel-selector[data-project="${projectName}"]`);
+                    if (selector) {
+                        selector.style.display = 'inline-block';
+                        
+                        // 填充渠道列表
+                        const channelList = document.getElementById(`channel-list-${projectName}`);
+                        channelList.innerHTML = Object.entries(data.channels).map(([id, config]) => `
+                            <div class="channel-item" onclick="buildWithChannel('${projectName}', '${id}')">
+                                <div class="channel-name">${config.name}</div>
+                                <div class="channel-id">${id}</div>
+                            </div>
+                        `).join('');
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load channels:', err);
+            }
+        }
+
+        // 切换渠道下拉菜单
+        function toggleChannelDropdown(projectName) {
+            const dropdown = document.getElementById(`channel-dropdown-${projectName}`);
+            const allDropdowns = document.querySelectorAll('.channel-dropdown');
+            
+            // 关闭其他下拉菜单
+            allDropdowns.forEach(d => {
+                if (d.id !== `channel-dropdown-${projectName}`) {
+                    d.classList.remove('show');
+                }
+            });
+            
+            // 切换当前下拉菜单
+            dropdown.classList.toggle('show');
+            
+            // 点击外部关闭
+            if (dropdown.classList.contains('show')) {
+                setTimeout(() => {
+                    document.addEventListener('click', function closeDropdown(e) {
+                        if (!e.target.closest('.channel-selector')) {
+                            dropdown.classList.remove('show');
+                            document.removeEventListener('click', closeDropdown);
+                        }
+                    });
+                }, 0);
+            }
+        }
+
+        // 使用指定渠道构建项目
+        async function buildWithChannel(projectName, channel) {
+            const dropdown = document.getElementById(`channel-dropdown-${projectName}`);
+            dropdown.classList.remove('show');
+            
+            const channelBtn = document.getElementById(`current-channel-${projectName}`);
+            const originalText = channelBtn.innerHTML;
+            channelBtn.innerHTML = '⏳ 构建中...';
+            channelBtn.parentElement.disabled = true;
+            
+            try {
+                const response = await fetch('http://localhost:5178/api/build-channel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectName, channel })
+                });
+                
+                const result = await response.json();
+                
+                if (result.ok) {
+                    channelBtn.innerHTML = '✅ 构建成功';
+                    setTimeout(() => {
+                        channelBtn.innerHTML = originalText;
+                    }, 3000);
+                    
+                    // 可以在这里触发上传到 OSS
+                    console.log('Build completed:', result);
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (err) {
+                channelBtn.innerHTML = '❌ 构建失败';
+                console.error('Build failed:', err);
+                alert('构建失败: ' + err.message);
+                setTimeout(() => {
+                    channelBtn.innerHTML = originalText;
+                }, 3000);
+            } finally {
+                channelBtn.parentElement.disabled = false;
+            }
+        }
+
         // 动态加载并渲染最近项目（真实数据）
         function loadProjectStatuses() {
             const container = document.getElementById('recent-projects');
@@ -2054,8 +2559,8 @@
                             <div class="project-actions">
                                 <button class="action-btn" onclick="backendPull('${p.name}')" title="后端拉取 (git pull)"><span>⬇️</span></button>
                                 <button class="action-btn" onclick="backendPush('${p.name}')" title="后端推送 (git add/commit/push)"><span>⬆️</span></button>
-                                <button class="action-btn" onclick="openInVSCode('${p.name}')" title="在 VS Code 中打开"><span>💻</span></button>
-                                <button class="action-btn" onclick="openInFinder('${p.name}')" title="在 Finder 中打开"><span>📁</span></button>
+                                <button class="action-btn" onclick="showBuildOptions('${p.name}')" title="构建项目"><span>🔨</span></button>
+                                <button class="action-btn" onclick="uploadToOSS('${p.name}')" title="上传到 OSS"><span>☁️</span></button>
                             </div>
                         </div>`;
                     }).join('');
@@ -2068,6 +2573,9 @@
                                 if (el) updateProjectStatus(el, st.modified||0, st.added||0, st.deleted||0);
                             })
                             .catch(()=>{});
+                        
+                        // 加载渠道配置
+                        loadProjectChannels(p.name);
                     });
                 })
                 .catch(err => {
@@ -2353,13 +2861,6 @@ which git && git --version`;
                     closeModal();
                 }
             };
-        }
-
-        // 关闭弹框
-        function closeModal() {
-            const modal = document.getElementById('customModal');
-            modal.classList.remove('active');
-            document.onkeydown = null;
         }
 
         // 备份项目

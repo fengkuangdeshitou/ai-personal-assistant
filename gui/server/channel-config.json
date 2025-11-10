@@ -1,0 +1,413 @@
+{
+  "note": "多渠道项目配置 - 每个项目可以配置多个渠道，构建时自动切换配置",
+  "projects": {
+    "hg-bookmark": {
+      "channels": {
+        "hg": {
+          "name": "嘿咕游戏",
+          "buckets": {
+            "dev": "hg-dev-placeholder",
+            "prod": "heiguyx"
+          },
+          "files": {
+            "public/index.html": {
+              "rules": [
+                {
+                  "action": "uncomment",
+                  "pattern": "<!-- (<meta name=\"apple-mobile-web-app-title\" content=\"嘿咕游戏\">\\s*<title>嘿咕游戏</title>) -->"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.05折手游\">\\s*<title>0\\.05折手游</title>)"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.01折游戏\">\\s*<title>0\\.01折游戏</title>)"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)"
+                }
+              ]
+            },
+            "src/css/css.less": {
+              "rules": [
+                {
+                  "action": "uncomment",
+                  "pattern": "// (--MainColor: #00CDC6;)// hg"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #0096FB;)// 0\\.05"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #E73B25;)// 0\\.01"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #eb424c;)// hz"
+                }
+              ]
+            },
+            "src/BoxType.js": {
+              "rules": [
+                {
+                  "action": "uncomment",
+                  "pattern": "// (export const BoxType = 'hg')"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = '05')"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = '01')"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = 'hz')"
+                }
+              ]
+            },
+            "src/env.js": {
+              "rules": [
+                {
+                  "action": "uncomment",
+                  "pattern": "// (export const url = '//api52wan\\.001zhegame\\.com';)"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const url = '//api\\.gamebox\\.05zhegame\\.com';)"
+                }
+              ]
+            },
+            "src/general.js": {
+              "rules": [
+                {
+                  "action": "uncomment",
+                  "pattern": "// (agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',) // hg"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',) // 0\\.05"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',) // 0\\.01"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',) // hz"
+                }
+              ]
+            }
+          }
+        },
+        "05": {
+          "name": "0.05折手游",
+          "buckets": {
+            "dev": "05-dev-placeholder",
+            "prod": "005zhegame"
+          },
+          "files": {
+            "public/index.html": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"嘿咕游戏\">\\s*<title>嘿咕游戏</title>)"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "<!-- (<meta name=\"apple-mobile-web-app-title\" content=\"0\\.05折手游\">\\s*<title>0\\.05折手游</title>) -->"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.01折游戏\">\\s*<title>0\\.01折游戏</title>)"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)"
+                }
+              ]
+            },
+            "src/css/css.less": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #00CDC6;)// hg"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (--MainColor: #0096FB;)// 0\\.05"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #E73B25;)// 0\\.01"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #eb424c;)// hz"
+                }
+              ]
+            },
+            "src/BoxType.js": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = 'hg')"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (export const BoxType = '05')"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = '01')"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = 'hz')"
+                }
+              ]
+            },
+            "src/env.js": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(export const url = '//api52wan\\.001zhegame\\.com';)"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (export const url = '//api\\.gamebox\\.05zhegame\\.com';)"
+                }
+              ]
+            },
+            "src/general.js": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',) // hg"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',) // 0\\.05"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',) // 0\\.01"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',) // hz"
+                }
+              ]
+            }
+          }
+        },
+        "01": {
+          "name": "0.01折游戏",
+          "buckets": {
+            "dev": "01-dev-placeholder",
+            "prod": "01zhegame"
+          },
+          "files": {
+            "public/index.html": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"嘿咕游戏\">\\s*<title>嘿咕游戏</title>)"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.05折手游\">\\s*<title>0\\.05折手游</title>)"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "<!-- (<meta name=\"apple-mobile-web-app-title\" content=\"0\\.01折游戏\">\\s*<title>0\\.01折游戏</title>) -->"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)"
+                }
+              ]
+            },
+            "src/css/css.less": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #00CDC6;)// hg"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #0096FB;)// 0\\.05"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (--MainColor: #E73B25;)// 0\\.01"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #eb424c;)// hz"
+                }
+              ]
+            },
+            "src/BoxType.js": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = 'hg')"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = '05')"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (export const BoxType = '01')"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = 'hz')"
+                }
+              ]
+            },
+            "src/env.js": {
+              "rules": [
+                {
+                  "action": "uncomment",
+                  "pattern": "// (export const url = '//api52wan\\.001zhegame\\.com';)"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const url = '//api\\.gamebox\\.05zhegame\\.com';)"
+                }
+              ]
+            },
+            "src/general.js": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',) // hg"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',) // 0\\.05"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',) // 0\\.01"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',) // hz"
+                }
+              ]
+            }
+          }
+        },
+        "hz": {
+          "name": "惠爪游戏",
+          "buckets": {
+            "dev": "hz-dev-placeholder",
+            "prod": "ihuizhua"
+          },
+          "files": {
+            "public/index.html": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"嘿咕游戏\">\\s*<title>嘿咕游戏</title>)"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.05折手游\">\\s*<title>0\\.05折手游</title>)"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.01折游戏\">\\s*<title>0\\.01折游戏</title>)"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "<!-- (<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>) -->"
+                }
+              ]
+            },
+            "src/css/css.less": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #00CDC6;)// hg"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #0096FB;)// 0\\.05"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(--MainColor: #E73B25;)// 0\\.01"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (--MainColor: #eb424c;)// hz"
+                }
+              ]
+            },
+            "src/BoxType.js": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = 'hg')"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = '05')"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(export const BoxType = '01')"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (export const BoxType = 'hz')"
+                }
+              ]
+            },
+            "src/env.js": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(export const url = '//api52wan\\.001zhegame\\.com';)"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (export const url = '//api\\.gamebox\\.05zhegame\\.com';)"
+                }
+              ]
+            },
+            "src/general.js": {
+              "rules": [
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',) // hg"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',) // 0\\.05"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',) // 0\\.01"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "// (agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',) // hz"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
