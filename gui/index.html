@@ -1927,30 +1927,168 @@
 
         // 构建项目
         async function buildProject(projectName) {
-            const path = getProjectPath(projectName);
-            
-            showNotification(`🔨 开始构建 ${projectName}...`);
-            
-            try {
-                const response = await fetch('http://localhost:5178/api/build-channel', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ projectName, channel: null })
-                });
+            return new Promise((resolve, reject) => {
+                const path = getProjectPath(projectName);
                 
-                const result = await response.json();
+                // 显示构建进度弹框
+                const modalContent = `
+                    <div style="padding: 30px;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 48px; margin-bottom: 20px;">🔨</div>
+                            <h3 style="margin: 0 0 15px 0; color: #333;">正在构建 ${projectName}</h3>
+                            <div id="build-progress-text" style="color: #666; margin-bottom: 20px;">准备构建环境...</div>
+                            <div style="width: 100%; height: 6px; background: #f0f0f0; border-radius: 3px; overflow: hidden; margin-bottom: 20px;">
+                                <div id="build-progress-bar" style="width: 10%; height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); transition: width 0.3s;"></div>
+                            </div>
+                        </div>
+                        <div id="build-log-container" style="margin-top: 20px; max-height: 350px; overflow-y: auto; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 0.8em;">
+                            <div id="build-log"></div>
+                        </div>
+                    </div>
+                    <style>
+                        #build-log-container::-webkit-scrollbar { width: 8px; }
+                        #build-log-container::-webkit-scrollbar-track { background: #2d2d2d; }
+                        #build-log-container::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+                    </style>
+                `;
                 
-                if (result.ok) {
-                    showNotification(`✅ 构建成功: ${projectName}`);
-                    if (result.message) {
-                        showNotification(`📝 ${result.message}`);
+                showCustomModal(modalContent);
+                
+                const progressBar = document.getElementById('build-progress-bar');
+                const progressText = document.getElementById('build-progress-text');
+                const logContainer = document.getElementById('build-log-container');
+                const logElement = document.getElementById('build-log');
+                
+                let progress = 10;
+                let logLines = [];
+                let buildSuccess = false;
+                
+                (async () => {
+                    try {
+                        // 使用 fetch 发送构建请求并读取流式响应
+                        const response = await fetch('http://localhost:5178/api/build-stream', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ projectName, channel: null })
+                        });
+                        
+                        const reader = response.body.getReader();
+                        const decoder = new TextDecoder();
+                        
+                        progressBar.style.width = '20%';
+                        progressText.textContent = '正在执行 npm run build...';
+                        
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            
+                            if (done) break;
+                            
+                            const chunk = decoder.decode(value);
+                            const lines = chunk.split('\n\n');
+                            
+                            for (const line of lines) {
+                                if (line.startsWith('data: ')) {
+                                    try {
+                                        const data = JSON.parse(line.slice(6));
+                                        
+                                        // 更新进度
+                                        if (progress < 90) {
+                                            progress += 2;
+                                            progressBar.style.width = progress + '%';
+                                        }
+                                        
+                                        // 添加日志
+                                        if (data.type === 'log' || data.type === 'stdout') {
+                                            const logLine = document.createElement('div');
+                                            logLine.style.marginBottom = '4px';
+                                            logLine.style.color = '#00ff00';
+                                            logLine.textContent = '> ' + data.message;
+                                            logElement.appendChild(logLine);
+                                            logLines.push(data.message);
+                                        } else if (data.type === 'stderr') {
+                                            const logLine = document.createElement('div');
+                                            logLine.style.marginBottom = '4px';
+                                            logLine.style.color = '#ffaa00';
+                                            logLine.textContent = '⚠ ' + data.message;
+                                            logElement.appendChild(logLine);
+                                        } else if (data.type === 'success') {
+                                            buildSuccess = true;
+                                            progressBar.style.width = '100%';
+                                            progressBar.style.background = 'linear-gradient(90deg, #10b981 0%, #059669 100%)';
+                                            progressText.textContent = '✅ 构建成功！';
+                                            progressText.style.color = '#10b981';
+                                            
+                                            const successLine = document.createElement('div');
+                                            successLine.style.marginTop = '10px';
+                                            successLine.style.color = '#00ff00';
+                                            successLine.style.fontWeight = 'bold';
+                                            successLine.textContent = '✅ ' + data.message;
+                                            logElement.appendChild(successLine);
+                                            
+                                            showNotification(`✅ 构建成功: ${projectName}`);
+                                            // 动画完成后立即关闭弹框并 resolve
+                                            closeModal();
+                                            resolve(true);
+                                        } else if (data.type === 'error') {
+                                            progressBar.style.width = '100%';
+                                            progressBar.style.background = 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)';
+                                            progressText.textContent = '❌ 构建失败';
+                                            progressText.style.color = '#ef4444';
+                                            
+                                            const errorLine = document.createElement('div');
+                                            errorLine.style.marginTop = '10px';
+                                            errorLine.style.color = '#ff4444';
+                                            errorLine.style.fontWeight = 'bold';
+                                            errorLine.textContent = '❌ ' + data.message;
+                                            logElement.appendChild(errorLine);
+                                            
+                                            showNotification(`❌ 构建失败: ${data.message}`);
+                                            
+                                            // 10秒后关闭并 reject
+                                            setTimeout(() => {
+                                                closeModal();
+                                                reject(new Error(data.message));
+                                            }, 10000);
+                                        }
+                                        
+                                        // 自动滚动到底部
+                                        logContainer.scrollTop = logContainer.scrollHeight;
+                                        
+                                    } catch (e) {
+                                        console.error('Failed to parse SSE data:', e);
+                                    }
+                                }
+                            }
+                        }
+                        
+                    } catch (err) {
+                        progressBar.style.width = '100%';
+                        progressBar.style.background = 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)';
+                        progressText.textContent = '❌ 构建失败';
+                        progressText.style.color = '#ef4444';
+                        
+                        const errorLine = document.createElement('div');
+                        errorLine.style.color = '#ff4444';
+                        errorLine.style.fontWeight = 'bold';
+                        errorLine.textContent = '❌ ' + err.message;
+                        logElement.appendChild(errorLine);
+                        
+                        showNotification(`❌ 构建失败: ${err.message}`);
+                        
+                        setTimeout(() => {
+                            closeModal();
+                            reject(err);
+                        }, 10000);
                     }
-                } else {
-                    showNotification(`❌ 构建失败: ${result.error}`);
-                }
-            } catch (err) {
-                showNotification(`❌ 构建失败: ${err.message}`);
-            }
+                })();
+            });
+        }
+        
+        // HTML 转义函数
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         // 显示构建选项（如果有渠道配置则显示渠道选择）
@@ -1976,7 +2114,7 @@
         // 显示渠道选择弹窗（仅用于构建，简化版）
         function showChannelSelectionModal(projectName, channels) {
             const channelOptions = Object.entries(channels).map(([id, config]) => `
-                <div class="channel-item" onclick="buildWithChannel('${projectName}', '${id}'); closeModal();" style="cursor: pointer; padding: 12px; border-bottom: 1px solid #f0f0f0; transition: background 0.2s;" 
+                <div class="channel-item" onclick="selectChannelAndBuild('${projectName}', '${id}');" style="cursor: pointer; padding: 12px; border-bottom: 1px solid #f0f0f0; transition: background 0.2s;" 
                      onmouseover="this.style.background='#f8f9ff'" 
                      onmouseout="this.style.background='white'">
                     <div style="font-weight: 500; color: #333;">${config.name}</div>
@@ -1995,7 +2133,7 @@
                                 style="padding: 10px 20px; background: #e0e0e0; color: #666; border: none; border-radius: 8px; cursor: pointer; margin-right: 10px;">
                             取消
                         </button>
-                        <button onclick="buildProject('${projectName}'); closeModal();" 
+                        <button onclick="selectChannelAndBuild('${projectName}', null);" 
                                 style="padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer;">
                             直接构建
                         </button>
@@ -2003,11 +2141,24 @@
                 </div>
             `;
 
-            showCustomModal('构建选项', modalContent);
+            showCustomModal(modalContent);
+        }
+        
+        // 选择渠道后构建（先关闭弹窗再显示构建进度）
+        function selectChannelAndBuild(projectName, channel) {
+            closeModal();
+            // 等待弹窗关闭动画完成后再显示构建进度
+            setTimeout(() => {
+                if (channel) {
+                    buildWithChannel(projectName, channel);
+                } else {
+                    buildProject(projectName);
+                }
+            }, 200);
         }
 
         // 显示自定义弹窗
-        function showCustomModal(title, content) {
+        function showCustomModal(content) {
             // 先关闭已存在的弹窗
             const existingModal = document.getElementById('customModal');
             if (existingModal) {
@@ -2131,7 +2282,7 @@
                 </div>
             `;
 
-            showCustomModal('上传到 OSS', modalContent);
+            showCustomModal(modalContent);
         }
 
         // 简单项目上传（无渠道）
@@ -2139,8 +2290,6 @@
             const path = getProjectPath(projectName);
             
             // 先检查 build 目录是否存在
-            showNotification(`🔍 检查 ${projectName} 的构建文件...`);
-            
             try {
                 const checkResponse = await fetch('http://localhost:5178/api/check-build', {
                     method: 'POST',
@@ -2150,38 +2299,72 @@
                 
                 const checkData = await checkResponse.json();
                 
-                if (!checkData.exists) {
-                    // build 目录不存在，询问是否先构建
-                    const shouldBuild = confirm(`📦 ${projectName} 还没有构建\n\n是否先执行构建？\n\n环境: ${env}`);
+                if (!checkData.exists || checkData.isEmpty) {
+                    // build 目录不存在或为空，直接开始构建
+                    showNotification(`� ${projectName} 需要构建，开始构建...`);
                     
-                    if (!shouldBuild) {
-                        showNotification('⚠️ 已取消上传');
+                    // 执行构建 - 使用 buildProject 函数，显示构建进度
+                    try {
+                        await buildProject(projectName);
+                    } catch (buildError) {
+                        showNotification('❌ 构建失败，已取消上传');
                         return;
                     }
                     
-                    // 执行构建
-                    showNotification(`🔨 正在构建 ${projectName}...`);
-                    
-                    const buildResponse = await fetch('http://localhost:5178/api/build-channel', {
+                    // 构建完成后，重新检查 build 目录
+                    const recheckResponse = await fetch('http://localhost:5178/api/check-build', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ projectName, channel: null })
+                        body: JSON.stringify({ projectName, path })
                     });
                     
-                    const buildData = await buildResponse.json();
-                    
-                    if (!buildData.ok) {
-                        showNotification(`❌ 构建失败: ${buildData.error}`);
+                    const recheckData = await recheckResponse.json();
+                    if (!recheckData.exists || recheckData.isEmpty) {
+                        showNotification('❌ 构建后 build 目录仍为空或不存在');
                         return;
                     }
-                    
-                    showNotification(`✅ 构建完成，开始上传...`);
                 }
                 
-                // 开始上传
-                showNotification(`☁️ 正在上传 ${projectName} (环境: ${env}, bucket: ${bucket})...`);
+                // 显示上传进度弹框
+                const modalContent = `
+                    <div style="padding: 30px;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 48px; margin-bottom: 20px;">☁️</div>
+                            <h3 style="margin: 0 0 15px 0; color: #333;">正在上传 ${projectName}</h3>
+                            <div style="padding: 8px 16px; background: #f0f0f0; border-radius: 20px; display: inline-block; margin-bottom: 20px;">
+                                <span style="font-size: 0.9em; color: #666;">环境: ${env === 'prod' ? '生产' : '开发'} | Bucket: ${bucket}</span>
+                            </div>
+                            <div id="upload-progress-text" style="color: #666; margin-bottom: 20px;">准备上传...</div>
+                            <div style="width: 100%; height: 6px; background: #f0f0f0; border-radius: 3px; overflow: hidden; margin-bottom: 10px;">
+                                <div id="upload-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); transition: width 0.3s;"></div>
+                            </div>
+                            <div id="upload-stats" style="font-size: 0.9em; color: #999;">0 / 0 文件</div>
+                        </div>
+                        <div id="upload-log-container" style="margin-top: 20px; max-height: 350px; overflow-y: auto; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 0.75em;">
+                            <div id="upload-log"></div>
+                        </div>
+                    </div>
+                    <style>
+                        #upload-log-container::-webkit-scrollbar { width: 8px; }
+                        #upload-log-container::-webkit-scrollbar-track { background: #2d2d2d; }
+                        #upload-log-container::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+                    </style>
+                `;
                 
-                const uploadResponse = await fetch('http://localhost:5178/api/oss/upload-simple', {
+                showCustomModal(modalContent);
+                
+                const progressBar = document.getElementById('upload-progress-bar');
+                const progressText = document.getElementById('upload-progress-text');
+                const statsText = document.getElementById('upload-stats');
+                const logContainer = document.getElementById('upload-log-container');
+                const logElement = document.getElementById('upload-log');
+                
+                let totalFiles = 0;
+                let uploadedFiles = 0;
+                let failedFiles = 0;
+                
+                // 使用流式 API
+                const response = await fetch('http://localhost:5178/api/oss/upload-stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
@@ -2192,24 +2375,115 @@
                     })
                 });
                 
-                const uploadData = await uploadResponse.json();
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
                 
-                if (uploadData.ok) {
-                    showNotification(`✅ 上传成功: ${projectName} (${env})`);
-                    if (uploadData.uploaded) {
-                        showNotification(`📊 已上传 ${uploadData.uploaded} 个文件${uploadData.failed ? `, ${uploadData.failed} 个失败` : ''}`);
-                    }
-                    if (uploadData.url) {
-                        showNotification(`🔗 访问地址: ${uploadData.url}`);
-                    }
+                while (true) {
+                    const { done, value } = await reader.read();
                     
-                    // 只有生产环境才备份 build 文件夹到"以往版本"
-                    if (env === 'prod') {
-                        await backupBuildToOSS(projectName, path, bucket);
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                
+                                if (data.type === 'log') {
+                                    const logLine = document.createElement('div');
+                                    logLine.style.marginBottom = '4px';
+                                    logLine.style.color = '#00aaff';
+                                    logLine.textContent = '📝 ' + data.message;
+                                    logElement.appendChild(logLine);
+                                    progressText.textContent = data.message;
+                                } else if (data.type === 'uploading') {
+                                    totalFiles = data.current;
+                                    const logLine = document.createElement('div');
+                                    logLine.style.marginBottom = '2px';
+                                    logLine.style.color = '#ffaa00';
+                                    logLine.textContent = `⬆️  ${data.file}`;
+                                    logElement.appendChild(logLine);
+                                    progressText.textContent = `正在上传: ${data.file}`;
+                                } else if (data.type === 'success') {
+                                    uploadedFiles++;
+                                    totalFiles = data.total || totalFiles;
+                                    const progress = totalFiles > 0 ? (uploadedFiles / totalFiles) * 100 : 0;
+                                    progressBar.style.width = progress + '%';
+                                    statsText.textContent = `${uploadedFiles} / ${totalFiles} 文件`;
+                                } else if (data.type === 'error') {
+                                    if (data.file) {
+                                        failedFiles++;
+                                        const logLine = document.createElement('div');
+                                        logLine.style.marginBottom = '4px';
+                                        logLine.style.color = '#ff4444';
+                                        logLine.textContent = `❌ ${data.file}: ${data.message}`;
+                                        logElement.appendChild(logLine);
+                                    } else {
+                                        progressBar.style.width = '100%';
+                                        progressBar.style.background = 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)';
+                                        progressText.textContent = '❌ 上传失败';
+                                        progressText.style.color = '#ef4444';
+                                        
+                                        const errorLine = document.createElement('div');
+                                        errorLine.style.marginTop = '10px';
+                                        errorLine.style.color = '#ff4444';
+                                        errorLine.style.fontWeight = 'bold';
+                                        errorLine.textContent = '❌ ' + data.message;
+                                        logElement.appendChild(errorLine);
+                                        
+                                        showNotification(`❌ 上传失败: ${data.message}`);
+                                        setTimeout(() => closeModal(), 5000);
+                                        return;
+                                    }
+                                } else if (data.type === 'complete') {
+                                    progressBar.style.width = '100%';
+                                    progressBar.style.background = 'linear-gradient(90deg, #10b981 0%, #059669 100%)';
+                                    progressText.textContent = '✅ 上传完成！';
+                                    progressText.style.color = '#10b981';
+                                    
+                                    const successLine = document.createElement('div');
+                                    successLine.style.marginTop = '10px';
+                                    successLine.style.color = '#00ff00';
+                                    successLine.style.fontWeight = 'bold';
+                                    successLine.textContent = `✅ ${data.message} (成功: ${data.uploaded}, 失败: ${data.failed})`;
+                                    logElement.appendChild(successLine);
+                                    
+                                    if (data.url) {
+                                        const urlLine = document.createElement('div');
+                                        urlLine.style.marginTop = '5px';
+                                        urlLine.style.color = '#00aaff';
+                                        urlLine.textContent = `🔗 ${data.url}`;
+                                        logElement.appendChild(urlLine);
+                                    }
+                                    
+                                    showNotification(`✅ 上传成功: ${projectName} (${env})`);
+                                    showNotification(`📊 已上传 ${data.uploaded} 个文件${data.failed ? `, ${data.failed} 个失败` : ''}`);
+                                    if (data.url) {
+                                        showNotification(`🔗 访问地址: ${data.url}`);
+                                    }
+                                    
+                                    // 只有生产环境才备份
+                                    if (env === 'prod') {
+                                        setTimeout(async () => {
+                                            await backupBuildToOSS(projectName, path, bucket);
+                                        }, 1000);
+                                    }
+                                    
+                                    setTimeout(() => closeModal(), 5000);
+                                }
+                                
+                                // 自动滚动到底部
+                                logContainer.scrollTop = logContainer.scrollHeight;
+                                
+                            } catch (e) {
+                                console.error('Failed to parse upload SSE data:', e);
+                            }
+                        }
                     }
-                } else {
-                    showNotification(`❌ 上传失败: ${uploadData.error}`);
                 }
+                
             } catch (err) {
                 showNotification(`❌ 操作失败: ${err.message}`);
             }
@@ -2235,30 +2509,30 @@
                 
                 const checkData = await checkResponse.json();
                 
-                if (!checkData.exists) {
-                    const shouldBuild = confirm(`📦 ${projectName} 还没有构建\n\n是否先执行构建？\n\n环境: ${env}`);
+                if (!checkData.exists || checkData.isEmpty) {
+                    // build 目录不存在或为空，直接开始构建
+                    showNotification(`🔨 ${projectName} 需要构建，开始构建...`);
                     
-                    if (!shouldBuild) {
-                        showNotification('⚠️ 已取消上传');
+                    // 执行构建 - 使用 buildProject 函数
+                    try {
+                        await buildProject(projectName);
+                    } catch (buildError) {
+                        showNotification('❌ 构建失败，已取消上传');
                         return;
                     }
                     
-                    showNotification(`🔨 正在构建 ${projectName}...`);
-                    
-                    const buildResponse = await fetch('http://localhost:5178/api/build-channel', {
+                    // 构建完成后，重新检查 build 目录
+                    const recheckResponse = await fetch('http://localhost:5178/api/check-build', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ projectName, channel: null })
+                        body: JSON.stringify({ projectName, path })
                     });
                     
-                    const buildData = await buildResponse.json();
-                    
-                    if (!buildData.ok) {
-                        showNotification(`❌ 构建失败: ${buildData.error}`);
+                    const recheckData = await recheckResponse.json();
+                    if (!recheckData.exists || recheckData.isEmpty) {
+                        showNotification('❌ 构建后 build 目录仍为空或不存在');
                         return;
                     }
-                    
-                    showNotification(`✅ 构建完成，开始上传...`);
                 }
                 
                 // 循环上传到所有生产bucket
@@ -2417,7 +2691,7 @@
                 </div>
             `;
 
-            showCustomModal(action === 'upload' ? '上传到 OSS' : '构建项目', modalContent);
+            showCustomModal(modalContent);
         }
 
         // 执行渠道相关操作（构建或上传）
@@ -2445,32 +2719,30 @@
                 
                 const checkData = await checkResponse.json();
                 
-                if (!checkData.exists) {
-                    // build 目录不存在，询问是否先构建
-                    const shouldBuild = confirm(`📦 ${projectName} 还没有构建\n\n是否先执行构建？\n\n构建渠道: ${channelId}\n环境: ${env}`);
+                if (!checkData.exists || checkData.isEmpty) {
+                    // build 目录不存在或为空，直接开始构建
+                    showNotification(`� ${projectName} 需要构建（渠道: ${channelId}），开始构建...`);
                     
-                    if (!shouldBuild) {
-                        showNotification('⚠️ 已取消上传');
+                    // 执行构建 - 使用 buildWithChannel 函数
+                    try {
+                        await buildWithChannel(projectName, channelId);
+                    } catch (buildError) {
+                        showNotification('❌ 构建失败，已取消上传');
                         return;
                     }
                     
-                    // 执行构建
-                    showNotification(`🔨 正在构建 ${projectName} (渠道: ${channelId})...`);
-                    
-                    const buildResponse = await fetch('http://localhost:5178/api/build-channel', {
+                    // 构建完成后，重新检查 build 目录
+                    const recheckResponse = await fetch('http://localhost:5178/api/check-build', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ projectName, channel: channelId })
+                        body: JSON.stringify({ projectName, path })
                     });
                     
-                    const buildData = await buildResponse.json();
-                    
-                    if (!buildData.ok) {
-                        showNotification(`❌ 构建失败: ${buildData.error}`);
+                    const recheckData = await recheckResponse.json();
+                    if (!recheckData.exists || recheckData.isEmpty) {
+                        showNotification('❌ 构建后 build 目录仍为空或不存在');
                         return;
                     }
-                    
-                    showNotification(`✅ 构建完成，开始上传...`);
                 }
                 
                 // 开始上传
@@ -2770,51 +3042,193 @@
 
         // 使用指定渠道构建项目
         async function buildWithChannel(projectName, channel) {
-            const dropdown = document.getElementById(`channel-dropdown-${projectName}`);
-            dropdown.classList.remove('show');
-            
-            const channelBtn = document.getElementById(`current-channel-${projectName}`);
-            const originalText = channelBtn.innerHTML;
-            channelBtn.innerHTML = '⏳ 构建中...';
-            channelBtn.parentElement.disabled = true;
-            
-            // 显示通知
-            showNotification(`🔨 开始构建 ${projectName} (渠道: ${channel})...`);
-            
-            try {
-                const response = await fetch('http://localhost:5178/api/build-channel', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ projectName, channel })
-                });
-                
-                const result = await response.json();
-                
-                if (result.ok) {
-                    channelBtn.innerHTML = '✅ 构建成功';
-                    showNotification(`✅ 构建成功: ${projectName} (${channel})`);
-                    if (result.message) {
-                        showNotification(`📝 ${result.message}`);
-                    }
-                    setTimeout(() => {
-                        channelBtn.innerHTML = originalText;
-                    }, 3000);
-                    
-                    // 可以在这里触发上传到 OSS
-                    console.log('Build completed:', result);
-                } else {
-                    throw new Error(result.error);
+            return new Promise((resolve, reject) => {
+                const dropdown = document.getElementById(`channel-dropdown-${projectName}`);
+                if (dropdown) {
+                    dropdown.classList.remove('show');
                 }
-            } catch (err) {
-                channelBtn.innerHTML = '❌ 构建失败';
-                showNotification(`❌ 构建失败: ${projectName} - ${err.message}`);
-                console.error('Build failed:', err);
-                setTimeout(() => {
-                    channelBtn.innerHTML = originalText;
-                }, 3000);
-            } finally {
-                channelBtn.parentElement.disabled = false;
-            }
+                
+                const channelBtn = document.getElementById(`current-channel-${projectName}`);
+                let originalText = '';
+                if (channelBtn) {
+                    originalText = channelBtn.innerHTML;
+                    channelBtn.innerHTML = '⏳ 构建中...';
+                    channelBtn.parentElement.disabled = true;
+                }
+                
+                // 显示构建进度弹框
+                const modalContent = `
+                    <div style="padding: 30px;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 48px; margin-bottom: 20px;">🔨</div>
+                            <h3 style="margin: 0 0 15px 0; color: #333;">正在构建 ${projectName}</h3>
+                            <div style="padding: 8px 16px; background: #f0f0f0; border-radius: 20px; display: inline-block; margin-bottom: 20px;">
+                                <span style="font-size: 0.9em; color: #666;">渠道: ${channel}</span>
+                            </div>
+                            <div id="build-progress-text" style="color: #666; margin-bottom: 20px;">准备切换渠道...</div>
+                            <div style="width: 100%; height: 6px; background: #f0f0f0; border-radius: 3px; overflow: hidden; margin-bottom: 20px;">
+                                <div id="build-progress-bar" style="width: 10%; height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); transition: width 0.3s;"></div>
+                            </div>
+                        </div>
+                        <div id="build-log-container" style="margin-top: 20px; max-height: 350px; overflow-y: auto; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 0.8em;">
+                            <div id="build-log"></div>
+                        </div>
+                    </div>
+                    <style>
+                        #build-log-container::-webkit-scrollbar { width: 8px; }
+                        #build-log-container::-webkit-scrollbar-track { background: #2d2d2d; }
+                        #build-log-container::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+                    </style>
+                `;
+                
+                showCustomModal(modalContent);
+                
+                const progressBar = document.getElementById('build-progress-bar');
+                const progressText = document.getElementById('build-progress-text');
+                const logContainer = document.getElementById('build-log-container');
+                const logElement = document.getElementById('build-log');
+                
+                let progress = 10;
+                
+                (async () => {
+                    try {
+                        // 使用流式 API
+                        const response = await fetch('http://localhost:5178/api/build-stream', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ projectName, channel })
+                        });
+                        
+                        const reader = response.body.getReader();
+                        const decoder = new TextDecoder();
+                        
+                        progressBar.style.width = '20%';
+                        progressText.textContent = '正在构建...';
+                        
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            
+                            if (done) break;
+                            
+                            const chunk = decoder.decode(value);
+                            const lines = chunk.split('\n\n');
+                            
+                            for (const line of lines) {
+                                if (line.startsWith('data: ')) {
+                                    try {
+                                        const data = JSON.parse(line.slice(6));
+                                        
+                                        // 更新进度
+                                        if (progress < 90) {
+                                            progress += 2;
+                                            progressBar.style.width = progress + '%';
+                                        }
+                                        
+                                        // 添加日志
+                                        if (data.type === 'log' || data.type === 'stdout') {
+                                            const logLine = document.createElement('div');
+                                            logLine.style.marginBottom = '4px';
+                                            logLine.style.color = '#00ff00';
+                                            logLine.textContent = '> ' + data.message;
+                                            logElement.appendChild(logLine);
+                                        } else if (data.type === 'stderr') {
+                                            const logLine = document.createElement('div');
+                                            logLine.style.marginBottom = '4px';
+                                            logLine.style.color = '#ffaa00';
+                                            logLine.textContent = '⚠ ' + data.message;
+                                            logElement.appendChild(logLine);
+                                        } else if (data.type === 'success') {
+                                            progressBar.style.width = '100%';
+                                            progressBar.style.background = 'linear-gradient(90deg, #10b981 0%, #059669 100%)';
+                                            progressText.textContent = '✅ 构建成功！';
+                                            progressText.style.color = '#10b981';
+                                            
+                                            if (channelBtn) {
+                                                channelBtn.innerHTML = '✅ 构建成功';
+                                            }
+                                            
+                                            const successLine = document.createElement('div');
+                                            successLine.style.marginTop = '10px';
+                                            successLine.style.color = '#00ff00';
+                                            successLine.style.fontWeight = 'bold';
+                                            successLine.textContent = '✅ ' + data.message;
+                                            logElement.appendChild(successLine);
+                                            
+                                            showNotification(`✅ 构建成功: ${projectName} (${channel})`);
+                                            
+                                            setTimeout(() => {
+                                                closeModal();
+                                                if (channelBtn) {
+                                                    channelBtn.innerHTML = originalText;
+                                                }
+                                                resolve(true);
+                                            }, 5000);
+                                        } else if (data.type === 'error') {
+                                            progressBar.style.width = '100%';
+                                            progressBar.style.background = 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)';
+                                            progressText.textContent = '❌ 构建失败';
+                                            progressText.style.color = '#ef4444';
+                                            
+                                            if (channelBtn) {
+                                                channelBtn.innerHTML = '❌ 构建失败';
+                                            }
+                                            
+                                            const errorLine = document.createElement('div');
+                                            errorLine.style.marginTop = '10px';
+                                            errorLine.style.color = '#ff4444';
+                                            errorLine.style.fontWeight = 'bold';
+                                            errorLine.textContent = '❌ ' + data.message;
+                                            logElement.appendChild(errorLine);
+                                            
+                                            showNotification(`❌ 构建失败: ${projectName} - ${data.message}`);
+                                            
+                                            setTimeout(() => {
+                                                closeModal();
+                                                if (channelBtn) {
+                                                    channelBtn.innerHTML = originalText;
+                                                }
+                                                reject(new Error(data.message));
+                                            }, 10000);
+                                        }
+                                        
+                                        // 自动滚动到底部
+                                        logContainer.scrollTop = logContainer.scrollHeight;
+                                        
+                                    } catch (e) {
+                                        console.error('Failed to parse SSE data:', e);
+                                    }
+                                }
+                            }
+                        }
+                        
+                    } catch (err) {
+                        if (channelBtn) {
+                            channelBtn.innerHTML = '❌ 构建失败';
+                        }
+                        
+                        progressBar.style.width = '100%';
+                        progressBar.style.background = 'linear-gradient(90deg, #ef4444 0%, #dc2626 100%)';
+                        progressText.textContent = '❌ 构建失败';
+                        progressText.style.color = '#ef4444';
+                        
+                        const errorLine = document.createElement('div');
+                        errorLine.style.color = '#ff4444';
+                        errorLine.style.fontWeight = 'bold';
+                        errorLine.textContent = '❌ ' + err.message;
+                        logElement.appendChild(errorLine);
+                        
+                        showNotification(`❌ 构建失败: ${err.message}`);
+                        
+                        setTimeout(() => {
+                            closeModal();
+                            if (channelBtn) {
+                                channelBtn.innerHTML = originalText;
+                            }
+                            reject(err);
+                        }, 10000);
+                    }
+                })();
+            });
         }
 
         // 动态加载并渲染最近项目（真实数据）

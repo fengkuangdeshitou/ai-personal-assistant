@@ -411,11 +411,19 @@ app.post('/api/check-build', (req, res) => {
     let fileCount = 0;
     if (exists) {
       try {
-        // 统计文件数量
+        // 统计文件数量（忽略系统文件）
+        const shouldIgnoreFile = (filename) => {
+          const ignoreList = ['.DS_Store', 'Thumbs.db', '.gitkeep', '.gitignore'];
+          return ignoreList.includes(filename);
+        };
+        
         const countFiles = (dir) => {
           const entries = fs.readdirSync(dir, { withFileTypes: true });
           let count = 0;
           for (const entry of entries) {
+            if (shouldIgnoreFile(entry.name)) {
+              continue; // 跳过系统文件
+            }
             if (entry.isDirectory()) {
               count += countFiles(path.join(dir, entry.name));
             } else {
@@ -597,6 +605,94 @@ app.post('/api/build-channel', async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message, stderr: e.stderr });
+  }
+});
+
+// 流式构建（实时输出）
+app.post('/api/build-stream', async (req, res) => {
+  try {
+    const { projectName, channel } = req.body;
+    
+    if (!projectName) {
+      return res.status(400).json({ error: 'Missing projectName' });
+    }
+    
+    const projectPath = path.join(DEFAULT_DIR, projectName);
+    
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    
+    // 如果指定了渠道，先切换配置
+    if (channel) {
+      res.write(`data: ${JSON.stringify({ type: 'log', message: `切换到渠道: ${channel}` })}\n\n`);
+      
+      try {
+        const switchResponse = await fetch(`http://localhost:${PORT}/api/switch-channel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectName, channel })
+        });
+        
+        if (!switchResponse.ok) {
+          res.write(`data: ${JSON.stringify({ type: 'error', message: 'Failed to switch channel' })}\n\n`);
+          res.end();
+          return;
+        }
+        res.write(`data: ${JSON.stringify({ type: 'log', message: '渠道切换完成' })}\n\n`);
+      } catch (err) {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+        res.end();
+        return;
+      }
+    }
+    
+    // 使用 spawn 执行构建，实时获取输出
+    const { spawn } = await import('child_process');
+    
+    res.write(`data: ${JSON.stringify({ type: 'log', message: '开始构建...' })}\n\n`);
+    
+    const buildProcess = spawn('npm', ['run', 'build'], {
+      cwd: projectPath,
+      shell: true
+    });
+    
+    buildProcess.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(line => line.trim());
+      lines.forEach(line => {
+        res.write(`data: ${JSON.stringify({ type: 'stdout', message: line })}\n\n`);
+      });
+    });
+    
+    buildProcess.stderr.on('data', (data) => {
+      const lines = data.toString().split('\n').filter(line => line.trim());
+      lines.forEach(line => {
+        res.write(`data: ${JSON.stringify({ type: 'stderr', message: line })}\n\n`);
+      });
+    });
+    
+    buildProcess.on('close', (code) => {
+      if (code === 0) {
+        res.write(`data: ${JSON.stringify({ type: 'success', message: '构建成功', buildPath: path.join(projectPath, 'build') })}\n\n`);
+      } else {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: `构建失败，退出码: ${code}` })}\n\n`);
+      }
+      res.end();
+    });
+    
+    buildProcess.on('error', (err) => {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: err.message })}\n\n`);
+      res.end();
+    });
+    
+  } catch (e) {
+    res.write(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`);
+    res.end();
   }
 });
 
@@ -835,6 +931,186 @@ app.post('/api/oss/upload-simple', async (req, res) => {
   } catch (e) {
     console.error('OSS upload error:', e);
     res.status(500).json({ ok: false, error: e.message, stack: e.stack });
+  }
+});
+
+// 流式上传到 OSS（实时进度）
+app.post('/api/oss/upload-stream', async (req, res) => {
+  try {
+    const { projectName, path: projectPath, env, bucket: bucketName } = req.body;
+    
+    if (!projectName || !env || !bucketName) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+    
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    
+    // 检查 bucket 是否为占位符
+    if (bucketName.includes('placeholder')) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: `Bucket ${bucketName} 尚未配置` })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    // 读取 OSS 配置
+    let ossConfig, bucketConfig;
+    try {
+      const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
+      const ossConfigs = JSON.parse(ossData);
+      ossConfig = ossConfigs.connection;
+      
+      bucketConfig = getBucketConfig(ossConfigs, projectName, null, env);
+      
+      if (!bucketConfig) {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: `Bucket config not found` })}\n\n`);
+        res.end();
+        return;
+      }
+      
+      if (Array.isArray(bucketConfig)) {
+        bucketConfig = bucketConfig.find(b => b.name === bucketName);
+        if (!bucketConfig) {
+          res.write(`data: ${JSON.stringify({ type: 'error', message: `Bucket ${bucketName} not found` })}\n\n`);
+          res.end();
+          return;
+        }
+      }
+      
+      if (bucketConfig.enabled === false) {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: 'Bucket is disabled' })}\n\n`);
+        res.end();
+        return;
+      }
+    } catch (e) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Failed to load OSS config: ' + e.message })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    // 检查构建目录
+    const buildPath = path.join(projectPath, 'build');
+    if (!fs.existsSync(buildPath)) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Build directory not found' })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    // 检查 build 目录是否为空
+    const shouldIgnoreFile = (filename) => {
+      const ignoreList = ['.DS_Store', 'Thumbs.db', '.gitkeep', '.gitignore'];
+      return ignoreList.includes(filename);
+    };
+    
+    const countFiles = (dir) => {
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        let count = 0;
+        for (const entry of entries) {
+          if (shouldIgnoreFile(entry.name)) {
+            continue; // 跳过系统文件
+          }
+          if (entry.isDirectory()) {
+            count += countFiles(path.join(dir, entry.name));
+          } else {
+            count++;
+          }
+        }
+        return count;
+      } catch (e) {
+        return 0;
+      }
+    };
+    
+    const fileCount = countFiles(buildPath);
+    if (fileCount === 0) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Build directory is empty' })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    res.write(`data: ${JSON.stringify({ type: 'log', message: `开始上传到 ${bucketConfig.name}...` })}\n\n`);
+    
+    // 动态导入 ali-oss
+    const OSS = (await import('ali-oss')).default;
+    
+    const client = new OSS({
+      region: ossConfig.region,
+      accessKeyId: ossConfig.accessKeyId,
+      accessKeySecret: ossConfig.accessKeySecret,
+      bucket: bucketConfig.name
+    });
+    
+    let successCount = 0;
+    let failCount = 0;
+    let totalFiles = 0;
+    
+    // 递归收集所有文件
+    const collectFiles = (dirPath, prefix = '') => {
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      let files = [];
+      for (const entry of entries) {
+        if (shouldIgnoreFile(entry.name)) continue;
+        const fullPath = path.join(dirPath, entry.name);
+        const ossPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          files = files.concat(collectFiles(fullPath, ossPath));
+        } else {
+          files.push({ fullPath, ossPath });
+        }
+      }
+      return files;
+    };
+
+    const allFiles = collectFiles(buildPath, bucketConfig.prefix || '');
+    totalFiles = allFiles.length;
+
+    // 并发上传
+  const CONCURRENCY = 15;
+    let index = 0;
+    async function uploadBatch() {
+      const batch = allFiles.slice(index, index + CONCURRENCY);
+      await Promise.all(batch.map(async ({ fullPath, ossPath }) => {
+        res.write(`data: ${JSON.stringify({ type: 'uploading', file: ossPath, current: index + 1 })}\n\n`);
+        try {
+          await client.put(ossPath, fullPath);
+          successCount++;
+          res.write(`data: ${JSON.stringify({ type: 'success', file: ossPath, current: successCount + failCount, total: totalFiles })}\n\n`);
+        } catch (err) {
+          failCount++;
+          res.write(`data: ${JSON.stringify({ type: 'error', file: ossPath, message: err.message })}\n\n`);
+        }
+      }));
+      index += CONCURRENCY;
+      if (index < allFiles.length) {
+        await uploadBatch();
+      }
+    }
+
+    if (allFiles.length > 0) {
+      await uploadBatch();
+    }
+    
+    res.write(`data: ${JSON.stringify({ 
+      type: 'complete', 
+      message: '上传完成',
+      uploaded: successCount,
+      failed: failCount,
+      url: bucketConfig.url || `https://${bucketConfig.name}.oss-cn-hangzhou.aliyuncs.com`
+    })}\n\n`);
+    
+    res.end();
+    
+  } catch (e) {
+    console.error('OSS upload stream error:', e);
+    res.write(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`);
+    res.end();
   }
 });
 
