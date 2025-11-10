@@ -1926,13 +1926,31 @@
         }
 
         // 构建项目
-        function buildProject(projectName) {
+        async function buildProject(projectName) {
             const path = getProjectPath(projectName);
-            const command = `cd ${path} && npm run build`;
-            const message = `🔨 构建 ${projectName}\n\n命令：${command}`;
             
-            showCommandModal('Build Project', message, command);
             showNotification(`🔨 开始构建 ${projectName}...`);
+            
+            try {
+                const response = await fetch('http://localhost:5178/api/build-channel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectName, channel: null })
+                });
+                
+                const result = await response.json();
+                
+                if (result.ok) {
+                    showNotification(`✅ 构建成功: ${projectName}`);
+                    if (result.message) {
+                        showNotification(`📝 ${result.message}`);
+                    }
+                } else {
+                    showNotification(`❌ 构建失败: ${result.error}`);
+                }
+            } catch (err) {
+                showNotification(`❌ 构建失败: ${err.message}`);
+            }
         }
 
         // 显示构建选项（如果有渠道配置则显示渠道选择）
@@ -1990,6 +2008,12 @@
 
         // 显示自定义弹窗
         function showCustomModal(title, content) {
+            // 先关闭已存在的弹窗
+            const existingModal = document.getElementById('customModal');
+            if (existingModal) {
+                existingModal.remove();
+            }
+            
             const modal = document.createElement('div');
             modal.id = 'customModal';
             modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 10000;';
@@ -2012,10 +2036,9 @@
 
         // 关闭弹窗
         function closeModal() {
-            const modal = document.getElementById('customModal');
-            if (modal) {
-                modal.remove();
-            }
+            // 关闭所有可能存在的弹窗
+            const modals = document.querySelectorAll('#customModal');
+            modals.forEach(modal => modal.remove());
         }
 
         // 上传到 OSS
@@ -2069,33 +2092,32 @@
             const devBucket = buckets.dev || '未配置';
             const prodBuckets = Array.isArray(buckets.prod) ? buckets.prod : [buckets.prod];
             
-            let prodButtons = '';
-            if (prodBuckets.length > 1) {
-                // 多个生产环境 bucket
-                prodButtons = prodBuckets.map((bucket, index) => `
-                    <button onclick="uploadSimpleProject('${projectName}', 'prod', '${bucket}'); closeModal();"
-                            style="flex: 1; padding: 10px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9em; margin-top: ${index > 0 ? '8px' : '0'};">
-                        🚀 生产环境 ${index + 1}<br><span style="font-size: 0.8em; opacity: 0.9;">${bucket}</span>
-                    </button>
-                `).join('');
-            } else {
-                prodButtons = `
-                    <button onclick="uploadSimpleProject('${projectName}', 'prod', '${prodBuckets[0]}'); closeModal();"
-                            style="flex: 1; padding: 10px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9em;">
-                        🚀 生产环境<br><span style="font-size: 0.8em; opacity: 0.9;">${prodBuckets[0]}</span>
-                    </button>
-                `;
-            }
+            // 生产环境显示文本（多个bucket时显示数量提示）
+            const prodBucketText = prodBuckets.length > 1 
+                ? `${prodBuckets.map(b => b.name || b).join(' + ')}` 
+                : (prodBuckets[0].name || prodBuckets[0]);
+            
+            // 生产环境按钮 - 无论多少个bucket，只显示一个按钮
+            const prodButtons = `
+                <button onclick="uploadSimpleProjectToMultipleBuckets('${projectName}', 'prod', ${JSON.stringify(prodBuckets).replace(/"/g, '&quot;')}); closeModal();"
+                        style="flex: 1; padding: 24px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; border: none; border-radius: 12px; cursor: pointer; font-size: 1.1em; font-weight: 500; transition: all 0.3s; box-shadow: 0 4px 15px rgba(245, 87, 108, 0.3);"
+                        onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(245, 87, 108, 0.4)';"
+                        onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(245, 87, 108, 0.3)';">
+                    🚀 生产环境${prodBuckets.length > 1 ? ` (${prodBuckets.length}个)` : ''}<br><span style="font-size: 0.85em; opacity: 0.9;">${prodBucketText}</span>
+                </button>
+            `;
             
             const modalContent = `
                 <div style="padding: 20px;">
                     <h3 style="margin: 0 0 20px 0; color: #333;">☁️ 选择上传环境</h3>
-                    <div style="padding: 16px; border: 1px solid #e0e0e0; border-radius: 12px;">
-                        <div style="font-weight: 500; color: #333; margin-bottom: 12px;">${projectName}</div>
-                        <div style="display: flex; gap: 10px; flex-direction: column;">
+                    <div style="padding: 20px; border: 1px solid #e0e0e0; border-radius: 12px;">
+                        <div style="font-weight: 500; color: #333; margin-bottom: 16px; font-size: 1.05em;">${projectName}</div>
+                        <div style="display: flex; gap: 16px; flex-direction: row;">
                             <button onclick="uploadSimpleProject('${projectName}', 'dev', '${devBucket}'); closeModal();"
-                                    style="flex: 1; padding: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.9em;">
-                                📦 开发环境<br><span style="font-size: 0.8em; opacity: 0.9;">${devBucket}</span>
+                                    style="flex: 1; padding: 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 12px; cursor: pointer; font-size: 1.1em; font-weight: 500; transition: all 0.3s; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);"
+                                    onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(102, 126, 234, 0.4)';"
+                                    onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(102, 126, 234, 0.3)';">
+                                📦 开发环境<br><span style="font-size: 0.85em; opacity: 0.9;">${devBucket}</span>
                             </button>
                             ${prodButtons}
                         </div>
@@ -2113,35 +2135,244 @@
         }
 
         // 简单项目上传（无渠道）
-        function uploadSimpleProject(projectName, env, bucket) {
+        async function uploadSimpleProject(projectName, env, bucket) {
             const path = getProjectPath(projectName);
             
-            showNotification(`☁️ 正在上传 ${projectName} (环境: ${env}, bucket: ${bucket})...`);
+            // 先检查 build 目录是否存在
+            showNotification(`🔍 检查 ${projectName} 的构建文件...`);
             
-            fetch('http://localhost:5178/api/oss/upload-simple', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    projectName,
-                    path,
-                    env,
-                    bucket
-                })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.ok) {
+            try {
+                const checkResponse = await fetch('http://localhost:5178/api/check-build', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectName, path })
+                });
+                
+                const checkData = await checkResponse.json();
+                
+                if (!checkData.exists) {
+                    // build 目录不存在，询问是否先构建
+                    const shouldBuild = confirm(`📦 ${projectName} 还没有构建\n\n是否先执行构建？\n\n环境: ${env}`);
+                    
+                    if (!shouldBuild) {
+                        showNotification('⚠️ 已取消上传');
+                        return;
+                    }
+                    
+                    // 执行构建
+                    showNotification(`🔨 正在构建 ${projectName}...`);
+                    
+                    const buildResponse = await fetch('http://localhost:5178/api/build-channel', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ projectName, channel: null })
+                    });
+                    
+                    const buildData = await buildResponse.json();
+                    
+                    if (!buildData.ok) {
+                        showNotification(`❌ 构建失败: ${buildData.error}`);
+                        return;
+                    }
+                    
+                    showNotification(`✅ 构建完成，开始上传...`);
+                }
+                
+                // 开始上传
+                showNotification(`☁️ 正在上传 ${projectName} (环境: ${env}, bucket: ${bucket})...`);
+                
+                const uploadResponse = await fetch('http://localhost:5178/api/oss/upload-simple', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        projectName,
+                        path,
+                        env,
+                        bucket
+                    })
+                });
+                
+                const uploadData = await uploadResponse.json();
+                
+                if (uploadData.ok) {
                     showNotification(`✅ 上传成功: ${projectName} (${env})`);
-                    if (data.url) {
-                        showNotification(`🔗 访问地址: ${data.url}`);
+                    if (uploadData.uploaded) {
+                        showNotification(`📊 已上传 ${uploadData.uploaded} 个文件${uploadData.failed ? `, ${uploadData.failed} 个失败` : ''}`);
+                    }
+                    if (uploadData.url) {
+                        showNotification(`🔗 访问地址: ${uploadData.url}`);
+                    }
+                    
+                    // 只有生产环境才备份 build 文件夹到"以往版本"
+                    if (env === 'prod') {
+                        await backupBuildToOSS(projectName, path, bucket);
                     }
                 } else {
-                    showNotification(`❌ 上传失败: ${data.error}`);
+                    showNotification(`❌ 上传失败: ${uploadData.error}`);
                 }
-            })
-            .catch(err => {
-                showNotification(`❌ 上传失败: ${err.message}`);
-            });
+            } catch (err) {
+                showNotification(`❌ 操作失败: ${err.message}`);
+            }
+        }
+
+        // 上传到多个生产bucket（用于 react-agent-website 等需要同时上传多个bucket的项目）
+        async function uploadSimpleProjectToMultipleBuckets(projectName, env, buckets) {
+            const projectData = projects.find(p => p.name === projectName);
+            if (!projectData) {
+                showNotification(`❌ 项目 ${projectName} 未找到`);
+                return;
+            }
+
+            const path = projectData.path;
+            
+            try {
+                // 检查 build 目录
+                const checkResponse = await fetch('http://localhost:5178/api/check-build', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectName, path })
+                });
+                
+                const checkData = await checkResponse.json();
+                
+                if (!checkData.exists) {
+                    const shouldBuild = confirm(`📦 ${projectName} 还没有构建\n\n是否先执行构建？\n\n环境: ${env}`);
+                    
+                    if (!shouldBuild) {
+                        showNotification('⚠️ 已取消上传');
+                        return;
+                    }
+                    
+                    showNotification(`🔨 正在构建 ${projectName}...`);
+                    
+                    const buildResponse = await fetch('http://localhost:5178/api/build-channel', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ projectName, channel: null })
+                    });
+                    
+                    const buildData = await buildResponse.json();
+                    
+                    if (!buildData.ok) {
+                        showNotification(`❌ 构建失败: ${buildData.error}`);
+                        return;
+                    }
+                    
+                    showNotification(`✅ 构建完成，开始上传...`);
+                }
+                
+                // 循环上传到所有生产bucket
+                const bucketList = Array.isArray(buckets) ? buckets : [buckets];
+                showNotification(`☁️ 正在上传 ${projectName} 到 ${bucketList.length} 个生产bucket...`);
+                
+                let successCount = 0;
+                let failCount = 0;
+                
+                for (const bucket of bucketList) {
+                    const bucketName = bucket.name || bucket;
+                    showNotification(`📤 正在上传到: ${bucketName}...`);
+                    
+                    const uploadResponse = await fetch('http://localhost:5178/api/oss/upload-simple', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            projectName,
+                            path,
+                            env,
+                            bucket: bucketName
+                        })
+                    });
+                    
+                    const uploadData = await uploadResponse.json();
+                    
+                    if (uploadData.ok) {
+                        successCount++;
+                        showNotification(`✅ ${bucketName}: 上传成功 (${uploadData.uploaded} 个文件)`);
+                        if (uploadData.url) {
+                            showNotification(`🔗 ${bucketName}: ${uploadData.url}`);
+                        }
+                    } else {
+                        failCount++;
+                        showNotification(`❌ ${bucketName}: 上传失败 - ${uploadData.error}`);
+                    }
+                }
+                
+                // 最终总结
+                if (failCount === 0) {
+                    showNotification(`🎉 全部上传完成！成功: ${successCount}/${bucketList.length}`);
+                    
+                    // 只有生产环境才备份 build 文件夹到"以往版本"（使用第一个 bucket）
+                    if (env === 'prod') {
+                        const firstBucket = bucketList[0].name || bucketList[0];
+                        await backupBuildToOSS(projectName, path, firstBucket);
+                    }
+                } else {
+                    showNotification(`⚠️ 上传完成，成功: ${successCount}，失败: ${failCount}`);
+                }
+                
+                // react-agent-website 生产环境需要额外步骤：复制文件到 agent-pro 并 push
+                if (projectName === 'react-agent-website' && env === 'prod' && failCount === 0) {
+                    showNotification(`📋 正在复制文件到 agent-pro...`);
+                    
+                    try {
+                        const copyResponse = await fetch('http://localhost:5178/api/copy-and-push', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                sourcePath: path,
+                                targetProjectPath: '/Users/maiyou001/Project/agent-pro',
+                                commitMessage: `Update from react-agent-website build at ${new Date().toLocaleString('zh-CN')}`
+                            })
+                        });
+                        
+                        const copyData = await copyResponse.json();
+                        
+                        if (copyData.ok) {
+                            if (copyData.pushed) {
+                                showNotification(`✅ 已复制 ${copyData.copiedFiles} 个文件到 agent-pro 并推送到远程仓库`);
+                                showNotification(`📝 Git: ${copyData.changedFiles} 个文件有改动`);
+                            } else {
+                                showNotification(`ℹ️ ${copyData.message}`);
+                            }
+                        } else {
+                            showNotification(`⚠️ 复制到 agent-pro 失败: ${copyData.error}`);
+                        }
+                    } catch (copyErr) {
+                        showNotification(`⚠️ 复制到 agent-pro 失败: ${copyErr.message}`);
+                    }
+                }
+                
+            } catch (err) {
+                showNotification(`❌ 操作失败: ${err.message}`);
+            }
+        }
+
+        // 备份 build 文件夹到 OSS 的"以往版本"目录
+        async function backupBuildToOSS(projectName, projectPath, bucketName) {
+            try {
+                showNotification(`📦 正在备份 ${projectName} 的构建文件...`);
+                
+                const backupResponse = await fetch('http://localhost:5178/api/backup-build', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        projectName,
+                        projectPath,
+                        bucketName
+                    })
+                });
+                
+                const backupData = await backupResponse.json();
+                
+                if (backupData.ok) {
+                    showNotification(`✅ 备份成功: ${backupData.fileName} (${backupData.size})`);
+                    showNotification(`📁 保存位置: ${backupData.ossPath}`);
+                } else {
+                    showNotification(`⚠️ 备份失败: ${backupData.error}`);
+                }
+            } catch (err) {
+                showNotification(`⚠️ 备份失败: ${err.message}`);
+            }
         }
 
 
@@ -2199,35 +2430,93 @@
         }
 
         // 按渠道和环境上传
-        function uploadWithChannel(projectName, channelId, env) {
+        async function uploadWithChannel(projectName, channelId, env) {
             const path = getProjectPath(projectName);
             
-            showNotification(`☁️ 正在上传 ${projectName} (渠道: ${channelId}, 环境: ${env})...`);
+            // 先检查 build 目录是否存在
+            showNotification(`🔍 检查 ${projectName} 的构建文件...`);
             
-            fetch('http://localhost:5178/api/oss/upload-channel', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    projectName,
-                    path,
-                    channelId,
-                    env
-                })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.ok) {
+            try {
+                const checkResponse = await fetch('http://localhost:5178/api/check-build', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectName, path })
+                });
+                
+                const checkData = await checkResponse.json();
+                
+                if (!checkData.exists) {
+                    // build 目录不存在，询问是否先构建
+                    const shouldBuild = confirm(`📦 ${projectName} 还没有构建\n\n是否先执行构建？\n\n构建渠道: ${channelId}\n环境: ${env}`);
+                    
+                    if (!shouldBuild) {
+                        showNotification('⚠️ 已取消上传');
+                        return;
+                    }
+                    
+                    // 执行构建
+                    showNotification(`🔨 正在构建 ${projectName} (渠道: ${channelId})...`);
+                    
+                    const buildResponse = await fetch('http://localhost:5178/api/build-channel', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ projectName, channel: channelId })
+                    });
+                    
+                    const buildData = await buildResponse.json();
+                    
+                    if (!buildData.ok) {
+                        showNotification(`❌ 构建失败: ${buildData.error}`);
+                        return;
+                    }
+                    
+                    showNotification(`✅ 构建完成，开始上传...`);
+                }
+                
+                // 开始上传
+                showNotification(`☁️ 正在上传 ${projectName} (渠道: ${channelId}, 环境: ${env})...`);
+                
+                const uploadResponse = await fetch('http://localhost:5178/api/oss/upload-channel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        projectName,
+                        path,
+                        channelId,
+                        env
+                    })
+                });
+                
+                const uploadData = await uploadResponse.json();
+                
+                if (uploadData.ok) {
                     showNotification(`✅ 上传成功: ${projectName} (${channelId}-${env})`);
-                    if (data.url) {
-                        showNotification(`🔗 访问地址: ${data.url}`);
+                    if (uploadData.uploaded) {
+                        showNotification(`📊 已上传 ${uploadData.uploaded} 个文件${uploadData.failed ? `, ${uploadData.failed} 个失败` : ''}`);
+                    }
+                    if (uploadData.url) {
+                        showNotification(`🔗 访问地址: ${uploadData.url}`);
+                    }
+                    
+                    // 只有生产环境才备份 build 文件夹到"以往版本"
+                    if (env === 'prod') {
+                        // 从上传响应中获取 bucket 名称
+                        const bucketInfo = await fetch('http://localhost:5178/api/oss/get-bucket-info', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ projectName, channelId, env })
+                        }).then(r => r.json());
+                        
+                        if (bucketInfo.ok && bucketInfo.bucket) {
+                            await backupBuildToOSS(projectName, path, bucketInfo.bucket);
+                        }
                     }
                 } else {
-                    showNotification(`❌ 上传失败: ${data.error}`);
+                    showNotification(`❌ 上传失败: ${uploadData.error}`);
                 }
-            })
-            .catch(err => {
-                showNotification(`❌ 上传失败: ${err.message}`);
-            });
+            } catch (err) {
+                showNotification(`❌ 操作失败: ${err.message}`);
+            }
         }
 
 
@@ -2489,6 +2778,9 @@
             channelBtn.innerHTML = '⏳ 构建中...';
             channelBtn.parentElement.disabled = true;
             
+            // 显示通知
+            showNotification(`🔨 开始构建 ${projectName} (渠道: ${channel})...`);
+            
             try {
                 const response = await fetch('http://localhost:5178/api/build-channel', {
                     method: 'POST',
@@ -2500,6 +2792,10 @@
                 
                 if (result.ok) {
                     channelBtn.innerHTML = '✅ 构建成功';
+                    showNotification(`✅ 构建成功: ${projectName} (${channel})`);
+                    if (result.message) {
+                        showNotification(`📝 ${result.message}`);
+                    }
                     setTimeout(() => {
                         channelBtn.innerHTML = originalText;
                     }, 3000);
@@ -2511,8 +2807,8 @@
                 }
             } catch (err) {
                 channelBtn.innerHTML = '❌ 构建失败';
+                showNotification(`❌ 构建失败: ${projectName} - ${err.message}`);
                 console.error('Build failed:', err);
-                alert('构建失败: ' + err.message);
                 setTimeout(() => {
                     channelBtn.innerHTML = originalText;
                 }, 3000);
