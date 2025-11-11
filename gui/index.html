@@ -2240,7 +2240,7 @@
 
         // 显示简单的环境选择弹窗（非多渠道项目）
         function showSimpleEnvSelectionModal(projectName, buckets) {
-            const devBucket = buckets.dev || '未配置';
+            const devBucketText = buckets.dev ? (buckets.dev.name || buckets.dev) : '未配置';
             const prodBuckets = Array.isArray(buckets.prod) ? buckets.prod : [buckets.prod];
             
             // 生产环境显示文本（多个bucket时显示数量提示）
@@ -2250,7 +2250,7 @@
             
             // 生产环境按钮 - 无论多少个bucket，只显示一个按钮
             const prodButtons = `
-                <button onclick="uploadSimpleProjectToMultipleBuckets('${projectName}', 'prod', ${JSON.stringify(prodBuckets).replace(/"/g, '&quot;')}); closeModal();"
+                <button onclick="uploadSimpleProjectToMultipleBuckets('${projectName}', 'prod', [${prodBuckets.map(b => '\'' + (b.name || b) + '\'').join(',')}]); closeModal();"
                         style="flex: 1; padding: 24px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; border: none; border-radius: 12px; cursor: pointer; font-size: 1.1em; font-weight: 500; transition: all 0.3s; box-shadow: 0 4px 15px rgba(245, 87, 108, 0.3);"
                         onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(245, 87, 108, 0.4)';"
                         onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(245, 87, 108, 0.3)';">
@@ -2264,11 +2264,11 @@
                     <div style="padding: 20px; border: 1px solid #e0e0e0; border-radius: 12px;">
                         <div style="font-weight: 500; color: #333; margin-bottom: 16px; font-size: 1.05em;">${projectName}</div>
                         <div style="display: flex; gap: 16px; flex-direction: row;">
-                            <button onclick="uploadSimpleProject('${projectName}', 'dev', '${devBucket}'); closeModal();"
+                            <button onclick="uploadSimpleProject('${projectName}', 'dev', '${devBucketText.replace(/'/g, "\\'")}'); closeModal();"
                                     style="flex: 1; padding: 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 12px; cursor: pointer; font-size: 1.1em; font-weight: 500; transition: all 0.3s; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);"
                                     onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(102, 126, 234, 0.4)';"
                                     onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 15px rgba(102, 126, 234, 0.3)';">
-                                📦 开发环境<br><span style="font-size: 0.85em; opacity: 0.9;">${devBucket}</span>
+                                📦 开发环境<br><span style="font-size: 0.85em; opacity: 0.9;">${devBucketText}</span>
                             </button>
                             ${prodButtons}
                         </div>
@@ -2490,14 +2490,126 @@
         }
 
         // 上传到多个生产bucket（用于 react-agent-website 等需要同时上传多个bucket的项目）
-        async function uploadSimpleProjectToMultipleBuckets(projectName, env, buckets) {
-            const projectData = projects.find(p => p.name === projectName);
-            if (!projectData) {
-                showNotification(`❌ 项目 ${projectName} 未找到`);
+        async function uploadSimpleProjectToMultipleBuckets(projectName, env, bucketNames) {
+            const path = window.PROJECT_PATHS ? window.PROJECT_PATHS[projectName] : `~/Projects/${projectName}`;
+            if (!path) {
+                showNotification(`❌ 项目 ${projectName} 路径未找到`);
                 return;
             }
 
-            const path = projectData.path;
+            // 获取完整 bucket 配置
+            let buckets = [];
+            try {
+                const response = await fetch(`http://localhost:5178/api/project-buckets/${projectName}`);
+                const data = await response.json();
+                if (data.buckets && data.buckets[env]) {
+                    const allBuckets = Array.isArray(data.buckets[env]) ? data.buckets[env] : [data.buckets[env]];
+                    buckets = allBuckets.filter(b => bucketNames.includes(b.name || b));
+                }
+            } catch (e) {
+                showNotification(`❌ 获取 bucket 配置失败: ${e.message}`);
+                return;
+            }
+
+            if (buckets.length === 0) {
+                showNotification('❌ 未找到匹配的 bucket 配置');
+                return;
+            }
+
+            // 显示确认弹框
+            const bucketNamesStr = buckets.map(b => b.name || b).join(', ');
+            const confirmContent = `
+                <div style="padding: 20px; text-align: center;">
+                    <h3 style="margin: 0 0 20px 0; color: #333;">☁️ 确认上传</h3>
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <div style="font-weight: 500; color: #333; margin-bottom: 10px;">${projectName}</div>
+                        <div style="color: #666; margin-bottom: 10px;">环境: ${env === 'dev' ? '开发' : '生产'}</div>
+                        <div style="color: #666;">Bucket: ${bucketNamesStr}</div>
+                    </div>
+                    <div style="display: flex; gap: 10px; justify-content: center;">
+                        <button onclick="closeModal(); doUploadSimpleProject('${projectName}', '${env}', [${bucketNames.map(name => '\'' + name + '\'').join(',')}]);" 
+                                style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                            ✅ 确认上传
+                        </button>
+                        <button onclick="closeModal();" 
+                                style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                            取消
+                        </button>
+                    </div>
+                </div>
+            `;
+            showCustomModal(confirmContent);
+        }
+
+        // 执行简单项目上传
+        async function doUploadSimpleProject(projectName, env, bucketNames) {
+            const path = window.PROJECT_PATHS ? window.PROJECT_PATHS[projectName] : `~/Projects/${projectName}`;
+            
+            // 获取完整 bucket 配置
+            let buckets = [];
+            try {
+                const response = await fetch(`http://localhost:5178/api/project-buckets/${projectName}`);
+                const data = await response.json();
+                if (data.buckets && data.buckets[env]) {
+                    const allBuckets = Array.isArray(data.buckets[env]) ? data.buckets[env] : [data.buckets[env]];
+                    buckets = allBuckets.filter(b => bucketNames.includes(b.name || b));
+                }
+            } catch (e) {
+                progressText.textContent = '❌ 获取配置失败';
+                const errorLine = document.createElement('div');
+                errorLine.style.marginBottom = '4px';
+                errorLine.style.color = '#ff4444';
+                errorLine.textContent = `❌ 获取配置失败: ${e.message}`;
+                logElement.appendChild(errorLine);
+                return;
+            }
+
+            if (buckets.length === 0) {
+                progressText.textContent = '❌ 未找到 bucket';
+                const errorLine = document.createElement('div');
+                errorLine.style.marginBottom = '4px';
+                errorLine.style.color = '#ff4444';
+                errorLine.textContent = '❌ 未找到匹配的 bucket 配置';
+                logElement.appendChild(errorLine);
+                return;
+            }
+            
+            // 显示上传进度弹框
+            const bucketList = Array.isArray(buckets) ? buckets : [buckets];
+            const bucketNamesStr = bucketList.map(b => b.name || b).join(', ');
+            
+            const modalContent = `
+                <div style="padding: 30px;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 48px; margin-bottom: 20px;">☁️</div>
+                        <h3 style="margin: 0 0 15px 0; color: #333;">正在上传 ${projectName}</h3>
+                        <div style="padding: 8px 16px; background: #f0f0f0; border-radius: 20px; display: inline-block; margin-bottom: 20px;">
+                            <span style="font-size: 0.9em; color: #666;">环境: ${env === 'prod' ? '生产' : '开发'} | Buckets: ${bucketNamesStr}</span>
+                        </div>
+                        <div id="upload-progress-text" style="color: #666; margin-bottom: 20px;">准备上传...</div>
+                        <div style="width: 100%; height: 6px; background: #f0f0f0; border-radius: 3px; overflow: hidden; margin-bottom: 10px;">
+                            <div id="upload-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); transition: width 0.3s;"></div>
+                        </div>
+                        <div id="upload-stats" style="font-size: 0.9em; color: #999;">0 / 0 文件</div>
+                    </div>
+                    <div id="upload-log-container" style="margin-top: 20px; max-height: 350px; overflow-y: auto; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 0.75em;">
+                        <div id="upload-log"></div>
+                    </div>
+                </div>
+                <style>
+                    #upload-log-container::-webkit-scrollbar { width: 8px; }
+                    #upload-log-container::-webkit-scrollbar-track { background: #2d2d2d; }
+                    #upload-log-container::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+                </style>
+            `;
+            
+            showCustomModal(modalContent);
+            
+            const progressBar = document.getElementById('upload-progress-bar');
+            const progressText = document.getElementById('upload-progress-text');
+            const statsText = document.getElementById('upload-stats');
+            const logElement = document.getElementById('upload-log');
+            const logContainer = document.getElementById('upload-log-container');
             
             try {
                 // 检查 build 目录
@@ -2511,13 +2623,23 @@
                 
                 if (!checkData.exists || checkData.isEmpty) {
                     // build 目录不存在或为空，直接开始构建
-                    showNotification(`🔨 ${projectName} 需要构建，开始构建...`);
+                    progressText.textContent = '🔨 正在构建项目...';
+                    const logLine = document.createElement('div');
+                    logLine.style.marginBottom = '4px';
+                    logLine.style.color = '#ffff00';
+                    logLine.textContent = '🔨 开始构建项目...';
+                    logElement.appendChild(logLine);
                     
                     // 执行构建 - 使用 buildProject 函数
                     try {
                         await buildProject(projectName);
                     } catch (buildError) {
-                        showNotification('❌ 构建失败，已取消上传');
+                        progressText.textContent = '❌ 构建失败';
+                        const errorLine = document.createElement('div');
+                        errorLine.style.marginBottom = '4px';
+                        errorLine.style.color = '#ff4444';
+                        errorLine.textContent = '❌ 构建失败: ' + buildError.message;
+                        logElement.appendChild(errorLine);
                         return;
                     }
                     
@@ -2530,91 +2652,233 @@
                     
                     const recheckData = await recheckResponse.json();
                     if (!recheckData.exists || recheckData.isEmpty) {
-                        showNotification('❌ 构建后 build 目录仍为空或不存在');
+                        progressText.textContent = '❌ 构建后 build 目录仍为空';
+                        const errorLine = document.createElement('div');
+                        errorLine.style.marginBottom = '4px';
+                        errorLine.style.color = '#ff4444';
+                        errorLine.textContent = '❌ 构建后 build 目录仍为空或不存在';
+                        logElement.appendChild(errorLine);
                         return;
                     }
                 }
                 
-                // 循环上传到所有生产bucket
+                // 循环上传到所有生产bucket（使用流式API）
                 const bucketList = Array.isArray(buckets) ? buckets : [buckets];
-                showNotification(`☁️ 正在上传 ${projectName} 到 ${bucketList.length} 个生产bucket...`);
+                progressText.textContent = `☁️ 正在上传到 ${bucketList.length} 个 bucket...`;
                 
                 let successCount = 0;
                 let failCount = 0;
+                let totalFiles = 0;
+                let uploadedFiles = 0;
+                let currentBucketIndex = 0;
+                let bucketProgresses = new Array(bucketList.length).fill(0); // 每个bucket的进度
                 
-                for (const bucket of bucketList) {
-                    const bucketName = bucket.name || bucket;
-                    showNotification(`📤 正在上传到: ${bucketName}...`);
-                    
-                    const uploadResponse = await fetch('http://localhost:5178/api/oss/upload-simple', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
-                            projectName,
-                            path,
-                            env,
-                            bucket: bucketName
-                        })
-                    });
-                    
-                    const uploadData = await uploadResponse.json();
-                    
-                    if (uploadData.ok) {
-                        successCount++;
-                        showNotification(`✅ ${bucketName}: 上传成功 (${uploadData.uploaded} 个文件)`);
-                        if (uploadData.url) {
-                            showNotification(`🔗 ${bucketName}: ${uploadData.url}`);
+                const uploadNextBucket = async () => {
+                    if (currentBucketIndex >= bucketList.length) {
+                        // 所有bucket上传完成
+                        const finalProgress = failCount === 0 ? '🎉 全部上传完成！' : '⚠️ 上传完成，但有失败';
+                        progressText.textContent = finalProgress;
+                        progressBar.style.width = '100%';
+                        progressBar.style.background = failCount === 0 ? 'linear-gradient(90deg, #00ff00 0%, #00aa00 100%)' : 'linear-gradient(90deg, #ffa500 0%, #ff8c00 100%)';
+                        
+                        const successLine = document.createElement('div');
+                        successLine.style.marginBottom = '4px';
+                        successLine.style.color = failCount === 0 ? '#00ff00' : '#ffff00';
+                        successLine.textContent = failCount === 0 
+                            ? `🎉 全部上传完成！成功: ${successCount}/${bucketList.length}` 
+                            : `⚠️ 上传完成，成功: ${successCount}，失败: ${failCount}`;
+                        logElement.appendChild(successLine);
+                        
+                        // 只有生产环境才备份 build 文件夹到"以往版本"（使用第一个 bucket）
+                        if (env === 'prod' && failCount === 0) {
+                            const firstBucket = bucketList[0].name || bucketList[0];
+                            progressText.textContent = '📦 正在备份 build 文件夹...';
+                            await backupBuildToOSS(projectName, path, firstBucket);
                         }
-                    } else {
-                        failCount++;
-                        showNotification(`❌ ${bucketName}: 上传失败 - ${uploadData.error}`);
+                        
+                        // react-agent-website 生产环境需要额外步骤：复制文件到 agent-pro 并 push
+                        if (projectName === 'react-agent-website' && env === 'prod' && failCount === 0) {
+                            showNotification(`📋 正在复制文件到 agent-pro...`);
+                            
+                            try {
+                                const copyResponse = await fetch('http://localhost:5178/api/copy-and-push', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        sourcePath: path,
+                                        targetProjectPath: '/Users/maiyou001/Project/agent-pro',
+                                        commitMessage: `Update from react-agent-website build at ${new Date().toLocaleString('zh-CN')}`
+                                    })
+                                });
+                                
+                                const copyData = await copyResponse.json();
+                                
+                                if (copyData.ok) {
+                                    if (copyData.pushed) {
+                                        showNotification(`✅ 已复制 ${copyData.copiedFiles} 个文件到 agent-pro 并推送到远程仓库`);
+                                        showNotification(`📝 Git: ${copyData.changedFiles} 个文件有改动`);
+                                    } else {
+                                        showNotification(`ℹ️ ${copyData.message}`);
+                                    }
+                                } else {
+                                    showNotification(`⚠️ 复制到 agent-pro 失败: ${copyData.error}`);
+                                }
+                            } catch (copyErr) {
+                                showNotification(`⚠️ 复制到 agent-pro 失败: ${copyErr.message}`);
+                            }
+                        }
+                        
+                        return;
                     }
-                }
-                
-                // 最终总结
-                if (failCount === 0) {
-                    showNotification(`🎉 全部上传完成！成功: ${successCount}/${bucketList.length}`);
                     
-                    // 只有生产环境才备份 build 文件夹到"以往版本"（使用第一个 bucket）
-                    if (env === 'prod') {
-                        const firstBucket = bucketList[0].name || bucketList[0];
-                        await backupBuildToOSS(projectName, path, firstBucket);
-                    }
-                } else {
-                    showNotification(`⚠️ 上传完成，成功: ${successCount}，失败: ${failCount}`);
-                }
-                
-                // react-agent-website 生产环境需要额外步骤：复制文件到 agent-pro 并 push
-                if (projectName === 'react-agent-website' && env === 'prod' && failCount === 0) {
-                    showNotification(`📋 正在复制文件到 agent-pro...`);
+                    const bucket = bucketList[currentBucketIndex];
+                    const bucketName = bucket.name || bucket;
+                    
+                    // 重置当前bucket的文件计数
+                    uploadedFiles = 0;
+                    totalFiles = 0;
+                    
+                    progressText.textContent = `📤 正在上传到: ${bucketName}... (${currentBucketIndex + 1}/${bucketList.length})`;
+                    const logLine = document.createElement('div');
+                    logLine.style.marginBottom = '4px';
+                    logLine.style.color = '#00aaff';
+                    logLine.textContent = `📤 开始上传到 ${bucketName}...`;
+                    logElement.appendChild(logLine);
                     
                     try {
-                        const copyResponse = await fetch('http://localhost:5178/api/copy-and-push', {
+                        // 使用流式API上传到当前bucket
+                        const uploadResponse = await fetch('http://localhost:5178/api/oss/upload-stream', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                sourcePath: path,
-                                targetProjectPath: '/Users/maiyou001/Project/agent-pro',
-                                commitMessage: `Update from react-agent-website build at ${new Date().toLocaleString('zh-CN')}`
+                            body: JSON.stringify({ 
+                                projectName,
+                                path,
+                                env,
+                                bucket: bucketName
                             })
                         });
                         
-                        const copyData = await copyResponse.json();
+                        const reader = uploadResponse.body.getReader();
+                        const decoder = new TextDecoder();
                         
-                        if (copyData.ok) {
-                            if (copyData.pushed) {
-                                showNotification(`✅ 已复制 ${copyData.copiedFiles} 个文件到 agent-pro 并推送到远程仓库`);
-                                showNotification(`📝 Git: ${copyData.changedFiles} 个文件有改动`);
-                            } else {
-                                showNotification(`ℹ️ ${copyData.message}`);
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            
+                            if (done) break;
+                            
+                            const chunk = decoder.decode(value);
+                            const lines = chunk.split('\n\n');
+                            
+                            for (const line of lines) {
+                                if (line.startsWith('data: ')) {
+                                    try {
+                                        const data = JSON.parse(line.slice(6));
+                                        
+                                        if (data.type === 'log') {
+                                            const logLine = document.createElement('div');
+                                            logLine.style.marginBottom = '4px';
+                                            logLine.style.color = '#00aaff';
+                                            logLine.textContent = `📝 ${bucketName}: ${data.message}`;
+                                            logElement.appendChild(logLine);
+                                        } else if (data.type === 'uploading') {
+                                            const uploadLine = document.createElement('div');
+                                            uploadLine.style.marginBottom = '2px';
+                                            uploadLine.style.color = '#ffaa00';
+                                            uploadLine.textContent = `⬆️ ${bucketName}: ${data.file}`;
+                                            logElement.appendChild(uploadLine);
+                                        } else if (data.type === 'success') {
+                                            uploadedFiles++;
+                                            totalFiles = Math.max(totalFiles, data.total || uploadedFiles);
+                                            
+                                            // 更新当前bucket的进度
+                                            const bucketTotal = data.total || 1;
+                                            const bucketUploaded = Math.min(uploadedFiles, bucketTotal);
+                                            bucketProgresses[currentBucketIndex] = bucketUploaded / bucketTotal;
+                                            
+                                            // 计算整体进度：已完成bucket的进度(100%) + 当前bucket的进度
+                                            const completedBucketsProgress = currentBucketIndex / bucketList.length;
+                                            const currentBucketProgress = bucketProgresses[currentBucketIndex] / bucketList.length;
+                                            const overallProgress = (completedBucketsProgress + currentBucketProgress) * 100;
+                                            
+                                            progressBar.style.width = Math.min(overallProgress, 95) + '%';
+                                            statsText.textContent = `Bucket ${currentBucketIndex + 1}/${bucketList.length}: ${Math.round(bucketProgresses[currentBucketIndex] * 100)}% (${uploadedFiles}/${totalFiles} 文件)`;
+                                        } else if (data.type === 'error') {
+                                            if (data.file) {
+                                                const errorLine = document.createElement('div');
+                                                errorLine.style.marginBottom = '4px';
+                                                errorLine.style.color = '#ff4444';
+                                                errorLine.textContent = `❌ ${bucketName}: ${data.file} - ${data.message}`;
+                                                logElement.appendChild(errorLine);
+                                            } else {
+                                                progressText.textContent = `❌ ${bucketName}: 上传失败`;
+                                                const errorLine = document.createElement('div');
+                                                errorLine.style.marginBottom = '4px';
+                                                errorLine.style.color = '#ff4444';
+                                                errorLine.textContent = `❌ ${bucketName}: ${data.message}`;
+                                                logElement.appendChild(errorLine);
+                                            }
+                                        } else if (data.type === 'complete') {
+                                            successCount++;
+                                            // 标记当前bucket完成
+                                            bucketProgresses[currentBucketIndex] = 1.0;
+                                            
+                                            const successLine = document.createElement('div');
+                                            successLine.style.marginBottom = '4px';
+                                            successLine.style.color = '#00ff00';
+                                            successLine.textContent = `✅ ${bucketName}: 上传成功 (${data.uploaded} 个文件)`;
+                                            logElement.appendChild(successLine);
+                                            
+                                            if (data.url) {
+                                                const urlLine = document.createElement('div');
+                                                urlLine.style.marginBottom = '4px';
+                                                urlLine.style.color = '#8888ff';
+                                                urlLine.textContent = `🔗 ${bucketName}: ${data.url}`;
+                                                logElement.appendChild(urlLine);
+                                            }
+                                            
+                                            // 更新整体进度显示
+                                            const completedBucketsProgress = (currentBucketIndex + 1) / bucketList.length;
+                                            const overallProgress = completedBucketsProgress * 100;
+                                            progressBar.style.width = Math.min(overallProgress, 95) + '%';
+                                            statsText.textContent = `Bucket ${currentBucketIndex + 1}/${bucketList.length}: 100% (完成)`;
+                                            
+                                            // 继续上传下一个bucket
+                                            currentBucketIndex++;
+                                            setTimeout(uploadNextBucket, 500); // 短暂延迟，避免请求过于频繁
+                                            return;
+                                        }
+                                        
+                                        // 自动滚动到底部
+                                        logContainer.scrollTop = logContainer.scrollHeight;
+                                        
+                                    } catch (e) {
+                                        console.error('Failed to parse upload SSE data:', e);
+                                    }
+                                }
                             }
-                        } else {
-                            showNotification(`⚠️ 复制到 agent-pro 失败: ${copyData.error}`);
                         }
-                    } catch (copyErr) {
-                        showNotification(`⚠️ 复制到 agent-pro 失败: ${copyErr.message}`);
+                        
+                    } catch (error) {
+                        failCount++;
+                        // 标记当前bucket失败
+                        bucketProgresses[currentBucketIndex] = 0;
+                        
+                        progressText.textContent = `❌ ${bucketName}: 网络错误`;
+                        const errorLine = document.createElement('div');
+                        errorLine.style.marginBottom = '4px';
+                        errorLine.style.color = '#ff4444';
+                        errorLine.textContent = `❌ ${bucketName}: 网络错误 - ${error.message}`;
+                        logElement.appendChild(errorLine);
+                        
+                        // 继续上传下一个bucket
+                        currentBucketIndex++;
+                        setTimeout(uploadNextBucket, 500);
+                        return;
                     }
-                }
+                };
+                
+                // 开始上传第一个bucket
+                uploadNextBucket();
                 
             } catch (err) {
                 showNotification(`❌ 操作失败: ${err.message}`);
@@ -2654,8 +2918,8 @@
         function showChannelEnvSelectionModal(projectName, channels, action) {
             const channelOptions = Object.entries(channels).map(([id, config]) => {
                 const hasBuckets = config.buckets && typeof config.buckets === 'object';
-                const devBucket = hasBuckets ? config.buckets.dev : '未配置';
-                const prodBucket = hasBuckets ? config.buckets.prod : '未配置';
+                const devBucket = hasBuckets && config.buckets.dev ? (config.buckets.dev.name || config.buckets.dev) : '未配置';
+                const prodBucket = hasBuckets && config.buckets.prod ? (config.buckets.prod.name || config.buckets.prod) : '未配置';
                 
                 return `
                     <div class="channel-item" style="padding: 16px; border-bottom: 1px solid #f0f0f0;">
@@ -2707,8 +2971,87 @@
         async function uploadWithChannel(projectName, channelId, env) {
             const path = getProjectPath(projectName);
             
-            // 先检查 build 目录是否存在
-            showNotification(`🔍 检查 ${projectName} 的构建文件...`);
+            // 获取 bucket 信息
+            try {
+                const bucketResponse = await fetch(`http://localhost:5178/api/oss/get-bucket-info`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectName, channelId, env })
+                });
+                const bucketData = await bucketResponse.json();
+                
+                if (!bucketData.buckets || bucketData.buckets.length === 0) {
+                    showNotification('❌ 未找到可用的 bucket 配置');
+                    return;
+                }
+                
+                const buckets = bucketData.buckets;
+                const bucketNames = buckets.map(b => b.name).join(', ');
+                
+                // 显示确认弹框
+                const confirmContent = `
+                    <div style="padding: 20px; text-align: center;">
+                        <h3 style="margin: 0 0 20px 0; color: #333;">☁️ 确认上传</h3>
+                        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                            <div style="font-weight: 500; color: #333; margin-bottom: 10px;">${projectName}</div>
+                            <div style="color: #666; margin-bottom: 10px;">渠道: ${channelId} | 环境: ${env === 'dev' ? '开发' : '生产'}</div>
+                            <div style="color: #666;">Bucket: ${bucketNames}</div>
+                        </div>
+                        <div style="display: flex; gap: 10px; justify-content: center;">
+                            <button onclick="closeModal(); doUploadWithChannel('${projectName}', '${channelId}', '${env}');" 
+                                    style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                                ✅ 确认上传
+                            </button>
+                            <button onclick="closeModal();" 
+                                    style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                                取消
+                            </button>
+                        </div>
+                    </div>
+                `;
+                showCustomModal(confirmContent);
+            } catch (error) {
+                console.error('Error getting bucket info:', error);
+                showNotification('❌ 获取 bucket 配置失败');
+            }
+        }
+
+        // 执行带渠道的上传
+        async function doUploadWithChannel(projectName, channelId, env) {
+            const path = getProjectPath(projectName);
+            
+            // 显示上传进度弹框
+            const modalContent = `
+                <div style="padding: 30px;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 48px; margin-bottom: 20px;">☁️</div>
+                        <h3 style="margin: 0 0 15px 0; color: #333;">正在上传 ${projectName}</h3>
+                        <div style="padding: 8px 16px; background: #f0f0f0; border-radius: 20px; display: inline-block; margin-bottom: 20px;">
+                            <span style="font-size: 0.9em; color: #666;">渠道: ${channelId} | 环境: ${env === 'dev' ? '开发' : '生产'}</span>
+                        </div>
+                        <div id="upload-progress-text" style="color: #666; margin-bottom: 20px;">准备上传...</div>
+                        <div style="width: 100%; height: 6px; background: #f0f0f0; border-radius: 3px; overflow: hidden; margin-bottom: 10px;">
+                            <div id="upload-progress-bar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); transition: width 0.3s;"></div>
+                        </div>
+                        <div id="upload-stats" style="font-size: 0.9em; color: #999;">0 / 0 文件</div>
+                    </div>
+                    <div id="upload-log-container" style="margin-top: 20px; max-height: 350px; overflow-y: auto; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 0.75em;">
+                        <div id="upload-log"></div>
+                    </div>
+                </div>
+                <style>
+                    #upload-log-container::-webkit-scrollbar { width: 8px; }
+                    #upload-log-container::-webkit-scrollbar-track { background: #2d2d2d; }
+                    #upload-log-container::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+                </style>
+            `;
+            
+            showCustomModal(modalContent);
+            
+            const progressBar = document.getElementById('upload-progress-bar');
+            const progressText = document.getElementById('upload-progress-text');
+            const statsText = document.getElementById('upload-stats');
+            const logElement = document.getElementById('upload-log');
             
             try {
                 const checkResponse = await fetch('http://localhost:5178/api/check-build', {
@@ -2721,13 +3064,23 @@
                 
                 if (!checkData.exists || checkData.isEmpty) {
                     // build 目录不存在或为空，直接开始构建
-                    showNotification(`� ${projectName} 需要构建（渠道: ${channelId}），开始构建...`);
+                    progressText.textContent = '🔨 正在构建项目...';
+                    const logLine = document.createElement('div');
+                    logLine.style.marginBottom = '4px';
+                    logLine.style.color = '#ffff00';
+                    logLine.textContent = '🔨 开始构建项目...';
+                    logElement.appendChild(logLine);
                     
                     // 执行构建 - 使用 buildWithChannel 函数
                     try {
                         await buildWithChannel(projectName, channelId);
                     } catch (buildError) {
-                        showNotification('❌ 构建失败，已取消上传');
+                        progressText.textContent = '❌ 构建失败';
+                        const errorLine = document.createElement('div');
+                        errorLine.style.marginBottom = '4px';
+                        errorLine.style.color = '#ff4444';
+                        errorLine.textContent = '❌ 构建失败: ' + buildError.message;
+                        logElement.appendChild(errorLine);
                         return;
                     }
                     
@@ -2740,13 +3093,23 @@
                     
                     const recheckData = await recheckResponse.json();
                     if (!recheckData.exists || recheckData.isEmpty) {
-                        showNotification('❌ 构建后 build 目录仍为空或不存在');
+                        progressText.textContent = '❌ 构建后 build 目录仍为空';
+                        const errorLine = document.createElement('div');
+                        errorLine.style.marginBottom = '4px';
+                        errorLine.style.color = '#ff4444';
+                        errorLine.textContent = '❌ 构建后 build 目录仍为空或不存在';
+                        logElement.appendChild(errorLine);
                         return;
                     }
                 }
                 
                 // 开始上传
-                showNotification(`☁️ 正在上传 ${projectName} (渠道: ${channelId}, 环境: ${env})...`);
+                progressText.textContent = '☁️ 正在上传...';
+                const logLine = document.createElement('div');
+                logLine.style.marginBottom = '4px';
+                logLine.style.color = '#00aaff';
+                logLine.textContent = '☁️ 开始上传文件...';
+                logElement.appendChild(logLine);
                 
                 const uploadResponse = await fetch('http://localhost:5178/api/oss/upload-channel', {
                     method: 'POST',
@@ -2762,32 +3125,47 @@
                 const uploadData = await uploadResponse.json();
                 
                 if (uploadData.ok) {
-                    showNotification(`✅ 上传成功: ${projectName} (${channelId}-${env})`);
-                    if (uploadData.uploaded) {
-                        showNotification(`📊 已上传 ${uploadData.uploaded} 个文件${uploadData.failed ? `, ${uploadData.failed} 个失败` : ''}`);
-                    }
-                    if (uploadData.url) {
-                        showNotification(`🔗 访问地址: ${uploadData.url}`);
+                    progressText.textContent = '✅ 上传成功';
+                    progressBar.style.width = '100%';
+                    progressBar.style.background = 'linear-gradient(90deg, #00ff00 0%, #00aa00 100%)';
+                    statsText.textContent = `${uploadData.uploaded || 0} / ${(uploadData.uploaded || 0) + (uploadData.failed || 0)} 文件`;
+                    
+                    const successLine = document.createElement('div');
+                    successLine.style.marginBottom = '4px';
+                    successLine.style.color = '#00ff00';
+                    successLine.textContent = `✅ 上传成功: ${uploadData.uploaded} 个文件`;
+                    logElement.appendChild(successLine);
+                    
+                    if (uploadData.results) {
+                        uploadData.results.forEach(result => {
+                            const resultLine = document.createElement('div');
+                            resultLine.style.marginBottom = '2px';
+                            resultLine.style.color = result.status === 'success' ? '#00ff00' : '#ff4444';
+                            resultLine.textContent = result.status === 'success' ? `✓ ${result.file}` : `✗ ${result.file}: ${result.error}`;
+                            logElement.appendChild(resultLine);
+                        });
                     }
                     
-                    // 只有生产环境才备份 build 文件夹到"以往版本"
+                    // 只有生产环境才备份 build 文件夹
                     if (env === 'prod') {
-                        // 从上传响应中获取 bucket 名称
-                        const bucketInfo = await fetch('http://localhost:5178/api/oss/get-bucket-info', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ projectName, channelId, env })
-                        }).then(r => r.json());
-                        
-                        if (bucketInfo.ok && bucketInfo.bucket) {
-                            await backupBuildToOSS(projectName, path, bucketInfo.bucket);
-                        }
+                        progressText.textContent = '📦 正在备份 build 文件夹...';
+                        await backupBuildToOSS(projectName, path, uploadData.bucket);
                     }
                 } else {
-                    showNotification(`❌ 上传失败: ${uploadData.error}`);
+                    progressText.textContent = '❌ 上传失败';
+                    const errorLine = document.createElement('div');
+                    errorLine.style.marginBottom = '4px';
+                    errorLine.style.color = '#ff4444';
+                    errorLine.textContent = `❌ 上传失败: ${uploadData.error}`;
+                    logElement.appendChild(errorLine);
                 }
             } catch (err) {
-                showNotification(`❌ 操作失败: ${err.message}`);
+                progressText.textContent = '❌ 操作失败';
+                const errorLine = document.createElement('div');
+                errorLine.style.marginBottom = '4px';
+                errorLine.style.color = '#ff4444';
+                errorLine.textContent = `❌ 操作失败: ${err.message}`;
+                logElement.appendChild(errorLine);
             }
         }
 
@@ -4908,10 +5286,7 @@ ${context}
         <div class="modal-content">
             <div class="modal-header">
                 <h2 id="modalTitle">🔍 标题</h2>
-    <!-- 自定义弹框 -->
-    <div id="customModal" class="custom-modal">
-        <div class="modal-content">
-            <div class="modal-header">                <button class="modal-close" onclick="closeModal()">×</button>
+                <button class="modal-close" onclick="closeModal()">×</button>
             </div>
             <div class="modal-body" id="modalBody">
                 <!-- 内容将通过 JavaScript 动态插入 -->

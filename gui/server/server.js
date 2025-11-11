@@ -43,14 +43,26 @@ function getBucketConfig(ossConfigs, projectName, channelId = null, env = 'dev')
       const bucketInfo = channelConfig.buckets?.[env];
       if (!bucketInfo) return null;
       
-      // 返回包含 name 的完整配置
-      return {
-        name: bucketInfo.name,
-        region: bucketInfo.region,
-        prefix: bucketInfo.prefix || '',
-        url: bucketInfo.url,
-        enabled: bucketInfo.enabled !== false
-      };
+      // 处理不同格式
+      if (typeof bucketInfo === 'string') {
+        return {
+          name: bucketInfo,
+          region: ossConfigs.connection.region,
+          prefix: '',
+          url: `https://${bucketInfo}.oss-cn-hangzhou.aliyuncs.com`,
+          enabled: true
+        };
+      } else if (Array.isArray(bucketInfo)) {
+        return bucketInfo;
+      } else {
+        return {
+          name: bucketInfo.name,
+          region: bucketInfo.region,
+          prefix: bucketInfo.prefix || '',
+          url: bucketInfo.url,
+          enabled: bucketInfo.enabled !== false
+        };
+      }
     }
     
     // 单渠道项目
@@ -60,22 +72,22 @@ function getBucketConfig(ossConfigs, projectName, channelId = null, env = 'dev')
       
       // 处理数组（多个生产环境）
       if (Array.isArray(bucketInfo)) {
-        return bucketInfo.map(b => ({
-          name: b.name,
-          region: b.region,
-          prefix: b.prefix || '',
-          url: b.url,
-          description: b.description
-        }));
+        return bucketInfo;
+      } else if (typeof bucketInfo === 'string') {
+        return {
+          name: bucketInfo,
+          region: ossConfigs.connection.region,
+          prefix: '',
+          url: `https://${bucketInfo}.oss-cn-hangzhou.aliyuncs.com`
+        };
+      } else {
+        return {
+          name: bucketInfo.name,
+          region: bucketInfo.region,
+          prefix: bucketInfo.prefix || '',
+          url: bucketInfo.url
+        };
       }
-      
-      // 单个 bucket
-      return {
-        name: bucketInfo.name,
-        region: bucketInfo.region,
-        prefix: bucketInfo.prefix || '',
-        url: bucketInfo.url
-      };
     }
     
     return null;
@@ -455,11 +467,11 @@ app.post('/api/check-build', (req, res) => {
 app.get('/api/project-buckets/:projectName', (req, res) => {
   try {
     const { projectName } = req.params;
-    if (!fs.existsSync(PROJECT_BUCKETS_PATH)) {
-      return res.status(404).json({ error: 'Project buckets config not found' });
+    if (!fs.existsSync(OSS_CONFIG_PATH)) {
+      return res.status(404).json({ error: 'OSS config not found' });
     }
     
-    const config = JSON.parse(fs.readFileSync(PROJECT_BUCKETS_PATH, 'utf-8'));
+    const config = JSON.parse(fs.readFileSync(OSS_CONFIG_PATH, 'utf-8'));
     const projectConfig = config.projects[projectName];
     
     if (!projectConfig) {
@@ -769,7 +781,7 @@ app.post('/api/build-stream', async (req, res) => {
 // 按渠道和环境上传到 OSS
 app.post('/api/oss/upload-channel', async (req, res) => {
   try {
-    const { projectName, path: projectPath, channelId, env } = req.body;
+    const { projectName, path: projectPath, channelId, env, buckets: selectedBuckets, buildFirst, backupFirst } = req.body;
     
     if (!projectName || !channelId || !env) {
       return res.status(400).json({ ok: false, error: 'Missing required parameters' });
@@ -779,52 +791,35 @@ app.post('/api/oss/upload-channel', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Project not found' });
     }
     
-    // 读取渠道配置
-    let channelConfig;
-    try {
-      const configData = fs.readFileSync(CHANNEL_CONFIG_PATH, 'utf-8');
-      const config = JSON.parse(configData);
-      channelConfig = config.projects?.[projectName]?.channels?.[channelId];
-      
-      if (!channelConfig) {
-        return res.status(404).json({ ok: false, error: 'Channel configuration not found' });
-      }
-    } catch (e) {
-      return res.status(500).json({ ok: false, error: 'Failed to load channel config: ' + e.message });
-    }
-    
-    // 获取 bucket 名称（从旧的 channel-config.json）
-    const bucketName = typeof channelConfig.buckets === 'object' 
-      ? channelConfig.buckets[env] 
-      : channelConfig.buckets?.[0];
-    
-    if (!bucketName) {
-      return res.status(400).json({ ok: false, error: `No bucket configured for ${channelId}-${env}` });
-    }
-    
-    // 读取 OSS 连接配置（新结构）
+    // 读取 OSS 连接配置
     if (!fs.existsSync(OSS_CONFIG_PATH)) {
       return res.status(500).json({ ok: false, error: 'OSS connection config not found' });
     }
     
-    let ossConfig, bucketConfig;
+    let ossConfig, allBuckets;
     try {
       const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
       const ossConfigs = JSON.parse(ossData);
       ossConfig = ossConfigs.connection;
       
-      // 使用新的查找函数
-      bucketConfig = getBucketConfig(ossConfigs, projectName, channelId, env);
+      // 获取所有可用 buckets
+      const bucketConfig = getBucketConfig(ossConfigs, projectName, channelId, env);
+      allBuckets = Array.isArray(bucketConfig) ? bucketConfig : [bucketConfig];
       
-      if (!bucketConfig) {
-        return res.status(404).json({ ok: false, error: `Bucket config not found for ${projectName}-${channelId}-${env}` });
-      }
-      
-      if (bucketConfig.enabled === false) {
-        return res.status(400).json({ ok: false, error: `Bucket is not enabled (待配置)` });
+      if (!allBuckets || allBuckets.length === 0) {
+        return res.status(404).json({ ok: false, error: `No buckets configured for ${projectName}-${channelId}-${env}` });
       }
     } catch (e) {
       return res.status(500).json({ ok: false, error: 'Failed to load OSS config: ' + e.message });
+    }
+    
+    // 过滤选中的 buckets
+    const bucketsToUpload = selectedBuckets && selectedBuckets.length > 0 
+      ? allBuckets.filter(b => selectedBuckets.includes(b.name))
+      : allBuckets; // 如果没有选择，默认上传所有
+    
+    if (bucketsToUpload.length === 0) {
+      return res.status(400).json({ ok: false, error: 'No buckets selected' });
     }
     
     // 检查构建目录
@@ -836,53 +831,60 @@ app.post('/api/oss/upload-channel', async (req, res) => {
     // 动态导入 ali-oss
     const OSS = (await import('ali-oss')).default;
     
-    // 创建 OSS 客户端
-    const client = new OSS({
-      region: ossConfig.region,
-      accessKeyId: ossConfig.accessKeyId,
-      accessKeySecret: ossConfig.accessKeySecret,
-      bucket: bucketName
-    });
+    const allResults = [];
     
-    // 上传文件
-    const uploadDir = async (dirPath, prefix = '') => {
-      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-      const results = [];
+    // 上传到每个选中的 bucket
+    for (const bucket of bucketsToUpload) {
+      if (bucket.enabled === false) continue;
       
-      for (const entry of entries) {
-        const fullPath = path.join(dirPath, entry.name);
-        const ossPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      // 创建 OSS 客户端
+      const client = new OSS({
+        region: bucket.region || ossConfig.region,
+        accessKeyId: ossConfig.accessKeyId,
+        accessKeySecret: ossConfig.accessKeySecret,
+        bucket: bucket.name
+      });
+      
+      // 上传文件
+      const uploadDir = async (dirPath, prefix = '') => {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        const results = [];
         
-        if (entry.isDirectory()) {
-          const subResults = await uploadDir(fullPath, ossPath);
-          results.push(...subResults);
-        } else {
-          try {
-            const result = await client.put(ossPath, fullPath);
-            results.push({ file: entry.name, path: ossPath, url: result.url, status: 'success' });
-          } catch (err) {
-            results.push({ file: entry.name, path: ossPath, status: 'failed', error: err.message });
+        for (const entry of entries) {
+          const fullPath = path.join(dirPath, entry.name);
+          const ossPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+          
+          if (entry.isDirectory()) {
+            const subResults = await uploadDir(fullPath, ossPath);
+            results.push(...subResults);
+          } else {
+            try {
+              const result = await client.put(ossPath, fullPath);
+              results.push({ file: entry.name, path: ossPath, url: result.url, status: 'success', bucket: bucket.name });
+            } catch (err) {
+              results.push({ file: entry.name, path: ossPath, status: 'failed', error: err.message, bucket: bucket.name });
+            }
           }
         }
-      }
+        
+        return results;
+      };
       
-      return results;
-    };
+      const uploadResults = await uploadDir(buildPath, bucket.prefix || '');
+      allResults.push(...uploadResults);
+    }
     
-    const uploadResults = await uploadDir(buildPath, bucketConfig.prefix || '');
-    
-    const successCount = uploadResults.filter(r => r.status === 'success').length;
-    const failCount = uploadResults.filter(r => r.status === 'failed').length;
+    const successCount = allResults.filter(r => r.status === 'success').length;
+    const failCount = allResults.filter(r => r.status === 'failed').length;
     
     res.json({ 
       ok: true, 
-      bucket: bucketName,
-      channel: channelConfig.name,
+      buckets: bucketsToUpload.map(b => b.name),
+      channel: channelId,
       env,
       uploaded: successCount,
       failed: failCount,
-      url: bucketConfig.url || `https://${bucketName}.oss-cn-hangzhou.aliyuncs.com`,
-      results: uploadResults
+      results: allResults
     });
   } catch (e) {
     console.error('OSS upload error:', e);
@@ -1415,16 +1417,14 @@ app.post('/api/oss/get-bucket-info', async (req, res) => {
     const bucketConfig = getBucketConfig(ossConfigs, projectName, channelId, env);
     
     if (!bucketConfig) {
-      return res.status(404).json({ ok: false, error: 'Bucket config not found' });
+      return res.status(404).json({ error: 'Bucket config not found' });
     }
     
-    res.json({
-      ok: true,
-      bucket: bucketConfig.name
-    });
+    const buckets = Array.isArray(bucketConfig) ? bucketConfig : [bucketConfig];
+    res.json({ buckets });
     
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
