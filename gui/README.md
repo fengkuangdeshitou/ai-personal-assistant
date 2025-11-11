@@ -11,7 +11,33 @@ AI 私人助理是一个功能强大的开发者助手系统，集成了实时�
 
 ---
 
-## 🚀 快速启动
+## 🚀 一键安装（最简单）
+
+### 方式一：使用 Homebrew（推荐）
+
+```bash
+# 添加 tap
+brew tap fengkuangdeshitou/ai-personal-assistant
+
+# 安装 AI 助手
+brew install ai
+
+# 完成设置（需要输入安装密码）
+ai-install
+```
+
+**关于密码**: 此为私有库安装，需要输入正确的安装密码。如需获取密码，请联系管理员。
+
+### 方式二：使用安装脚本
+
+```bash
+# 一键安装脚本（需要输入安装密码）
+curl -fsSL https://raw.githubusercontent.com/fengkuangdeshitou/ai-personal-assistant/main/install.sh | bash
+```
+
+---
+
+## 🎯 快速启动
 
 ### 方式一：使用 macOS App（最推荐）
 
@@ -106,13 +132,25 @@ open index.html
 - 响应式设计
 - 现代化 UI
 
----
-
 ## 🚀 快速开始
 
 ### 安装方法
 
-#### 自动安装（推荐）
+#### 一键部署（最推荐）
+
+```bash
+# 直接运行一键部署脚本
+bash <(curl -fsSL https://raw.githubusercontent.com/fengkuangdeshitou/ai-personal-assistant/main/scripts/install.sh)
+```
+
+此脚本会自动：
+- ✅ 检查系统要求（Git、Node.js、npm）
+- 📥 克隆仓库到正确位置
+- 📦 自动安装所有依赖
+- ⚙️ 配置系统别名和环境
+- 🔍 验证安装完整性
+
+#### 自动安装
 
 ```bash
 # 1. 克隆仓库到 home 目录
@@ -124,6 +162,19 @@ bash ~/.ai-assistant/scripts/install.sh
 # 3. 重新加载 shell 配置
 source ~/.zshrc  # 或 source ~/.bash_profile
 ```
+
+#### 一键卸载
+
+```bash
+# 运行一键卸载脚本
+bash ~/.ai-assistant/scripts/uninstall.sh
+```
+
+此脚本会自动：
+- ✅ 停止所有运行的服务
+- ✅ 清理系统配置和别名
+- ✅ 删除所有安装文件
+- ✅ 清理启动项配置
 
 #### 手动安装
 
@@ -181,6 +232,8 @@ ai-update
 | `助理` | 打开 GUI（中文） | `助理` |
 | `ai-help` | 显示帮助信息 | `ai-help` |
 | `ai-update` | 检查更新 | `ai-update` |
+| `ai-install` | 一键部署 AI 助理 | `ai-install` |
+| `ai-uninstall` | 一键卸载 AI 助理 | `ai-uninstall` |
 | `ai-config` | 编辑配置 | `ai-config` |
 
 ### 快速导航
