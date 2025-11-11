@@ -6,6 +6,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import simpleGit from 'simple-git';
 import archiver from 'archiver';
+import less from 'less'; // 🚨 新增 Less 库导入
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -475,6 +476,61 @@ app.get('/api/project-buckets/:projectName', (req, res) => {
   }
 });
 
+/**
+ * 编译 Less 文件到 CSS 文件，并生成 Source Map
+ * @param {string} projectPath - 项目的根目录路径
+ * @param {string} lessFilePath - Less 文件相对于项目根目录的路径，例如 'src/css/css.less'
+ * @param {string} cssOutputPath - 目标 CSS 文件相对于项目根目录的路径，例如 'src/css/css.css'
+ */
+async function compileLess(projectPath, lessFilePath, cssOutputPath) {
+    const fullLessPath = path.join(projectPath, lessFilePath);
+    const fullCssPath = path.join(projectPath, cssOutputPath);
+    const mapOutputPath = fullCssPath + '.map'; // Source Map 文件的路径
+
+    if (!fs.existsSync(fullLessPath)) {
+        console.warn(`Less file not found: ${fullLessPath}`);
+        return false;
+    }
+
+    try {
+        const lessContent = fs.readFileSync(fullLessPath, 'utf8');
+
+        const output = await less.render(lessContent, {
+            // 配置选项：paths 用于处理 @import 语句
+            paths: [path.dirname(fullLessPath)],
+            filename: path.basename(lessFilePath),
+            
+            // 🚨 关键修改点 1: 启用 Source Map
+            sourceMap: {
+                // filename 必须是相对于 CSS 文件本身的路径
+                outputFilename: path.basename(mapOutputPath), 
+                // sourceMapURL 是 CSS 文件底部引用的文件名
+                sourceMapURL: path.basename(mapOutputPath)
+            }
+        });
+
+        // 确保输出目录存在
+        fs.mkdirSync(path.dirname(fullCssPath), { recursive: true });
+        
+        // 🚨 关键修改点 2: 写入新的 CSS 文件
+        fs.writeFileSync(fullCssPath, output.css, 'utf8');
+        console.log(`✅ CSS file generated: ${cssOutputPath}`);
+
+        // 🚨 关键修改点 3: 写入 Source Map 文件
+        if (output.map) {
+             fs.writeFileSync(mapOutputPath, output.map, 'utf8');
+             console.log(`✅ Source Map generated: ${cssOutputPath}.map`);
+        } else {
+             console.warn(`⚠️ Source Map was enabled but not generated for: ${lessFilePath}`);
+        }
+        
+        return true;
+    } catch (error) {
+        console.error(`❌ Less compilation failed for ${lessFilePath}:`, error);
+        throw new Error(`Less compilation error: ${error.message}`);
+    }
+}
+
 // 切换项目渠道配置
 app.post('/api/switch-channel', async (req, res) => {
   try {
@@ -548,6 +604,20 @@ app.post('/api/switch-channel', async (req, res) => {
       }
     }
     
+    // 检查 Less 文件是否被修改 (可选：如果结果集中有 less 文件被标记为 modified 才编译)
+    const lessFileModified = results.some(r => r.file.endsWith('.less') && r.status === 'modified');
+    
+    // 假设 Less 文件路径和目标 CSS 路径
+    const LESS_INPUT_PATH = 'src/css/css.less'; // 请根据 channel-config.json 确认
+    const CSS_OUTPUT_PATH = 'src/css/css.css'; // 🚨 请替换为您的项目实际输出路径
+
+    if (lessFileModified || channelConfig.files[LESS_INPUT_PATH]) {
+        await compileLess(projectPath, LESS_INPUT_PATH, CSS_OUTPUT_PATH);
+        results.push({ file: CSS_OUTPUT_PATH, status: 'generated' });
+    } else {
+        results.push({ file: CSS_OUTPUT_PATH, status: 'skipped (less file unchanged)' });
+    }
+
     res.json({ 
       ok: true, 
       channel: channelConfig.name,
