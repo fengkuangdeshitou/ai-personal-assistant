@@ -18,87 +18,103 @@
                 },
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.05折手游\">\\s*<title>0\\.05折手游</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.05折手游\">\\s*<title>0\\.05折手游</title>)(?!\\s*-->)"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.01折游戏\">\\s*<title>0\\.01折游戏</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.01折游戏\">\\s*<title>0\\.01折游戏</title>)(?!\\s*-->)"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)(?!\\s*-->)"
                 }
               ]
             },
             "src/css/css.less": {
               "rules": [
                 {
+                  "action": "comment",
+                  "pattern": "^\\s*(--MainColor: #00CDC6;)\\s*$"
+                },
+                {
                   "action": "uncomment",
-                  "pattern": "// (--MainColor: #00CDC6;)// hg"
+                  "pattern": "^\\s*//\\s*(--MainColor: #00CDC6;)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #0096FB;)// 0\\.05"
+                  "pattern": "^\\s*(--MainColor: #0096FB;)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #E73B25;)// 0\\.01"
+                  "pattern": "^\\s*(--MainColor: #E73B25;)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #eb424c;)// hz"
+                  "pattern": "^\\s*(--MainColor: #eb424c;)\\s*$"
                 }
               ]
             },
             "src/BoxType.js": {
               "rules": [
                 {
+                  "action": "comment",
+                  "pattern": "^\\s*(export const BoxType = 'hg')\\s*$"
+                },
+                {
                   "action": "uncomment",
-                  "pattern": "// (export const BoxType = 'hg')"
+                  "pattern": "^\\s*//\\s*(export const BoxType = 'hg')\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = '05')"
+                  "pattern": "^\\s*(export const BoxType = '05')\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = '01')"
+                  "pattern": "^\\s*(export const BoxType = '01')\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = 'hz')"
+                  "pattern": "^\\s*(export const BoxType = 'hz')\\s*$"
                 }
               ]
             },
             "src/env.js": {
               "rules": [
                 {
-                  "action": "uncomment",
-                  "pattern": "// (export const url = '//api52wan\\.001zhegame\\.com';)"
+                  "action": "comment",
+                  "pattern": "^\\s*(export const url = '//api52wan\\.001zhegame\\.com';?)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const url = '//api\\.gamebox\\.05zhegame\\.com';)"
+                  "pattern": "^\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "^\\s*//\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
                 }
               ]
             },
             "src/general.js": {
               "rules": [
                 {
+                  "action": "comment",
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',)$"
+                },
+                {
                   "action": "uncomment",
-                  "pattern": "// (agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',) // hg"
+                  "pattern": "^\\s*//\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',)$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',) // 0\\.05"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',)$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',) // 0\\.01"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',)$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',) // hz"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',)$"
                 }
               ]
             }
@@ -115,7 +131,7 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"嘿咕游戏\">\\s*<title>嘿咕游戏</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"嘿咕游戏\">\\s*<title>嘿咕游戏</title>)(?!\\s*-->)"
                 },
                 {
                   "action": "uncomment",
@@ -123,11 +139,11 @@
                 },
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.01折游戏\">\\s*<title>0\\.01折游戏</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.01折游戏\">\\s*<title>0\\.01折游戏</title>)(?!\\s*-->)"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)(?!\\s*-->)"
                 }
               ]
             },
@@ -135,19 +151,23 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #00CDC6;)// hg"
+                  "pattern": "^\\s*(--MainColor: #00CDC6;)\\s*$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(--MainColor: #0096FB;)\\s*$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (--MainColor: #0096FB;)// 0\\.05"
+                  "pattern": "^\\s*//\\s*(--MainColor: #0096FB;)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #E73B25;)// 0\\.01"
+                  "pattern": "^\\s*(--MainColor: #E73B25;)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #eb424c;)// hz"
+                  "pattern": "^\\s*(--MainColor: #eb424c;)\\s*$"
                 }
               ]
             },
@@ -155,19 +175,23 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = 'hg')"
+                  "pattern": "^\\s*(export const BoxType = 'hg')\\s*$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(export const BoxType = '05')\\s*$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (export const BoxType = '05')"
+                  "pattern": "^\\s*//\\s*(export const BoxType = '05')\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = '01')"
+                  "pattern": "^\\s*(export const BoxType = '01')\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = 'hz')"
+                  "pattern": "^\\s*(export const BoxType = 'hz')\\s*$"
                 }
               ]
             },
@@ -175,11 +199,15 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(export const url = '//api52wan\\.001zhegame\\.com';)"
+                  "pattern": "^\\s*(export const url = '//api52wan\\.001zhegame\\.com';?)\\s*$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (export const url = '//api\\.gamebox\\.05zhegame\\.com';)"
+                  "pattern": "^\\s*//\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
                 }
               ]
             },
@@ -187,19 +215,23 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',) // hg"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',)$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',)$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',) // 0\\.05"
+                  "pattern": "^\\s*//\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',)$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',) // 0\\.01"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',)$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',) // hz"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',)$"
                 }
               ]
             }
@@ -216,11 +248,11 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"嘿咕游戏\">\\s*<title>嘿咕游戏</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"嘿咕游戏\">\\s*<title>嘿咕游戏</title>)(?!\\s*-->)"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.05折手游\">\\s*<title>0\\.05折手游</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.05折手游\">\\s*<title>0\\.05折手游</title>)(?!\\s*-->)"
                 },
                 {
                   "action": "uncomment",
@@ -228,7 +260,7 @@
                 },
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)(?!\\s*-->)"
                 }
               ]
             },
@@ -236,19 +268,23 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #00CDC6;)// hg"
+                  "pattern": "^\\s*(--MainColor: #00CDC6;)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #0096FB;)// 0\\.05"
+                  "pattern": "^\\s*(--MainColor: #0096FB;)\\s*$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(--MainColor: #E73B25;)\\s*$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (--MainColor: #E73B25;)// 0\\.01"
+                  "pattern": "^\\s*//\\s*(--MainColor: #E73B25;)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #eb424c;)// hz"
+                  "pattern": "^\\s*(--MainColor: #eb424c;)\\s*$"
                 }
               ]
             },
@@ -256,31 +292,39 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = 'hg')"
+                  "pattern": "^\\s*(export const BoxType = 'hg')\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = '05')"
+                  "pattern": "^\\s*(export const BoxType = '05')\\s*$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(export const BoxType = '01')\\s*$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (export const BoxType = '01')"
+                  "pattern": "^\\s*//\\s*(export const BoxType = '01')\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = 'hz')"
+                  "pattern": "^\\s*(export const BoxType = 'hz')\\s*$"
                 }
               ]
             },
             "src/env.js": {
               "rules": [
                 {
-                  "action": "uncomment",
-                  "pattern": "// (export const url = '//api52wan\\.001zhegame\\.com';)"
+                  "action": "comment",
+                  "pattern": "^\\s*(export const url = '//api52wan\\.001zhegame\\.com';?)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const url = '//api\\.gamebox\\.05zhegame\\.com';)"
+                  "pattern": "^\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
+                },
+                {
+                  "action": "uncomment",
+                  "pattern": "^\\s*//\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
                 }
               ]
             },
@@ -288,19 +332,23 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',) // hg"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',)$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',) // 0\\.05"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',)$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',)$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',) // 0\\.01"
+                  "pattern": "^\\s*//\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',)$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',) // hz"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',)$"
                 }
               ]
             }
@@ -317,15 +365,15 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"嘿咕游戏\">\\s*<title>嘿咕游戏</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"嘿咕游戏\">\\s*<title>嘿咕游戏</title>)(?!\\s*-->)"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.05折手游\">\\s*<title>0\\.05折手游</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.05折手游\">\\s*<title>0\\.05折手游</title>)(?!\\s*-->)"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.01折游戏\">\\s*<title>0\\.01折游戏</title>)"
+                  "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"0\\.01折游戏\">\\s*<title>0\\.01折游戏</title>)(?!\\s*-->)"
                 },
                 {
                   "action": "uncomment",
@@ -337,19 +385,23 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #00CDC6;)// hg"
+                  "pattern": "^\\s*(--MainColor: #00CDC6;)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #0096FB;)// 0\\.05"
+                  "pattern": "^\\s*(--MainColor: #0096FB;)\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(--MainColor: #E73B25;)// 0\\.01"
+                  "pattern": "^\\s*(--MainColor: #E73B25;)\\s*$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(--MainColor: #eb424c;)\\s*$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (--MainColor: #eb424c;)// hz"
+                  "pattern": "^\\s*//\\s*(--MainColor: #eb424c;)\\s*$"
                 }
               ]
             },
@@ -357,19 +409,23 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = 'hg')"
+                  "pattern": "^\\s*(export const BoxType = 'hg')\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = '05')"
+                  "pattern": "^\\s*(export const BoxType = '05')\\s*$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(export const BoxType = '01')"
+                  "pattern": "^\\s*(export const BoxType = '01')\\s*$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(export const BoxType = 'hz')\\s*$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (export const BoxType = 'hz')"
+                  "pattern": "^\\s*//\\s*(export const BoxType = 'hz')\\s*$"
                 }
               ]
             },
@@ -377,11 +433,15 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(export const url = '//api52wan\\.001zhegame\\.com';)"
+                  "pattern": "^\\s*(export const url = '//api52wan\\.001zhegame\\.com';?)\\s*$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (export const url = '//api\\.gamebox\\.05zhegame\\.com';)"
+                  "pattern": "^\\s*//\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
                 }
               ]
             },
@@ -389,19 +449,23 @@
               "rules": [
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',) // hg"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| '43iq',)$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',) // 0\\.05"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',)$"
                 },
                 {
                   "action": "comment",
-                  "pattern": "(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'dxi8',) // 0\\.01"
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',)$"
                 },
                 {
                   "action": "uncomment",
-                  "pattern": "// (agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',) // hz"
+                  "pattern": "^\\s*//\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'mc6s',)$"
+                },
+                {
+                  "action": "comment",
+                  "pattern": "^\\s*(agent: localStorage\\.getItem\\('agent'\\) \\|\\| 'xfq6',)$"
                 }
               ]
             }

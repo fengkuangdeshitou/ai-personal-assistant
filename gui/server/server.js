@@ -27,6 +27,10 @@ const PROJECT_BUCKETS_PATH = path.join(__dirname, 'project-buckets.json');
 const OSS_CONFIG_PATH = path.join(__dirname, 'oss-connection-config.json');
 const DEFAULT_DIR = process.env.PROJECTS_DIR || '/Users/maiyou001/Project';
 
+// Less 编译相关常量
+const LESS_INPUT_PATH = 'src/css/css.less';
+const CSS_OUTPUT_PATH = 'src/css/css.css';
+
 // 从新的配置结构中获取 bucket 配置
 function getBucketConfig(ossConfigs, projectName, channelId = null, env = 'dev') {
   try {
@@ -392,18 +396,39 @@ app.post('/api/git/push', async (req, res) => {
 app.get('/api/channels/:projectName', (req, res) => {
   try {
     const { projectName } = req.params;
-    if (!fs.existsSync(CHANNEL_CONFIG_PATH)) {
-      return res.status(404).json({ error: 'Channel config not found' });
+    let channels = {};
+    
+    // 从channel-config.json读取完整配置（包含files规则）
+    if (fs.existsSync(CHANNEL_CONFIG_PATH)) {
+      const channelConfig = JSON.parse(fs.readFileSync(CHANNEL_CONFIG_PATH, 'utf-8'));
+      const projectConfig = channelConfig.projects[projectName];
+      if (projectConfig && projectConfig.channels) {
+        channels = projectConfig.channels;
+      }
     }
     
-    const config = JSON.parse(fs.readFileSync(CHANNEL_CONFIG_PATH, 'utf-8'));
-    const projectConfig = config.projects[projectName];
-    
-    if (!projectConfig) {
-      return res.json({ channels: {} });
+    // 从oss-connection-config.json读取buckets配置并合并
+    if (fs.existsSync(OSS_CONFIG_PATH)) {
+      const ossConfig = JSON.parse(fs.readFileSync(OSS_CONFIG_PATH, 'utf-8'));
+      const projectConfig = ossConfig.projects[projectName];
+      
+      if (projectConfig && projectConfig.channels) {
+        // 合并channels配置
+        for (const [channelId, channelData] of Object.entries(projectConfig.channels)) {
+          if (channels[channelId]) {
+            // 合并buckets配置，优先使用oss-connection-config.json中的配置
+            if (channelData.buckets) {
+              channels[channelId].buckets = channelData.buckets;
+            }
+          } else {
+            // 如果channel-config.json中没有这个channel，直接使用oss配置
+            channels[channelId] = channelData;
+          }
+        }
+      }
     }
     
-    res.json({ channels: projectConfig.channels });
+    res.json({ channels });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -567,6 +592,7 @@ app.post('/api/switch-channel', async (req, res) => {
     }
     
     const results = [];
+    let lessFileModified = false;
     
     // 处理每个文件的规则
     for (const [filePath, fileConfig] of Object.entries(channelConfig.files)) {
@@ -586,8 +612,10 @@ app.post('/api/switch-channel', async (req, res) => {
         if (rule.action === 'comment') {
           // 添加注释（如果还没有注释）
           const newContent = content.replace(regex, (match, captured) => {
-            if (match.startsWith('//') || match.startsWith('<!--')) {
-              return match; // 已经是注释了
+            // 检查captured是否已经被注释
+            const trimmedCaptured = captured.trim();
+            if (trimmedCaptured.startsWith('//') || trimmedCaptured.startsWith('<!--')) {
+              return match; // 已经是注释了，保持原样
             }
             modified = true;
             // 根据文件类型选择注释符号
@@ -599,10 +627,25 @@ app.post('/api/switch-channel', async (req, res) => {
           });
           content = newContent;
         } else if (rule.action === 'uncomment') {
-          // 移除注释
+          // 移除注释 - 处理多层注释的情况
           const newContent = content.replace(regex, (match, captured) => {
+            let result = captured;
+            
+            // 处理多层注释：从外层向内层逐层移除注释
+            if (fullPath.endsWith('.html')) {
+              // 处理HTML多层注释
+              while (result.trim().startsWith('<!--') && result.trim().endsWith('-->')) {
+                result = result.replace(/^(\s*)<!--\s*/, '$1').replace(/\s*-->\s*$/, '');
+              }
+            } else {
+              // 处理JS多层注释
+              while (result.trim().startsWith('//')) {
+                result = result.replace(/^(\s*)\/\/\s*/, '$1');
+              }
+            }
+            
             modified = true;
-            return captured;
+            return result;
           });
           content = newContent;
         }
@@ -611,23 +654,24 @@ app.post('/api/switch-channel', async (req, res) => {
       if (modified) {
         fs.writeFileSync(fullPath, content, 'utf-8');
         results.push({ file: filePath, status: 'modified' });
+        
+        // 检查是否修改了Less文件
+        if (filePath === LESS_INPUT_PATH) {
+          lessFileModified = true;
+        }
       } else {
         results.push({ file: filePath, status: 'unchanged' });
       }
     }
     
-    // 检查 Less 文件是否被修改 (可选：如果结果集中有 less 文件被标记为 modified 才编译)
-    const lessFileModified = results.some(r => r.file.endsWith('.less') && r.status === 'modified');
+    // 检查 Less 文件是否需要编译 (如果渠道配置中有less文件规则，总是编译)
+    const hasLessRules = channelConfig.files && channelConfig.files[LESS_INPUT_PATH];
     
-    // 假设 Less 文件路径和目标 CSS 路径
-    const LESS_INPUT_PATH = 'src/css/css.less'; // 请根据 channel-config.json 确认
-    const CSS_OUTPUT_PATH = 'src/css/css.css'; // 🚨 请替换为您的项目实际输出路径
-
-    if (lessFileModified || channelConfig.files[LESS_INPUT_PATH]) {
+    if (lessFileModified || hasLessRules) {
         await compileLess(projectPath, LESS_INPUT_PATH, CSS_OUTPUT_PATH);
         results.push({ file: CSS_OUTPUT_PATH, status: 'generated' });
     } else {
-        results.push({ file: CSS_OUTPUT_PATH, status: 'skipped (less file unchanged)' });
+        results.push({ file: CSS_OUTPUT_PATH, status: 'skipped (no less rules)' });
     }
 
     res.json({ 
@@ -710,8 +754,27 @@ app.post('/api/build-stream', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     
-    // 如果指定了渠道，先切换配置
+    // 第一步：清空build文件夹（如果是多渠道项目）
     if (channel) {
+      res.write(`data: ${JSON.stringify({ type: 'log', message: '清空build文件夹...' })}\n\n`);
+      
+      const buildPath = path.join(projectPath, 'build');
+      if (fs.existsSync(buildPath)) {
+        try {
+          // 递归删除build目录内容
+          const { execSync } = await import('child_process');
+          execSync(`rm -rf "${buildPath}"/*`, { cwd: projectPath });
+          res.write(`data: ${JSON.stringify({ type: 'log', message: 'build文件夹已清空' })}\n\n`);
+        } catch (err) {
+          res.write(`data: ${JSON.stringify({ type: 'error', message: '清空build文件夹失败: ' + err.message })}\n\n`);
+          res.end();
+          return;
+        }
+      } else {
+        res.write(`data: ${JSON.stringify({ type: 'log', message: 'build文件夹不存在，跳过清空步骤' })}\n\n`);
+      }
+      
+      // 第二步：切换渠道配置
       res.write(`data: ${JSON.stringify({ type: 'log', message: `切换到渠道: ${channel}` })}\n\n`);
       
       try {
@@ -722,7 +785,8 @@ app.post('/api/build-stream', async (req, res) => {
         });
         
         if (!switchResponse.ok) {
-          res.write(`data: ${JSON.stringify({ type: 'error', message: 'Failed to switch channel' })}\n\n`);
+          const errorData = await switchResponse.text();
+          res.write(`data: ${JSON.stringify({ type: 'error', message: 'Failed to switch channel: ' + errorData })}\n\n`);
           res.end();
           return;
         }
