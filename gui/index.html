@@ -3054,16 +3054,31 @@
             const logElement = document.getElementById('upload-log');
             
             try {
-                const checkResponse = await fetch('http://localhost:5178/api/check-build', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ projectName, path })
-                });
+                // 对于多渠道项目，总是先build（因为需要清空build文件夹并切换渠道）
+                let needsBuild = false;
                 
-                const checkData = await checkResponse.json();
+                // 检查是否是多渠道项目
+                const channelsResponse = await fetch(`http://localhost:5178/api/channels/${projectName}`);
+                const channelsData = await channelsResponse.json();
+                const isMultiChannel = channelsData.channels && Object.keys(channelsData.channels).length > 0;
                 
-                if (!checkData.exists || checkData.isEmpty) {
-                    // build 目录不存在或为空，直接开始构建
+                if (isMultiChannel) {
+                    // 多渠道项目总是需要先build
+                    needsBuild = true;
+                } else {
+                    // 单渠道项目检查build目录状态
+                    const checkResponse = await fetch('http://localhost:5178/api/check-build', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ projectName, path })
+                    });
+                    
+                    const checkData = await checkResponse.json();
+                    needsBuild = !checkData.exists || checkData.isEmpty;
+                }
+                
+                if (needsBuild) {
+                    // build 目录不存在或为空，或者是多渠道项目，直接开始构建
                     progressText.textContent = '🔨 正在构建项目...';
                     const logLine = document.createElement('div');
                     logLine.style.marginBottom = '4px';
