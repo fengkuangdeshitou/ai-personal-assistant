@@ -607,6 +607,15 @@ app.post('/api/switch-channel', async (req, res) => {
       let modified = false;
       
       for (const rule of fileConfig.rules) {
+        if (rule.action === 'replace') {
+          // 直接替换整个文件内容
+          if (rule.content !== undefined) {
+            content = rule.content;
+            modified = true;
+          }
+          continue; // 跳过其他处理
+        }
+        
         const regex = new RegExp(rule.pattern, 'gm');
         
         if (rule.action === 'comment') {

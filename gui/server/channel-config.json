@@ -81,16 +81,8 @@
             "src/env.js": {
               "rules": [
                 {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const url = '//api52wan\\.001zhegame\\.com';?)\\s*$"
-                },
-                {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
-                },
-                {
-                  "action": "uncomment",
-                  "pattern": "^\\s*//\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
+                  "action": "replace",
+                  "content": "export const prod = true;\nexport const url = '//api52wan.001zhegame.com';// hg\n// export const url = '//api.gamebox.05zhegame.com'; // 0.05 0.01 hz"
                 }
               ]
             },
@@ -198,16 +190,8 @@
             "src/env.js": {
               "rules": [
                 {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const url = '//api52wan\\.001zhegame\\.com';?)\\s*$"
-                },
-                {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
-                },
-                {
-                  "action": "uncomment",
-                  "pattern": "^\\s*//\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
+                  "action": "replace",
+                  "content": "export const prod = true;\n// export const url = '//api52wan.001zhegame.com';// hg\nexport const url = '//api.gamebox.05zhegame.com'; // 0.05 0.01 hz"
                 }
               ]
             },
@@ -315,16 +299,8 @@
             "src/env.js": {
               "rules": [
                 {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const url = '//api52wan\\.001zhegame\\.com';?)\\s*$"
-                },
-                {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
-                },
-                {
-                  "action": "uncomment",
-                  "pattern": "^\\s*//\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
+                  "action": "replace",
+                  "content": "export const prod = true;\n// export const url = '//api52wan.001zhegame.com';// hg\nexport const url = '//api.gamebox.05zhegame.com'; // 0.05 0.01 hz"
                 }
               ]
             },
@@ -432,16 +408,8 @@
             "src/env.js": {
               "rules": [
                 {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const url = '//api52wan\\.001zhegame\\.com';?)\\s*$"
-                },
-                {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
-                },
-                {
-                  "action": "uncomment",
-                  "pattern": "^\\s*//\\s*(export const url = '//api\\.gamebox\\.05zhegame\\.com';?)\\s*$"
+                  "action": "replace",
+                  "content": "export const prod = true;\n// export const url = '//api52wan.001zhegame.com';// hg\nexport const url = '//api.gamebox.05zhegame.com'; // 0.05 0.01 hz"
                 }
               ]
             },

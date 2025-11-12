@@ -2230,7 +2230,7 @@
                     const theme = channelThemes[id] || { icon: '📦', color: '#6b7280', bg: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)' };
 
                     return `
-                        <div class="channel-card" onclick="buildWithChannel('${projectName}', '${id}'); closeModal();"
+                        <div class="channel-card" onclick="closeModal(); setTimeout(() => buildWithChannel('${projectName}', '${id}'), 100);"
                              style="width: 180px; padding: 24px 16px; ${cardStyle} border-radius: 16px; cursor: pointer; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); text-align: center; position: relative; overflow: hidden; flex-shrink: 0;"
                              onmouseover="this.style.transform='translateY(-8px) scale(1.02)'; this.style.boxShadow='${isCurrentChannel ? '0 12px 35px rgba(102, 126, 234, 0.3)' : '0 12px 35px rgba(0,0,0,0.15)'}';"
                              onmouseout="this.style.transform='translateY(0) scale(1)'; this.style.boxShadow='${isCurrentChannel ? '0 8px 25px rgba(102, 126, 234, 0.2)' : '0 4px 15px rgba(0,0,0,0.08)'}';">
