@@ -48,9 +48,26 @@ const reminders = [
 const now = new Date();
 const currentHour = now.getHours();
 const currentMinute = now.getMinutes();
+const currentDate = now.toISOString().split('T')[0]; // YYYY-MM-DD格式
 
-// 查找匹配的提醒
-const reminder = reminders.find(r => r.hour === currentHour && r.minute === currentMinute);
+// 特殊提醒：明天疫苗预约
+const specialReminders = [
+    {
+        date: '2025-11-14',
+        hour: 12,
+        minute: 0,
+        type: 'vaccine',
+        icon: '💉',
+        title: '疫苗预约提醒'
+    }
+];
+
+// 查找匹配的提醒 - 先检查特殊提醒，再检查常规提醒
+let reminder = specialReminders.find(r => r.date === currentDate && r.hour === currentHour && r.minute === currentMinute);
+
+if (!reminder) {
+    reminder = reminders.find(r => r.hour === currentHour && r.minute === currentMinute);
+}
 
 if (reminder) {
     console.log(`🌸 触发提醒: ${reminder.icon} ${reminder.title}`);
