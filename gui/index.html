@@ -2229,7 +2229,7 @@
                     const theme = channelThemes[id] || { icon: '📦', color: '#6b7280', bg: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)' };
 
                     return `
-                        <div class="channel-card" onclick="closeModal(); setTimeout(() => buildWithChannel('${projectName}', '${id}', false), 100);"
+                        <div class="channel-card" onclick="closeModal(); setTimeout(() => buildWithChannel('${projectName}', '${id}', true), 100);"
                              style="width: 180px; padding: 24px 16px; ${cardStyle} border-radius: 16px; cursor: pointer; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); text-align: center; position: relative; overflow: hidden; flex-shrink: 0;"
                              onmouseover="this.style.transform='translateY(-8px) scale(1.02)'; this.style.boxShadow='${isCurrentChannel ? '0 12px 35px rgba(102, 126, 234, 0.3)' : '0 12px 35px rgba(0,0,0,0.15)'}';"
                              onmouseout="this.style.transform='translateY(0) scale(1)'; this.style.boxShadow='${isCurrentChannel ? '0 8px 25px rgba(102, 126, 234, 0.2)' : '0 4px 15px rgba(0,0,0,0.08)'}';">
@@ -2682,29 +2682,8 @@
                 return;
             }
 
-            // 显示确认弹框
-            const bucketNamesStr = buckets.map(b => b.name || b).join(', ');
-            const confirmContent = `
-                <div style="padding: 20px; text-align: center;">
-                    <h3 style="margin: 0 0 20px 0; color: #333;">☁️ 确认上传</h3>
-                    <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                        <div style="font-weight: 500; color: #333; margin-bottom: 10px;">${projectName}</div>
-                        <div style="color: #666; margin-bottom: 10px;">环境: ${env === 'dev' ? '开发' : '生产'}</div>
-                        <div style="color: #666;">Bucket: ${bucketNamesStr}</div>
-                    </div>
-                    <div style="display: flex; gap: 10px; justify-content: center;">
-                        <button onclick="closeModal(); doUploadSimpleProject('${projectName}', '${env}', [${bucketNames.map(name => '\'' + name + '\'').join(',')}]);" 
-                                style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer;">
-                            ✅ 确认上传
-                        </button>
-                        <button onclick="closeModal();" 
-                                style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 8px; cursor: pointer;">
-                            取消
-                        </button>
-                    </div>
-                </div>
-            `;
-            showCustomModal(confirmContent);
+            // 直接开始上传，不显示确认弹框
+            doUploadSimpleProject(projectName, env, bucketNames.map(b => b.name || b));
         }
 
         // 执行简单项目上传
@@ -3828,7 +3807,10 @@
                                                 if (channelBtn) {
                                                     channelBtn.innerHTML = originalText;
                                                 }
-                                                // Build 按钮只做构建，不显示后续上传选项
+                                                // 根据参数决定是否显示环境选择弹框
+                                                if (showEnvSelection) {
+                                                    showChannelEnvSelection(projectName, channel);
+                                                }
                                                 resolve(true);
                                             }, 2000);
                                         } else if (data.type === 'error') {
