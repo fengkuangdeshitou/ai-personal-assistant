@@ -963,26 +963,35 @@ app.post('/api/upload-stream', async (req, res) => {
       // 并发上传
       const CONCURRENCY = 15;
       let index = 0;
+      let completedCount = 0;
       
       const uploadBatch = async () => {
         const batch = allFiles.slice(index, index + CONCURRENCY);
+        if (batch.length === 0) return;
+        
+        // 显示正在上传的文件
+        batch.forEach(({ fileName }) => {
+          res.write(`data: ${JSON.stringify({ type: 'uploading', file: fileName, progress: Math.round((completedCount / totalFiles) * 100) })}\n\n`);
+        });
+        
         await Promise.all(batch.map(async ({ fullPath, ossPath, fileName }) => {
           try {
-            res.write(`data: ${JSON.stringify({ type: 'uploading', file: fileName, progress: Math.round((uploadedFiles / totalFiles) * 100) })}\n\n`);
-            
             const result = await client.put(ossPath, fullPath);
             uploadedFiles++;
+            completedCount++;
             
             res.write(`data: ${JSON.stringify({ type: 'uploaded', file: fileName, url: result.url, progress: Math.round((uploadedFiles / totalFiles) * 100), uploaded: uploadedFiles, total: totalFiles })}\n\n`);
             
             allResults.push({ file: fileName, path: ossPath, url: result.url, status: 'success', bucket: bucket.name });
           } catch (err) {
             uploadedFiles++;
+            completedCount++;
             res.write(`data: ${JSON.stringify({ type: 'failed', file: fileName, error: err.message, progress: Math.round((uploadedFiles / totalFiles) * 100), uploaded: uploadedFiles, total: totalFiles })}\n\n`);
             
             allResults.push({ file: fileName, path: ossPath, status: 'failed', error: err.message, bucket: bucket.name });
           }
         }));
+        
         index += CONCURRENCY;
         if (index < allFiles.length) {
           await uploadBatch();
@@ -1375,19 +1384,30 @@ app.post('/api/oss/upload-stream', async (req, res) => {
     // 并发上传
   const CONCURRENCY = 15;
     let index = 0;
+    let completedCount = 0;
+    
     async function uploadBatch() {
       const batch = allFiles.slice(index, index + CONCURRENCY);
+      if (batch.length === 0) return;
+      
+      // 显示正在上传的文件
+      batch.forEach(({ ossPath }) => {
+        res.write(`data: ${JSON.stringify({ type: 'uploading', file: ossPath, current: completedCount + 1 })}\n\n`);
+      });
+      
       await Promise.all(batch.map(async ({ fullPath, ossPath }) => {
-        res.write(`data: ${JSON.stringify({ type: 'uploading', file: ossPath, current: index + 1 })}\n\n`);
         try {
           await client.put(ossPath, fullPath);
           successCount++;
+          completedCount++;
           res.write(`data: ${JSON.stringify({ type: 'success', file: ossPath, current: successCount + failCount, total: totalFiles })}\n\n`);
         } catch (err) {
           failCount++;
+          completedCount++;
           res.write(`data: ${JSON.stringify({ type: 'error', file: ossPath, message: err.message })}\n\n`);
         }
       }));
+      
       index += CONCURRENCY;
       if (index < allFiles.length) {
         await uploadBatch();
