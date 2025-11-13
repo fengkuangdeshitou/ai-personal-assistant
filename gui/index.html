@@ -2054,7 +2054,7 @@
                                         }
                                         
                                         // 自动滚动到底部
-                                        logContainer.scrollTop = logContainer.scrollHeight;
+                                        if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
                                         
                                     } catch (e) {
                                         console.error('Failed to parse SSE data:', e);
