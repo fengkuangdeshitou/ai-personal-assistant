@@ -763,27 +763,27 @@ app.post('/api/build-stream', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     
-    // 第一步：清空build文件夹（如果是多渠道项目）
-    if (channel) {
-      res.write(`data: ${JSON.stringify({ type: 'log', message: '清空build文件夹...' })}\n\n`);
-      
-      const buildPath = path.join(projectPath, 'build');
-      if (fs.existsSync(buildPath)) {
-        try {
-          // 递归删除build目录内容
-          const { execSync } = await import('child_process');
-          execSync(`rm -rf "${buildPath}"/*`, { cwd: projectPath });
-          res.write(`data: ${JSON.stringify({ type: 'log', message: 'build文件夹已清空' })}\n\n`);
-        } catch (err) {
-          res.write(`data: ${JSON.stringify({ type: 'error', message: '清空build文件夹失败: ' + err.message })}\n\n`);
-          res.end();
-          return;
-        }
-      } else {
-        res.write(`data: ${JSON.stringify({ type: 'log', message: 'build文件夹不存在，跳过清空步骤' })}\n\n`);
+    // 第一步：清空build文件夹
+    res.write(`data: ${JSON.stringify({ type: 'log', message: '清空build文件夹...' })}\n\n`);
+    
+    const buildPath = path.join(projectPath, 'build');
+    if (fs.existsSync(buildPath)) {
+      try {
+        // 递归删除build目录内容
+        const { execSync } = await import('child_process');
+        execSync(`rm -rf "${buildPath}"/*`, { cwd: projectPath });
+        res.write(`data: ${JSON.stringify({ type: 'log', message: 'build文件夹已清空' })}\n\n`);
+      } catch (err) {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: '清空build文件夹失败: ' + err.message })}\n\n`);
+        res.end();
+        return;
       }
-      
-      // 第二步：切换渠道配置
+    } else {
+      res.write(`data: ${JSON.stringify({ type: 'log', message: 'build文件夹不存在，跳过清空步骤' })}\n\n`);
+    }
+    
+    // 第二步：如果是多渠道项目，切换渠道配置
+    if (channel) {
       res.write(`data: ${JSON.stringify({ type: 'log', message: `切换到渠道: ${channel}` })}\n\n`);
       
       try {
