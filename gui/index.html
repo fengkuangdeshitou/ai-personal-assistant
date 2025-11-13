@@ -964,6 +964,34 @@
             background: rgba(255, 255, 255, 0.2);
         }
     </style>
+    <script>
+        // 页面导航切换函数
+        function showSection(sectionId, element) {
+            // 隐藏所有内容区域
+            document.querySelectorAll('.content-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            // 移除所有导航项的激活状态
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            // 显示目标内容区域
+            const targetSection = document.getElementById(sectionId);
+            if (targetSection) {
+                targetSection.classList.add('active');
+            }
+            // 激活对应的导航项
+            if (element) {
+                element.classList.add('active');
+            }
+            
+            // 如果切换到数据统计页面，自动加载数据
+            if (sectionId === 'statistics') {
+                loadStats();
+                updateWeeklyChart('weeklyChart2');
+            }
+        }
+    </script>
 </head>
 
 <body>
@@ -1396,32 +1424,7 @@
 
 
     <script>
-        // 页面导航切换
-        function showSection(sectionId, element) {
-            // 隐藏所有内容区域
-            document.querySelectorAll('.content-section').forEach(section => {
-                section.classList.remove('active');
-            });
-            // 移除所有导航项的激活状态
-            document.querySelectorAll('.nav-link').forEach(link => {
-                link.classList.remove('active');
-            });
-            // 显示目标内容区域
-            const targetSection = document.getElementById(sectionId);
-            if (targetSection) {
-                targetSection.classList.add('active');
-            }
-            // 激活对应的导航项
-            if (element) {
-                element.classList.add('active');
-            }
-            
-            // 如果切换到数据统计页面，自动加载数据
-            if (sectionId === 'statistics') {
-                loadStats();
-                updateWeeklyChart('weeklyChart2');
-            }
-        }
+        // 页面导航切换已移至 head 标签中
 
         function updateGreeting() {
             const settings = getSettings();
@@ -2447,30 +2450,28 @@
                 
                 const checkData = await checkResponse.json();
                 
-                if (!checkData.exists || checkData.isEmpty) {
-                    // build 目录不存在或为空，直接开始构建
-                    showNotification(`� ${projectName} 需要构建，开始构建...`);
-                    
-                    // 执行构建 - 使用 buildProject 函数，显示构建进度
-                    try {
-                        await buildProject(projectName);
-                    } catch (buildError) {
-                        showNotification('❌ 构建失败，已取消上传');
-                        return;
-                    }
-                    
-                    // 构建完成后，重新检查 build 目录
-                    const recheckResponse = await fetch('http://localhost:5178/api/check-build', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ projectName, path })
-                    });
-                    
-                    const recheckData = await recheckResponse.json();
-                    if (!recheckData.exists || recheckData.isEmpty) {
-                        showNotification('❌ 构建后 build 目录仍为空或不存在');
-                        return;
-                    }
+                // 单渠道项目总是进行构建，确保代码最新
+                showNotification(`🔨 ${projectName} 开始构建...`);
+                
+                // 执行构建 - 使用 buildProject 函数，显示构建进度
+                try {
+                    await buildProject(projectName);
+                } catch (buildError) {
+                    showNotification('❌ 构建失败，已取消上传');
+                    return;
+                }
+                
+                // 构建完成后，检查 build 目录
+                const checkResponse2 = await fetch('http://localhost:5178/api/check-build', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectName, path })
+                });
+                
+                const checkData2 = await checkResponse2.json();
+                if (!checkData2.exists || checkData2.isEmpty) {
+                    showNotification('❌ 构建后 build 目录仍为空或不存在');
+                    return;
                 }
                 
                 // 显示上传进度弹框
@@ -2710,12 +2711,45 @@
             }
 
             if (buckets.length === 0) {
-                progressText.textContent = '❌ 未找到 bucket';
-                const errorLine = document.createElement('div');
-                errorLine.style.marginBottom = '4px';
-                errorLine.style.color = '#ff4444';
-                errorLine.textContent = '❌ 未找到匹配的 bucket 配置';
-                logElement.appendChild(errorLine);
+                showNotification('❌ 未找到匹配的 bucket 配置');
+                return;
+            }
+            
+            // 检查 build 目录
+            try {
+                const checkResponse = await fetch('http://localhost:5178/api/check-build', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectName, path })
+                });
+                
+                const checkData = await checkResponse.json();
+                
+                // 生产环境也总是进行构建，确保代码最新
+                showNotification(`🔨 ${projectName} 开始构建...`);
+                
+                // 执行构建 - 使用 buildProject 函数，显示构建进度
+                try {
+                    await buildProject(projectName);
+                } catch (buildError) {
+                    showNotification('❌ 构建失败，已取消上传');
+                    return;
+                }
+                
+                // 构建完成后，检查 build 目录
+                const checkResponse2 = await fetch('http://localhost:5178/api/check-build', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ projectName, path })
+                });
+                
+                const checkData2 = await checkResponse2.json();
+                if (!checkData2.exists || checkData2.isEmpty) {
+                    showNotification('❌ 构建后 build 目录仍为空或不存在');
+                    return;
+                }
+            } catch (error) {
+                showNotification(`❌ 检查 build 目录失败: ${error.message}`);
                 return;
             }
             
@@ -2757,66 +2791,16 @@
             const logContainer = document.getElementById('upload-log-container');
             
             try {
-                // 检查 build 目录
-                const checkResponse = await fetch('http://localhost:5178/api/check-build', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ projectName, path })
-                });
-                
-                const checkData = await checkResponse.json();
-                
-                if (!checkData.exists || checkData.isEmpty) {
-                    // build 目录不存在或为空，直接开始构建
-                    progressText.textContent = '🔨 正在构建项目...';
-                    const logLine = document.createElement('div');
-                    logLine.style.marginBottom = '4px';
-                    logLine.style.color = '#ffff00';
-                    logLine.textContent = '🔨 开始构建项目...';
-                    logElement.appendChild(logLine);
-                    
-                    // 执行构建 - 使用 buildProject 函数
-                    try {
-                        await buildProject(projectName);
-                    } catch (buildError) {
-                        progressText.textContent = '❌ 构建失败';
-                        const errorLine = document.createElement('div');
-                        errorLine.style.marginBottom = '4px';
-                        errorLine.style.color = '#ff4444';
-                        errorLine.textContent = '❌ 构建失败: ' + buildError.message;
-                        logElement.appendChild(errorLine);
-                        return;
-                    }
-                    
-                    // 构建完成后，重新检查 build 目录
-                    const recheckResponse = await fetch('http://localhost:5178/api/check-build', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ projectName, path })
-                    });
-                    
-                    const recheckData = await recheckResponse.json();
-                    if (!recheckData.exists || recheckData.isEmpty) {
-                        progressText.textContent = '❌ 构建后 build 目录仍为空';
-                        const errorLine = document.createElement('div');
-                        errorLine.style.marginBottom = '4px';
-                        errorLine.style.color = '#ff4444';
-                        errorLine.textContent = '❌ 构建后 build 目录仍为空或不存在';
-                        logElement.appendChild(errorLine);
-                        return;
-                    }
-                }
-                
                 // 循环上传到所有生产bucket（使用流式API）
-                const bucketList = Array.isArray(buckets) ? buckets : [buckets];
-                progressText.textContent = `☁️ 正在上传到 ${bucketList.length} 个 bucket...`;
+                const bucketList2 = Array.isArray(buckets) ? buckets : [buckets];
+                progressText.textContent = `☁️ 正在上传到 ${bucketList2.length} 个 bucket...`;
                 
                 let successCount = 0;
                 let failCount = 0;
                 let totalFiles = 0;
                 let uploadedFiles = 0;
                 let currentBucketIndex = 0;
-                let bucketProgresses = new Array(bucketList.length).fill(0); // 每个bucket的进度
+                let bucketProgresses = new Array(bucketList2.length).fill(0); // 每个bucket的进度
                 
                 const uploadNextBucket = async () => {
                     if (currentBucketIndex >= bucketList.length) {
