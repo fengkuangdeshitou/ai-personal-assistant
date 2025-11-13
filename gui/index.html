@@ -3315,10 +3315,29 @@
                                     // 只有生产环境才备份 build 文件夹
                                     if (env === 'prod') {
                                         progressText.textContent = '📦 正在备份 build 文件夹...';
-                                        // 这里需要获取bucket信息，暂时简化处理
-                                        setTimeout(() => {
-                                            progressText.textContent = '✅ 备份完成';
-                                        }, 1000);
+                                        
+                                        // 获取渠道对应的bucket信息
+                                        try {
+                                            const channelResponse = await fetch(`http://localhost:5178/api/channels/${projectName}`);
+                                            const channelData = await channelResponse.json();
+                                            
+                                            if (channelData.channels && channelData.channels[channelId]) {
+                                                const channelConfig = channelData.channels[channelId];
+                                                const prodBucket = channelConfig.buckets?.prod;
+                                                const bucketName = prodBucket?.name || prodBucket;
+                                                
+                                                if (bucketName) {
+                                                    await backupBuildToOSS(projectName, path, bucketName);
+                                                } else {
+                                                    showNotification('⚠️ 未找到生产环境bucket配置，跳过备份');
+                                                }
+                                            } else {
+                                                showNotification('⚠️ 未找到渠道配置，跳过备份');
+                                            }
+                                        } catch (backupError) {
+                                            console.error('Backup error:', backupError);
+                                            showNotification('⚠️ 备份失败，但上传已完成');
+                                        }
                                     }
                                 } else if (data.type === 'error') {
                                     progressText.textContent = '❌ 上传失败';
