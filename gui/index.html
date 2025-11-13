@@ -3194,7 +3194,7 @@
                         </div>
                         <div id="upload-stats" style="font-size: 0.9em; color: #999;">0 / 0 文件</div>
                     </div>
-                    <div id="upload-log-container" style="margin-top: 20px; max-height: 350px; overflow-y: auto; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 0.75em;">
+                    <div id="upload-log-container" style="margin-top: 20px; height: 300px; overflow-y: auto; background: #1e1e1e; color: #00ff00; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 0.75em;">
                         <div id="upload-log"></div>
                     </div>
                 </div>
@@ -3211,6 +3211,7 @@
             const progressText = document.getElementById('upload-progress-text');
             const statsText = document.getElementById('upload-stats');
             const logElement = document.getElementById('upload-log');
+            const logContainer = document.getElementById('upload-log-container');
             
             try {
                 // 开始上传 - 使用流式 API
