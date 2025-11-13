@@ -1672,6 +1672,47 @@ app.post('/api/oss/get-bucket-info', async (req, res) => {
   }
 });
 
+// 清空build文件夹
+app.post('/api/clear-build', async (req, res) => {
+  try {
+    const { projectName, path: projectPathParam } = req.body;
+    
+    if (!projectName && !projectPathParam) {
+      return res.status(400).json({ error: 'Missing projectName or path' });
+    }
+    
+    let projectPath = projectPathParam || path.join(DEFAULT_DIR, projectName);
+    
+    // 处理 ~ 路径
+    if (projectPath.startsWith('~')) {
+      const homeDir = require('os').homedir();
+      projectPath = path.join(homeDir, projectPath.slice(1));
+    }
+    
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ error: 'Project not found: ' + projectPath });
+    }
+    
+    const buildPath = path.join(projectPath, 'build');
+    
+    if (fs.existsSync(buildPath)) {
+      try {
+        // 递归删除build目录内容
+        const { execSync } = await import('child_process');
+        execSync(`rm -rf "${buildPath}"/*`, { cwd: projectPath });
+        res.json({ success: true, message: 'build文件夹已清空' });
+      } catch (err) {
+        res.status(500).json({ error: '清空build文件夹失败: ' + err.message });
+      }
+    } else {
+      res.json({ success: true, message: 'build文件夹不存在，无需清空' });
+    }
+    
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Backend server listening on http://localhost:${PORT}`);
   console.log('Projects dir:', DEFAULT_DIR);
