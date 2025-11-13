@@ -851,6 +851,148 @@ app.post('/api/build-stream', async (req, res) => {
   }
 });
 
+// 流式上传到 OSS（实时进度）
+app.post('/api/upload-stream', async (req, res) => {
+  try {
+    const { projectName, path: projectPath, channelId, env } = req.body;
+    
+    if (!projectName || !channelId || !env) {
+      return res.status(400).json({ ok: false, error: 'Missing required parameters' });
+    }
+    
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ ok: false, error: 'Project not found' });
+    }
+    
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    
+    // 读取 OSS 连接配置
+    if (!fs.existsSync(OSS_CONFIG_PATH)) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'OSS connection config not found' })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    let ossConfig, allBuckets;
+    try {
+      const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
+      const ossConfigs = JSON.parse(ossData);
+      ossConfig = ossConfigs.connection;
+      
+      // 获取所有可用 buckets
+      const bucketConfig = getBucketConfig(ossConfigs, projectName, channelId, env);
+      allBuckets = Array.isArray(bucketConfig) ? bucketConfig : [bucketConfig];
+      
+      if (!allBuckets || allBuckets.length === 0) {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: 'No buckets configured' })}\n\n`);
+        res.end();
+        return;
+      }
+    } catch (e) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    // 检查构建目录
+    const buildPath = path.join(projectPath, 'build');
+    if (!fs.existsSync(buildPath)) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Build directory not found. Please build first.' })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    // 动态导入 ali-oss
+    const OSS = (await import('ali-oss')).default;
+    
+    const allResults = [];
+    let totalFiles = 0;
+    let uploadedFiles = 0;
+    
+    // 先计算总文件数
+    const countFiles = (dirPath) => {
+      let count = 0;
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+          count += countFiles(fullPath);
+        } else {
+          count++;
+        }
+      }
+      return count;
+    };
+    
+    totalFiles = countFiles(buildPath);
+    res.write(`data: ${JSON.stringify({ type: 'start', total: totalFiles, message: '开始上传文件...' })}\n\n`);
+    
+    // 上传到每个 bucket
+    for (const bucket of allBuckets) {
+      if (bucket.enabled === false) continue;
+      
+      // 创建 OSS 客户端
+      const client = new OSS({
+        region: bucket.region || ossConfig.region,
+        accessKeyId: ossConfig.accessKeyId,
+        accessKeySecret: ossConfig.accessKeySecret,
+        bucket: bucket.name
+      });
+      
+      // 上传文件
+      const uploadDir = async (dirPath, prefix = '') => {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        const results = [];
+        
+        for (const entry of entries) {
+          const fullPath = path.join(dirPath, entry.name);
+          const ossPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+          
+          if (entry.isDirectory()) {
+            const subResults = await uploadDir(fullPath, ossPath);
+            results.push(...subResults);
+          } else {
+            try {
+              res.write(`data: ${JSON.stringify({ type: 'uploading', file: entry.name, progress: Math.round((uploadedFiles / totalFiles) * 100) })}\n\n`);
+              
+              const result = await client.put(ossPath, fullPath);
+              uploadedFiles++;
+              
+              res.write(`data: ${JSON.stringify({ type: 'uploaded', file: entry.name, url: result.url, progress: Math.round((uploadedFiles / totalFiles) * 100), uploaded: uploadedFiles, total: totalFiles })}\n\n`);
+              
+              results.push({ file: entry.name, path: ossPath, url: result.url, status: 'success', bucket: bucket.name });
+            } catch (err) {
+              uploadedFiles++;
+              res.write(`data: ${JSON.stringify({ type: 'failed', file: entry.name, error: err.message, progress: Math.round((uploadedFiles / totalFiles) * 100), uploaded: uploadedFiles, total: totalFiles })}\n\n`);
+              
+              results.push({ file: entry.name, path: ossPath, status: 'failed', error: err.message, bucket: bucket.name });
+            }
+          }
+        }
+        
+        return results;
+      };
+      
+      const uploadResults = await uploadDir(buildPath, bucket.prefix || '');
+      allResults.push(...uploadResults);
+    }
+    
+    const successCount = allResults.filter(r => r.status === 'success').length;
+    const failCount = allResults.filter(r => r.status === 'failed').length;
+    
+    res.write(`data: ${JSON.stringify({ type: 'complete', uploaded: successCount, failed: failCount, results: allResults, message: '上传完成' })}\n\n`);
+    res.end();
+    
+  } catch (e) {
+    console.error('OSS upload stream error:', e);
+    res.write(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`);
+    res.end();
+  }
+});
+
 // 按渠道和环境上传到 OSS
 app.post('/api/oss/upload-channel', async (req, res) => {
   try {
