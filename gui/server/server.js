@@ -942,42 +942,56 @@ app.post('/api/upload-stream', async (req, res) => {
         bucket: bucket.name
       });
       
-      // 上传文件
-      const uploadDir = async (dirPath, prefix = '') => {
+      // 递归收集所有文件
+      const collectFiles = (dirPath, prefix = '') => {
         const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-        const results = [];
-        
+        let files = [];
         for (const entry of entries) {
           const fullPath = path.join(dirPath, entry.name);
           const ossPath = prefix ? `${prefix}/${entry.name}` : entry.name;
-          
           if (entry.isDirectory()) {
-            const subResults = await uploadDir(fullPath, ossPath);
-            results.push(...subResults);
+            files = files.concat(collectFiles(fullPath, ossPath));
           } else {
-            try {
-              res.write(`data: ${JSON.stringify({ type: 'uploading', file: entry.name, progress: Math.round((uploadedFiles / totalFiles) * 100) })}\n\n`);
-              
-              const result = await client.put(ossPath, fullPath);
-              uploadedFiles++;
-              
-              res.write(`data: ${JSON.stringify({ type: 'uploaded', file: entry.name, url: result.url, progress: Math.round((uploadedFiles / totalFiles) * 100), uploaded: uploadedFiles, total: totalFiles })}\n\n`);
-              
-              results.push({ file: entry.name, path: ossPath, url: result.url, status: 'success', bucket: bucket.name });
-            } catch (err) {
-              uploadedFiles++;
-              res.write(`data: ${JSON.stringify({ type: 'failed', file: entry.name, error: err.message, progress: Math.round((uploadedFiles / totalFiles) * 100), uploaded: uploadedFiles, total: totalFiles })}\n\n`);
-              
-              results.push({ file: entry.name, path: ossPath, status: 'failed', error: err.message, bucket: bucket.name });
-            }
+            files.push({ fullPath, ossPath, fileName: entry.name });
           }
         }
-        
-        return results;
+        return files;
       };
       
-      const uploadResults = await uploadDir(buildPath, bucket.prefix || '');
-      allResults.push(...uploadResults);
+      const allFiles = collectFiles(buildPath, bucket.prefix || '');
+      
+      // 并发上传
+      const CONCURRENCY = 15;
+      let index = 0;
+      
+      const uploadBatch = async () => {
+        const batch = allFiles.slice(index, index + CONCURRENCY);
+        await Promise.all(batch.map(async ({ fullPath, ossPath, fileName }) => {
+          try {
+            res.write(`data: ${JSON.stringify({ type: 'uploading', file: fileName, progress: Math.round((uploadedFiles / totalFiles) * 100) })}\n\n`);
+            
+            const result = await client.put(ossPath, fullPath);
+            uploadedFiles++;
+            
+            res.write(`data: ${JSON.stringify({ type: 'uploaded', file: fileName, url: result.url, progress: Math.round((uploadedFiles / totalFiles) * 100), uploaded: uploadedFiles, total: totalFiles })}\n\n`);
+            
+            allResults.push({ file: fileName, path: ossPath, url: result.url, status: 'success', bucket: bucket.name });
+          } catch (err) {
+            uploadedFiles++;
+            res.write(`data: ${JSON.stringify({ type: 'failed', file: fileName, error: err.message, progress: Math.round((uploadedFiles / totalFiles) * 100), uploaded: uploadedFiles, total: totalFiles })}\n\n`);
+            
+            allResults.push({ file: fileName, path: ossPath, status: 'failed', error: err.message, bucket: bucket.name });
+          }
+        }));
+        index += CONCURRENCY;
+        if (index < allFiles.length) {
+          await uploadBatch();
+        }
+      };
+      
+      if (allFiles.length > 0) {
+        await uploadBatch();
+      }
     }
     
     const successCount = allResults.filter(r => r.status === 'success').length;
