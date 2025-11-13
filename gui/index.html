@@ -2556,11 +2556,17 @@
                                     logElement.appendChild(logLine);
                                     progressText.textContent = `正在上传: ${data.file}`;
                                 } else if (data.type === 'success') {
-                                    uploadedFiles++;
+                                    uploadedFiles = data.current || (uploadedFiles + 1);
                                     totalFiles = data.total || totalFiles;
                                     const progress = totalFiles > 0 ? (uploadedFiles / totalFiles) * 100 : 0;
                                     progressBar.style.width = progress + '%';
                                     statsText.textContent = `${uploadedFiles} / ${totalFiles} 文件`;
+                                    
+                                    const successLine = document.createElement('div');
+                                    successLine.style.marginBottom = '2px';
+                                    successLine.style.color = '#00ff00';
+                                    successLine.textContent = `✓ ${data.file}`;
+                                    logElement.appendChild(successLine);
                                 } else if (data.type === 'error') {
                                     if (data.file) {
                                         failedFiles++;
