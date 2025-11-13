@@ -2622,7 +2622,19 @@
                                     // 只有生产环境才备份
                                     if (env === 'prod') {
                                         setTimeout(async () => {
+                                            progressText.textContent = '📦 正在备份 build 文件夹...';
                                             await backupBuildToOSS(projectName, path, bucket);
+                                            progressText.textContent = '✅ 备份完成';
+                                            
+                                            const backupCompleteLine = document.createElement('div');
+                                            backupCompleteLine.style.marginTop = '10px';
+                                            backupCompleteLine.style.color = '#00ff00';
+                                            backupCompleteLine.style.fontWeight = 'bold';
+                                            backupCompleteLine.textContent = '✅ Build 文件夹备份完成';
+                                            logElement.appendChild(backupCompleteLine);
+                                            
+                                            // 自动滚动到底部
+                                            logContainer.scrollTop = logContainer.scrollHeight;
                                         }, 1000);
                                     }
                                     
@@ -2849,6 +2861,17 @@
                             const firstBucket = bucketList[0].name || bucketList[0];
                             progressText.textContent = '📦 正在备份 build 文件夹...';
                             await backupBuildToOSS(projectName, path, firstBucket);
+                            progressText.textContent = '✅ 备份完成';
+                            
+                            const backupCompleteLine = document.createElement('div');
+                            backupCompleteLine.style.marginTop = '10px';
+                            backupCompleteLine.style.color = '#00ff00';
+                            backupCompleteLine.style.fontWeight = 'bold';
+                            backupCompleteLine.textContent = '✅ Build 文件夹备份完成';
+                            logElement.appendChild(backupCompleteLine);
+                            
+                            // 自动滚动到底部
+                            logContainer.scrollTop = logContainer.scrollHeight;
                         }
                         
                         // react-agent-website 生产环境需要额外步骤：复制文件到 agent-pro 并 push
@@ -3328,14 +3351,28 @@
                                                 
                                                 if (bucketName) {
                                                     await backupBuildToOSS(projectName, path, bucketName);
+                                                    progressText.textContent = '✅ 备份完成';
+                                                    
+                                                    const backupCompleteLine = document.createElement('div');
+                                                    backupCompleteLine.style.marginTop = '10px';
+                                                    backupCompleteLine.style.color = '#00ff00';
+                                                    backupCompleteLine.style.fontWeight = 'bold';
+                                                    backupCompleteLine.textContent = '✅ Build 文件夹备份完成';
+                                                    logElement.appendChild(backupCompleteLine);
+                                                    
+                                                    // 自动滚动到底部
+                                                    logContainer.scrollTop = logContainer.scrollHeight;
                                                 } else {
+                                                    progressText.textContent = '⚠️ 备份跳过：未找到bucket配置';
                                                     showNotification('⚠️ 未找到生产环境bucket配置，跳过备份');
                                                 }
                                             } else {
+                                                progressText.textContent = '⚠️ 备份跳过：未找到渠道配置';
                                                 showNotification('⚠️ 未找到渠道配置，跳过备份');
                                             }
                                         } catch (backupError) {
                                             console.error('Backup error:', backupError);
+                                            progressText.textContent = '⚠️ 备份失败';
                                             showNotification('⚠️ 备份失败，但上传已完成');
                                         }
                                     }
