@@ -1580,11 +1580,6 @@ app.post('/api/backup-build', async (req, res) => {
     
     const buildPath = path.join(projectPath, 'build');
     
-    // 检查 build 目录是否存在
-    if (!fs.existsSync(buildPath)) {
-      return res.status(400).json({ ok: false, error: 'Build directory not found' });
-    }
-    
     // 生成日期格式的文件名 YYYY-MM-DD
     const now = new Date();
     const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
