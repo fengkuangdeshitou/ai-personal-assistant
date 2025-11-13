@@ -2025,11 +2025,10 @@
                                             successLine.textContent = '✅ ' + data.message;
                                             logElement.appendChild(successLine);
                                             
-                                            showNotification(`✅ 构建成功: ${projectName} - 现在可以点击 ☁️ 上传按钮`);
-                                            // 构建成功后显示上传选项
+                                            showNotification(`✅ 构建成功: ${projectName}`);
+                                            // 构建成功后直接关闭弹框，不进行任何后续操作
                                             setTimeout(() => {
                                                 closeModal();
-                                                showUploadOptions(projectName);
                                                 resolve(true);
                                             }, 2000);
                                         } else if (data.type === 'error') {
@@ -2099,7 +2098,7 @@
             try {
                 const response = await fetch(`http://localhost:5178/api/channels/${projectName}`);
                 const data = await response.json();
-                
+
                 if (data.channels && Object.keys(data.channels).length > 0) {
                     // 有渠道配置，显示渠道选择弹窗
                     showChannelSelectionModal(projectName, data.channels);
@@ -2230,7 +2229,7 @@
                     const theme = channelThemes[id] || { icon: '📦', color: '#6b7280', bg: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)' };
 
                     return `
-                        <div class="channel-card" onclick="closeModal(); setTimeout(() => buildWithChannel('${projectName}', '${id}', true), 100);"
+                        <div class="channel-card" onclick="closeModal(); setTimeout(() => buildWithChannel('${projectName}', '${id}', false), 100);"
                              style="width: 180px; padding: 24px 16px; ${cardStyle} border-radius: 16px; cursor: pointer; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); text-align: center; position: relative; overflow: hidden; flex-shrink: 0;"
                              onmouseover="this.style.transform='translateY(-8px) scale(1.02)'; this.style.boxShadow='${isCurrentChannel ? '0 12px 35px rgba(102, 126, 234, 0.3)' : '0 12px 35px rgba(0,0,0,0.15)'}';"
                              onmouseout="this.style.transform='translateY(0) scale(1)'; this.style.boxShadow='${isCurrentChannel ? '0 8px 25px rgba(102, 126, 234, 0.2)' : '0 4px 15px rgba(0,0,0,0.08)'}';">
@@ -3829,10 +3828,7 @@
                                                 if (channelBtn) {
                                                     channelBtn.innerHTML = originalText;
                                                 }
-                                                // 构建成功后根据上下文决定是否显示上传环境选择弹框
-                                                if (showEnvSelection) {
-                                                    showChannelEnvSelection(projectName, channel);
-                                                }
+                                                // Build 按钮只做构建，不显示后续上传选项
                                                 resolve(true);
                                             }, 2000);
                                         } else if (data.type === 'error') {
