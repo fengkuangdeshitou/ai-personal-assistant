@@ -1,0 +1,105 @@
+#!/bin/bash
+
+# AI 私人助理 - GUI 启动脚本
+# 作者: fengkuangdeshitou
+# 版本: v1.6.0
+
+# 颜色定义
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+BOLD='\033[1m'
+
+# GUI 文件路径
+GUI_PATH="$HOME/.ai-assistant/gui/index.html"
+APP_PATH="$HOME/.ai-assistant/gui/AI助理.app"
+
+# 打印欢迎信息
+print_welcome() {
+    echo -e "${BLUE}${BOLD}"
+    echo "╔═══════════════════════════════════════╗"
+    echo "║      🤖 AI 私人助理 v1.6.0           ║"
+    echo "║   Your Intelligent Dev Partner       ║"
+    echo "╚═══════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+# 检查 GUI 文件是否存在
+check_gui_exists() {
+    if [ ! -f "$GUI_PATH" ]; then
+        echo -e "${RED}❌ 错误: GUI 文件不存在${NC}"
+        echo -e "${YELLOW}📁 预期路径: $GUI_PATH${NC}"
+        echo ""
+        echo -e "${BLUE}💡 解决方案:${NC}"
+        echo "   1. 克隆仓库: git clone https://github.com/fengkuangdeshitou/ai-personal-assistant.git"
+        echo "   2. 移动到正确位置: mv ai-personal-assistant ~/.ai-assistant"
+        return 1
+    fi
+    return 0
+}
+
+# 主函数
+main() {
+    # 清屏（可选）
+    # clear
+    
+    # 打印欢迎信息
+    print_welcome
+    
+    # 检查 GUI 文件
+    if ! check_gui_exists; then
+        exit 1
+    fi
+    
+    # 打开 GUI
+    echo -e "${GREEN}🚀 正在启动 GUI 界面...${NC}"
+    echo ""
+    
+    # 根据操作系统选择打开方式
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS - 优先使用 .app 应用
+        if [ -d "$APP_PATH" ]; then
+            open "$APP_PATH"
+            echo -e "${GREEN}✅ AI 助理已启动！${NC}"
+            echo -e "${BLUE}💡 后端服务会自动启动${NC}"
+        else
+            # 降级到直接打开 HTML
+            open "$GUI_PATH"
+            echo -e "${GREEN}✅ GUI 已在默认浏览器中打开！${NC}"
+        fi
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Linux
+        if command -v xdg-open &> /dev/null; then
+            xdg-open "$GUI_PATH"
+            echo -e "${GREEN}✅ GUI 已在默认浏览器中打开！${NC}"
+        else
+            echo -e "${YELLOW}⚠️  请手动在浏览器中打开: $GUI_PATH${NC}"
+        fi
+    elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]]; then
+        # Windows (Git Bash / WSL)
+        start "$GUI_PATH"
+        echo -e "${GREEN}✅ GUI 已在默认浏览器中打开！${NC}"
+    else
+        echo -e "${YELLOW}⚠️  无法自动打开，请手动在浏览器中打开: $GUI_PATH${NC}"
+    fi
+    
+    echo ""
+    echo -e "${BLUE}💡 提示:${NC}"
+    echo "   • 关闭终端不会影响 GUI 运行"
+    echo "   • 可以随时再次运行此命令"
+    echo "   • 使用 Ctrl+C 可以退出本脚本"
+    echo ""
+    
+    # 显示快速帮助
+    echo -e "${YELLOW}📖 快速命令:${NC}"
+    echo "   ai          - 打开 GUI 界面"
+    echo "   助理        - 打开 GUI 界面（中文命令）"
+    echo "   ai-help     - 显示帮助信息"
+    echo "   ai-update   - 检查更新"
+    echo ""
+}
+
+# 运行主函数
+main
