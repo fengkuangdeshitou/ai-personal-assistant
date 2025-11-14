@@ -15,7 +15,7 @@ AI助理.app
 
 ### 使用启动脚本
 ```bash
-./launch.sh
+./scripts/launch.sh
 ```
 
 ### 手动启动
