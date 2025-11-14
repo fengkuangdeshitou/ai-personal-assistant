@@ -1,87 +1,129 @@
 .dashboard-container {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 24px;
 }
 
 .dashboard-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 24px;
-  padding: 24px;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(10px);
-  border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-}
-
-.greeting-section h1 {
-  margin: 0 0 8px 0 !important;
-  color: #667eea;
-  font-size: 2.5rem !important;
-  font-weight: 700;
-}
-
-.subtitle {
-  color: #666;
-  font-size: 1.1rem;
-  margin: 0;
-}
-
-.time-section {
-  text-align: right;
-}
-
-.greeting-text {
-  font-size: 1.3rem;
-  color: #333;
-  margin-bottom: 8px;
-  display: block;
-}
-
-.stats-section {
-  margin-bottom: 24px;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(10px);
-  border-radius: 16px;
+  margin-bottom: 32px;
+  padding: 32px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: 20px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
+.greeting-section h1 {
+  margin: 0 0 12px 0 !important;
+  color: #667eea;
+  font-size: 2.8rem !important;
+  font-weight: 800;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.2;
+}
+
+.subtitle {
+  color: #6b7280;
+  font-size: 1.2rem;
+  margin: 0;
+  font-weight: 500;
+}
+
+.time-section {
+  text-align: right;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(102, 126, 234, 0.1);
+}
+
+.greeting-text {
+  font-size: 1.4rem;
+  color: #374151;
+  margin-bottom: 12px;
+  display: block;
+  font-weight: 600;
+}
+
+.stats-section {
+  margin-bottom: 32px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 32px;
+}
+
 .stats-section .ant-card-head {
-  border-bottom: 2px solid #f0f0f0;
+  border-bottom: 2px solid rgba(102, 126, 234, 0.1);
+  padding-bottom: 16px;
 }
 
 .stats-section .ant-card-head-title {
-  font-size: 1.2rem;
-  font-weight: 600;
-  color: #333;
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #374151;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .stat-card {
   text-align: center;
-  border-radius: 12px;
-  transition: all 0.3s ease;
+  border-radius: 16px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   border: 1px solid rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(5px);
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.05), transparent);
+  transition: left 0.6s;
 }
 
 .stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+  transform: translateY(-8px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+  border-color: rgba(102, 126, 234, 0.2);
+}
+
+.stat-card:hover::before {
+  left: 100%;
 }
 
 .stat-card .ant-statistic-title {
-  color: #666;
-  font-size: 0.9rem;
-  margin-bottom: 8px;
+  color: #6b7280;
+  font-size: 0.95rem;
+  margin-bottom: 12px;
+  font-weight: 500;
 }
 
 .stat-card .ant-statistic-content {
-  font-size: 1.8rem;
-  font-weight: 700;
+  font-size: 2.2rem;
+  font-weight: 800;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .stat-card .ant-progress {
@@ -89,21 +131,25 @@
 }
 
 .chart-section {
-  margin-bottom: 24px;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(10px);
-  border-radius: 16px;
+  margin-bottom: 32px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: 20px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 32px;
 }
 
 .weekly-chart {
   display: flex;
   align-items: end;
   justify-content: space-between;
-  height: 200px;
-  padding: 20px;
-  gap: 8px;
+  height: 240px;
+  padding: 24px;
+  gap: 12px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+  border-radius: 16px;
+  border: 1px solid rgba(102, 126, 234, 0.1);
 }
 
 .chart-bar-container {
@@ -149,25 +195,44 @@
 }
 
 .actions-section {
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(10px);
-  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: 20px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 32px;
 }
 
 .actions-section .ant-btn {
-  height: 48px;
-  padding: 0 24px;
-  font-size: 1rem;
-  font-weight: 500;
-  border-radius: 12px;
-  transition: all 0.3s ease;
+  height: 52px;
+  padding: 0 28px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  border-radius: 14px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.actions-section .ant-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s;
 }
 
 .actions-section .ant-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+.actions-section .ant-btn:hover::before {
+  left: 100%;
 }
 
 .actions-section .ant-btn-primary {
@@ -177,7 +242,7 @@
 
 .actions-section .ant-btn-primary:hover {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
 }
 
 /* 响应式设计 */
