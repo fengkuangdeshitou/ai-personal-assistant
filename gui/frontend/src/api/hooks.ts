@@ -170,10 +170,12 @@ export const useOSSConfig = () => {
       const response = await ossApi.getProjectBuckets(projectName);
       // 后端直接返回数据，不使用 success/message 包装
       setOSSConfig(response);
+      return response;
     } catch (err: any) {
       console.error('Load OSS config error:', err);
       setError(err.response?.data?.error || err.message || '网络错误');
       setOSSConfig(null);
+      throw err;
     } finally {
       setIsLoading(false);
     }
@@ -187,21 +189,28 @@ export const useOSSConfig = () => {
       const response = await ossApi.getProjectChannels(projectName);
       // 后端直接返回 { channels } 格式，不使用 success/message 包装
       setChannels(response);
+      return response;
     } catch (err: any) {
       console.error('Load channels error:', err);
       setError(err.response?.data?.error || err.message || '网络错误');
       setChannels({ channels: {} }); // 设置默认值
+      throw err;
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  const loadOSSConfig = useCallback(async (projectName: string) => {
-    // 同时加载buckets和channels配置
-    await Promise.all([
+  const loadOSSConfig = useCallback(async (projectName: string): Promise<{ossConfig: any, channels: any}> => {
+    // 同时加载buckets和channels配置，并返回结果
+    const [bucketsResult, channelsResult] = await Promise.all([
       loadProjectBuckets(projectName),
       loadProjectChannels(projectName)
     ]);
+    
+    return {
+      ossConfig: bucketsResult,
+      channels: channelsResult
+    };
   }, [loadProjectBuckets, loadProjectChannels]);
 
   return {
