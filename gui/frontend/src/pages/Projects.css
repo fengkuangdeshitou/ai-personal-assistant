@@ -1,0 +1,183 @@
+.projects-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.projects-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+.projects-header h1 {
+  margin: 0 0 8px 0 !important;
+  color: #1890ff;
+  font-size: 2.5rem !important;
+  font-weight: 700;
+}
+
+.projects-subtitle {
+  color: #666;
+  font-size: 1.1rem;
+  margin: 0;
+}
+
+.stats-section {
+  margin-bottom: 24px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.stat-card {
+  text-align: center;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.stat-card .ant-card-body {
+  padding: 16px !important;
+}
+
+.recent-projects-section {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  height: fit-content;
+}
+
+.recent-projects-section .ant-card-body {
+  padding: 0;
+}
+
+.recent-projects-section .ant-list-item {
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  transition: all 0.3s ease;
+}
+
+.recent-projects-section .ant-list-item:hover {
+  background: rgba(24, 144, 255, 0.02);
+}
+
+.recent-projects-section .ant-list-item-action {
+  margin-left: 16px;
+}
+
+.recent-projects-section .ant-btn-text {
+  color: #666;
+  transition: all 0.3s ease;
+}
+
+.recent-projects-section .ant-btn-text:hover {
+  color: #1890ff;
+  transform: scale(1.1);
+}
+
+.categories-section {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  height: fit-content;
+}
+
+.categories-section .ant-card-body {
+  padding: 0;
+}
+
+.category-card {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  margin-bottom: 8px;
+}
+
+.category-card .ant-card-body {
+  padding: 16px !important;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border-radius: 8px;
+}
+
+.category-card .ant-card-body:hover {
+  background: rgba(24, 144, 255, 0.05);
+  transform: translateX(4px);
+}
+
+.category-card .ant-avatar {
+  margin-right: 12px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: #999;
+}
+
+.empty-state .anticon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .projects-container {
+    padding: 10px;
+  }
+
+  .projects-header {
+    flex-direction: column;
+    gap: 15px;
+    text-align: center;
+    padding: 20px;
+  }
+
+  .projects-header h1 {
+    font-size: 2rem !important;
+  }
+
+  .stats-section .ant-row .ant-col {
+    margin-bottom: 16px;
+  }
+
+  .recent-projects-section .ant-list-item {
+    padding: 12px 16px;
+  }
+
+  .recent-projects-section .ant-list-item-action {
+    margin-left: 8px;
+  }
+
+  .recent-projects-section .ant-list-item-action li {
+    margin-left: 4px;
+  }
+}
+
+@media (max-width: 576px) {
+  .projects-header h1 {
+    font-size: 1.8rem !important;
+  }
+
+  .recent-projects-section .ant-list-item-action {
+    display: none;
+  }
+
+  .category-card .ant-card-body {
+    padding: 12px !important;
+  }
+}

@@ -2157,6 +2157,11 @@
         
         // 选择渠道后构建（先关闭弹窗再显示构建进度）
         function selectChannelAndBuild(projectName, channel) {
+            // 存储用户选择的渠道
+            if (channel) {
+                localStorage.setItem(`lastChannel_${projectName}`, channel);
+            }
+            
             closeModal();
             // 等待弹窗关闭动画完成后再显示构建进度
             setTimeout(() => {
@@ -2232,7 +2237,7 @@
                     const theme = channelThemes[id] || { icon: '📦', color: '#6b7280', bg: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)' };
 
                     return `
-                        <div class="channel-card" onclick="closeModal(); setTimeout(() => buildWithChannel('${projectName}', '${id}', true), 100);"
+                        <div class="channel-card" onclick="selectChannelForUpload('${projectName}', '${id}');"
                              style="width: 180px; padding: 24px 16px; ${cardStyle} border-radius: 16px; cursor: pointer; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); text-align: center; position: relative; overflow: hidden; flex-shrink: 0;"
                              onmouseover="this.style.transform='translateY(-8px) scale(1.02)'; this.style.boxShadow='${isCurrentChannel ? '0 12px 35px rgba(102, 126, 234, 0.3)' : '0 12px 35px rgba(0,0,0,0.15)'}';"
                              onmouseout="this.style.transform='translateY(0) scale(1)'; this.style.boxShadow='${isCurrentChannel ? '0 8px 25px rgba(102, 126, 234, 0.2)' : '0 4px 15px rgba(0,0,0,0.08)'}';">
@@ -2356,8 +2361,15 @@
                 const data = await response.json();
 
                 if (data.channels && Object.keys(data.channels).length > 0) {
-                    // 有渠道配置，直接显示4个渠道卡片选择
-                    showUploadForChannel(projectName, null);
+                    // 检查是否有存储的上次选择的渠道
+                    const lastChannel = localStorage.getItem(`lastChannel_${projectName}`);
+                    if (lastChannel && data.channels[lastChannel]) {
+                        // 有存储的渠道，直接显示环境选择
+                        showChannelEnvSelection(projectName, lastChannel);
+                    } else {
+                        // 没有存储的渠道，显示渠道选择弹框
+                        showUploadForChannel(projectName, null);
+                    }
                 } else {
                     // 没有渠道配置，使用默认上传
                     uploadWithoutChannel(projectName);
@@ -3670,8 +3682,14 @@
             }
         }
 
-        // 使用指定渠道构建项目
-        async function buildWithChannel(projectName, channel, showEnvSelection = false) {
+        // 选择渠道并构建（用于上传前的构建）
+        function selectChannelForUpload(projectName, channelId) {
+            // 存储用户选择的渠道
+            localStorage.setItem(`lastChannel_${projectName}`, channelId);
+            
+            closeModal();
+            setTimeout(() => buildWithChannel(projectName, channelId, true), 100);
+        }
             return new Promise((resolve, reject) => {
                 const dropdown = document.getElementById(`channel-dropdown-${projectName}`);
                 if (dropdown) {

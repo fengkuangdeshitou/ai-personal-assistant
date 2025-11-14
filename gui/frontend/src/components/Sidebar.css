@@ -1,0 +1,154 @@
+.sidebar {
+  background: rgba(255, 255, 255, 0.95) !important;
+  backdrop-filter: blur(10px);
+  box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+  padding: 30px 20px;
+  position: fixed;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.sidebar .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.sidebar-header {
+  text-align: center;
+  margin-bottom: 30px;
+  padding-bottom: 20px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.sidebar-header h2 {
+  color: #667eea;
+  font-size: 1.5em;
+  margin-bottom: 5px;
+}
+
+.sidebar-header .version {
+  color: #999;
+  font-size: 0.9em;
+}
+
+.nav-menu {
+  background: transparent !important;
+  border: none !important;
+  flex: 1;
+}
+
+.nav-menu .ant-menu-item {
+  margin: 8px 0 !important;
+  border-radius: 10px !important;
+  transition: all 0.3s !important;
+  height: auto !important;
+  line-height: normal !important;
+  padding: 12px 15px !important;
+}
+
+.nav-menu .ant-menu-item:hover {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  color: white !important;
+  transform: translateX(5px);
+}
+
+.nav-menu .ant-menu-item-selected {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  color: white !important;
+}
+
+.nav-menu .ant-menu-item-selected:hover {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  color: white !important;
+}
+
+.nav-menu .ant-menu-item .anticon {
+  font-size: 1.2em !important;
+  margin-right: 12px !important;
+  min-width: 20px;
+}
+
+.nav-menu .ant-menu-item .ant-menu-title-content {
+  flex: 1;
+}
+
+.nav-menu .ant-menu-submenu-title {
+  margin: 8px 0 !important;
+  border-radius: 10px !important;
+  transition: all 0.3s !important;
+  height: auto !important;
+  line-height: normal !important;
+  padding: 12px 15px !important;
+}
+
+.nav-menu .ant-menu-submenu-title:hover {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  color: white !important;
+  transform: translateX(5px);
+}
+
+.nav-menu .ant-menu-submenu-selected .ant-menu-submenu-title {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  color: white !important;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 20px;
+  border-top: 1px solid #e0e0e0;
+  text-align: center;
+  font-size: 0.85em;
+  color: #999;
+}
+
+/* 自定义滚动条样式 */
+.sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(102, 126, 234, 0.3);
+  border-radius: 3px;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .sidebar {
+    position: relative !important;
+    height: auto !important;
+    width: 100% !important;
+    padding: 20px 15px !important;
+  }
+
+  .sidebar .ant-layout-sider-children {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .sidebar-header {
+    margin-bottom: 0;
+    padding-bottom: 15px;
+    margin-right: 20px;
+  }
+
+  .nav-menu {
+    flex: 1;
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .nav-menu .ant-menu-item {
+    margin: 0 4px !important;
+    white-space: nowrap;
+  }
+
+  .sidebar-footer {
+    display: none;
+  }
+}

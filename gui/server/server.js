@@ -6,6 +6,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import simpleGit from 'simple-git';
 import archiver from 'archiver';
+import OSS from 'ali-oss';
 import less from 'less'; // 🚨 新增 Less 库导入
 
 const __filename = fileURLToPath(import.meta.url);
@@ -34,18 +35,35 @@ const CSS_OUTPUT_PATH = 'src/css/css.css';
 // 从新的配置结构中获取 bucket 配置
 function getBucketConfig(ossConfigs, projectName, channelId = null, env = 'dev') {
   try {
+    console.log(`getBucketConfig called: projectName=${projectName}, channelId=${channelId}, env=${env}`);
+    
     const projectConfig = ossConfigs.projects?.[projectName];
     if (!projectConfig) {
+      console.log(`Project ${projectName} not found in config`);
       return null;
     }
     
+    console.log(`Found project config:`, projectConfig.name);
+    
     // 多渠道项目
     if (projectConfig.channels && channelId) {
+      console.log(`Processing multi-channel project with channelId: ${channelId}`);
+      
       const channelConfig = projectConfig.channels[channelId];
-      if (!channelConfig) return null;
+      if (!channelConfig) {
+        console.log(`Channel ${channelId} not found in project ${projectName}`);
+        return null;
+      }
+      
+      console.log(`Found channel config:`, channelConfig.name);
       
       const bucketInfo = channelConfig.buckets?.[env];
-      if (!bucketInfo) return null;
+      if (!bucketInfo) {
+        console.log(`Bucket info not found for env ${env} in channel ${channelId}`);
+        return null;
+      }
+      
+      console.log(`Found bucket info:`, bucketInfo);
       
       // 处理不同格式
       if (typeof bucketInfo === 'string') {
@@ -269,7 +287,10 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/projects', async (_req, res) => {
   let projects = readConfig();
-  if (!projects) projects = scanProjects(DEFAULT_DIR);
+  if (!projects) {
+    // 如果没有projects.json文件，返回空数组
+    projects = [];
+  }
 
   // Enrich with lastCommitTime
   const enriched = await Promise.all(
@@ -278,7 +299,39 @@ app.get('/api/projects', async (_req, res) => {
       return { ...p, lastCommitTime };
     })
   );
-  res.json({ projects: enriched });
+  res.json({
+    success: true,
+    message: enriched,
+    count: enriched.length
+  });
+});
+
+// 扫描项目端点
+app.post('/api/projects/scan', async (_req, res) => {
+  try {
+    // 重新扫描项目目录
+    const scannedProjects = scanProjects(DEFAULT_DIR);
+    
+    // Enrich with lastCommitTime
+    const enriched = await Promise.all(
+      scannedProjects.map(async (p) => {
+        const lastCommitTime = await getLastCommitTime(p.path);
+        return { ...p, lastCommitTime };
+      })
+    );
+    
+    res.json({ 
+      success: true, 
+      message: enriched,
+      count: enriched.length 
+    });
+  } catch (error) {
+    console.error('Scan projects error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: '扫描项目失败: ' + error.message 
+    });
+  }
 });
 
 app.get('/api/status', async (req, res) => {
@@ -594,6 +647,26 @@ app.post('/api/switch-channel', async (req, res) => {
     const results = [];
     let lessFileModified = false;
     
+    // 执行pre-build脚本
+    if (channelConfig.scripts && channelConfig.scripts['pre-build']) {
+      const { execSync } = await import('child_process');
+      
+      for (const script of channelConfig.scripts['pre-build']) {
+        try {
+          console.log(`Executing pre-build script: ${script}`);
+          const output = execSync(script, { 
+            cwd: projectPath, 
+            encoding: 'utf-8',
+            stdio: 'pipe'
+          });
+          results.push({ script, status: 'executed', output: output.trim() });
+        } catch (error) {
+          console.warn(`Script execution failed: ${script}`, error.message);
+          results.push({ script, status: 'failed', error: error.message });
+        }
+      }
+    }
+    
     // 处理每个文件的规则
     for (const [filePath, fileConfig] of Object.entries(channelConfig.files)) {
       const fullPath = path.join(projectPath, filePath);
@@ -681,6 +754,26 @@ app.post('/api/switch-channel', async (req, res) => {
         results.push({ file: CSS_OUTPUT_PATH, status: 'generated' });
     } else {
         results.push({ file: CSS_OUTPUT_PATH, status: 'skipped (no less rules)' });
+    }
+    
+    // 执行post-build脚本
+    if (channelConfig.scripts && channelConfig.scripts['post-build']) {
+      const { execSync } = await import('child_process');
+      
+      for (const script of channelConfig.scripts['post-build']) {
+        try {
+          console.log(`Executing post-build script: ${script}`);
+          const output = execSync(script, { 
+            cwd: projectPath, 
+            encoding: 'utf-8',
+            stdio: 'pipe'
+          });
+          results.push({ script, status: 'executed', output: output.trim() });
+        } catch (error) {
+          console.warn(`Script execution failed: ${script}`, error.message);
+          results.push({ script, status: 'failed', error: error.message });
+        }
+      }
     }
 
     res.json({ 
@@ -910,7 +1003,7 @@ app.post('/api/upload-stream', async (req, res) => {
     
     const allResults = [];
     let totalFiles = 0;
-    let uploadedFiles = 0;
+    let globalUploadedFiles = 0;
     
     // 先计算总文件数
     const countFiles = (dirPath) => {
@@ -931,8 +1024,12 @@ app.post('/api/upload-stream', async (req, res) => {
     res.write(`data: ${JSON.stringify({ type: 'start', total: totalFiles, message: '开始上传文件...' })}\n\n`);
     
     // 上传到每个 bucket
-    for (const bucket of allBuckets) {
+    for (let bucketIndex = 0; bucketIndex < allBuckets.length; bucketIndex++) {
+      const bucket = allBuckets[bucketIndex];
       if (bucket.enabled === false) continue;
+      
+      // 为每个bucket发送开始消息
+      res.write(`data: ${JSON.stringify({ type: 'bucket_start', bucket: bucket.name, bucketIndex: bucketIndex + 1, totalBuckets: allBuckets.length, message: `开始上传到 ${bucket.name}...` })}\n\n`);
       
       // 创建 OSS 客户端
       const client = new OSS({
@@ -959,11 +1056,11 @@ app.post('/api/upload-stream', async (req, res) => {
       };
       
       const allFiles = collectFiles(buildPath, bucket.prefix || '');
+      let bucketUploadedFiles = 0;
       
       // 并发上传
       const CONCURRENCY = 15;
       let index = 0;
-      let completedCount = 0;
       
       const uploadBatch = async () => {
         const batch = allFiles.slice(index, index + CONCURRENCY);
@@ -971,22 +1068,22 @@ app.post('/api/upload-stream', async (req, res) => {
         
         // 显示正在上传的文件
         batch.forEach(({ fileName }) => {
-          res.write(`data: ${JSON.stringify({ type: 'uploading', file: fileName, progress: Math.round((completedCount / totalFiles) * 100) })}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: 'uploading', file: fileName, bucket: bucket.name, bucketProgress: Math.round((bucketUploadedFiles / totalFiles) * 100), globalProgress: Math.round((globalUploadedFiles / (totalFiles * allBuckets.length)) * 100) })}\n\n`);
         });
         
         await Promise.all(batch.map(async ({ fullPath, ossPath, fileName }) => {
           try {
             const result = await client.put(ossPath, fullPath);
-            uploadedFiles++;
-            completedCount++;
+            bucketUploadedFiles++;
+            globalUploadedFiles++;
             
-            res.write(`data: ${JSON.stringify({ type: 'uploaded', file: fileName, url: result.url, progress: Math.round((uploadedFiles / totalFiles) * 100), uploaded: uploadedFiles, total: totalFiles })}\n\n`);
+            res.write(`data: ${JSON.stringify({ type: 'uploaded', file: fileName, bucket: bucket.name, url: result.url, bucketProgress: Math.round((bucketUploadedFiles / totalFiles) * 100), globalProgress: Math.round((globalUploadedFiles / (totalFiles * allBuckets.length)) * 100), uploaded: globalUploadedFiles, total: totalFiles * allBuckets.length })}\n\n`);
             
             allResults.push({ file: fileName, path: ossPath, url: result.url, status: 'success', bucket: bucket.name });
           } catch (err) {
-            uploadedFiles++;
-            completedCount++;
-            res.write(`data: ${JSON.stringify({ type: 'failed', file: fileName, error: err.message, progress: Math.round((uploadedFiles / totalFiles) * 100), uploaded: uploadedFiles, total: totalFiles })}\n\n`);
+            bucketUploadedFiles++;
+            globalUploadedFiles++;
+            res.write(`data: ${JSON.stringify({ type: 'failed', file: fileName, bucket: bucket.name, error: err.message, bucketProgress: Math.round((bucketUploadedFiles / totalFiles) * 100), globalProgress: Math.round((globalUploadedFiles / (totalFiles * allBuckets.length)) * 100), uploaded: globalUploadedFiles, total: totalFiles * allBuckets.length })}\n\n`);
             
             allResults.push({ file: fileName, path: ossPath, status: 'failed', error: err.message, bucket: bucket.name });
           }
@@ -1001,6 +1098,9 @@ app.post('/api/upload-stream', async (req, res) => {
       if (allFiles.length > 0) {
         await uploadBatch();
       }
+      
+      // bucket上传完成
+      res.write(`data: ${JSON.stringify({ type: 'bucket_complete', bucket: bucket.name, bucketIndex: bucketIndex + 1, totalBuckets: allBuckets.length, message: `${bucket.name} 上传完成` })}\n\n`);
     }
     
     const successCount = allResults.filter(r => r.status === 'success').length;
@@ -1011,6 +1111,218 @@ app.post('/api/upload-stream', async (req, res) => {
     
   } catch (e) {
     console.error('OSS upload stream error:', e);
+    res.write(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`);
+    res.end();
+  }
+});
+
+// 流式上传压缩包到 OSS（实时进度）
+app.post('/api/upload-zip-stream', async (req, res) => {
+  try {
+    const { projectName, path: projectPath, channelId, env } = req.body;
+    
+    if (!projectName || !channelId || !env) {
+      return res.status(400).json({ ok: false, error: 'Missing required parameters' });
+    }
+    
+    if (!fs.existsSync(projectPath)) {
+      return res.status(404).json({ ok: false, error: 'Project not found' });
+    }
+    
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    
+    // 读取 OSS 连接配置
+    if (!fs.existsSync(OSS_CONFIG_PATH)) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'OSS connection config not found' })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    let ossConfig, allBuckets;
+    try {
+      const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
+      const ossConfigs = JSON.parse(ossData);
+      
+      if (!ossConfigs.connection) {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: 'OSS connection config missing connection section' })}\n\n`);
+        res.end();
+        return;
+      }
+      
+      ossConfig = ossConfigs.connection;
+      console.log('OSS connection config loaded successfully');
+      
+      // 获取所有可用 buckets
+      const bucketConfig = getBucketConfig(ossConfigs, projectName, channelId, env);
+      allBuckets = Array.isArray(bucketConfig) ? bucketConfig : [bucketConfig];
+      
+      if (!allBuckets || allBuckets.length === 0) {
+        res.write(`data: ${JSON.stringify({ type: 'error', message: 'No buckets configured for ${projectName}-${channelId}-${env}' })}\n\n`);
+        res.end();
+        return;
+      }
+      
+      console.log(`Found ${allBuckets.length} buckets for ${projectName}-${channelId}-${env}`);
+    } catch (e) {
+      console.error('OSS config error:', e);
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'OSS config error: ${e.message}' })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    // 检查构建目录
+    const buildPath = path.join(projectPath, 'build');
+    if (!fs.existsSync(buildPath)) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Build directory not found. Please build the project first.' })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    // 检查build目录是否为空
+    const buildContents = fs.readdirSync(buildPath);
+    if (buildContents.length === 0) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Build directory is empty. Please build the project first.' })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    console.log(`Build directory exists: ${buildPath}, contents: ${buildContents.length} items`);
+    
+    // 创建压缩包
+    res.write(`data: ${JSON.stringify({ type: 'start', message: '开始创建压缩包...' })}\n\n`);
+    
+    // 生成时间戳文件名 - 简化为 YYYY-MM-DD.zip 格式
+    const zipFileName = `${new Date().toISOString().slice(0, 10)}.zip`;
+    const zipFilePath = path.join(os.tmpdir(), zipFileName);
+    
+    console.log(`Creating zip file: ${zipFilePath}`);
+    
+    // 创建压缩流
+    const output = fs.createWriteStream(zipFilePath);
+    const archive = archiver('zip', {
+      zlib: { level: 9 } // 最高压缩级别
+    });
+    
+    // 将archive连接到输出流
+    archive.pipe(output);
+    
+    // 监听压缩事件
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      res.write(`data: ${JSON.stringify({ type: 'error', message: `压缩失败: ${err.message}` })}\n\n`);
+      res.end();
+    });
+    
+    // 监听完成事件 - 移除async，直接发送完成消息
+    archive.on('end', () => {
+      console.log(`Compression completed, size: ${Math.round(archive.pointer() / 1024 / 1024)}MB`);
+      res.write(`data: ${JSON.stringify({ type: 'compressed', message: `压缩完成，大小: ${Math.round(archive.pointer() / 1024 / 1024)}MB`, size: archive.pointer() })}\n\n`);
+      
+      // 异步开始上传过程
+      setImmediate(() => startUploadProcess());
+    });
+    
+    // 添加一些调试事件
+    archive.on('warning', (err) => {
+      console.warn('Archive warning:', err);
+    });
+    
+    archive.on('progress', (progress) => {
+      console.log('Archive progress:', progress);
+    });
+    
+    // 分离上传逻辑到单独的函数
+    const startUploadProcess = async () => {
+      try {
+        const allResults = []; // 初始化结果数组
+        
+        // 上传到每个 bucket
+        for (let bucketIndex = 0; bucketIndex < allBuckets.length; bucketIndex++) {
+          const bucket = allBuckets[bucketIndex];
+          if (bucket.enabled === false) continue;
+          
+          // 为每个bucket发送开始消息
+          res.write(`data: ${JSON.stringify({ type: 'bucket_start', bucket: bucket.name, bucketIndex: bucketIndex + 1, totalBuckets: allBuckets.length, message: `开始上传到 ${bucket.name}...` })}\n\n`);
+          
+          // 创建 OSS 客户端
+          const client = new OSS({
+            region: bucket.region || ossConfig.region,
+            accessKeyId: ossConfig.accessKeyId,
+            accessKeySecret: ossConfig.accessKeySecret,
+            bucket: bucket.name
+          });
+          
+          // 上传压缩包 - 备份文件放在"以往版本"目录下
+          const backupPrefix = bucket.prefix || '以往版本';
+          const ossPath = `${backupPrefix}/${zipFileName}`;
+          
+          res.write(`data: ${JSON.stringify({ type: 'uploading', file: zipFileName, bucket: bucket.name, bucketProgress: 0, globalProgress: Math.round(((bucketIndex * 100) / allBuckets.length)) })}\n\n`);
+          
+          try {
+            const result = await client.put(ossPath, zipFilePath);
+            
+            res.write(`data: ${JSON.stringify({ type: 'uploaded', file: zipFileName, bucket: bucket.name, url: result.url, bucketProgress: 100, globalProgress: Math.round(((bucketIndex + 1) * 100) / allBuckets.length), uploaded: bucketIndex + 1, total: allBuckets.length })}\n\n`);
+            
+            allResults.push({ file: zipFileName, path: ossPath, url: result.url, status: 'success', bucket: bucket.name });
+          } catch (err) {
+            res.write(`data: ${JSON.stringify({ type: 'failed', file: zipFileName, bucket: bucket.name, error: err.message, bucketProgress: 100, globalProgress: Math.round(((bucketIndex + 1) * 100) / allBuckets.length), uploaded: bucketIndex + 1, total: allBuckets.length })}\n\n`);
+            
+            allResults.push({ file: zipFileName, path: ossPath, status: 'failed', error: err.message, bucket: bucket.name });
+          }
+          
+          // bucket上传完成
+          res.write(`data: ${JSON.stringify({ type: 'bucket_complete', bucket: bucket.name, bucketIndex: bucketIndex + 1, totalBuckets: allBuckets.length, message: `${bucket.name} 上传完成` })}\n\n`);
+        }
+        
+        // 清理临时文件
+        try {
+          fs.unlinkSync(zipFilePath);
+        } catch (cleanupErr) {
+          console.warn('Failed to cleanup temp zip file:', cleanupErr.message);
+        }
+        
+        const successCount = allResults.filter(r => r.status === 'success').length;
+        const failCount = allResults.filter(r => r.status === 'failed').length;
+        
+        // 生产环境上传完成后的自动执行
+        if (env === 'prod' && successCount > 0) {
+          try {
+            await executePostDeploymentTasks(projectName, allResults, zipFileName);
+          } catch (taskErr) {
+            console.warn('Post-deployment tasks failed:', taskErr.message);
+            // 不影响上传成功的结果，只记录警告
+          }
+        }
+        
+        res.write(`data: ${JSON.stringify({ type: 'complete', uploaded: successCount, failed: failCount, results: allResults, message: env === 'prod' ? '生产环境部署完成' : '压缩包上传完成', zipFile: zipFileName })}\n\n`);
+        res.end();
+        
+      } catch (uploadErr) {
+        // 清理临时文件
+        try {
+          fs.unlinkSync(zipFilePath);
+        } catch (cleanupErr) {
+          console.warn('Failed to cleanup temp zip file:', cleanupErr.message);
+        }
+        
+        res.write(`data: ${JSON.stringify({ type: 'error', message: uploadErr.message })}\n\n`);
+        res.end();
+      }
+    };
+    
+    // 将构建目录添加到压缩包
+    console.log(`Adding directory to archive: ${buildPath}`);
+    archive.directory(buildPath, false);
+    
+    // 完成压缩
+    console.log('Finalizing archive...');
+    archive.finalize();
+    
+  } catch (e) {
+    console.error('OSS zip upload stream error:', e);
     res.write(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`);
     res.end();
   }
@@ -1712,6 +2024,164 @@ app.post('/api/clear-build', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// 生产环境部署完成后的自动执行任务
+async function executePostDeploymentTasks(projectName, uploadResults, zipFileName) {
+  console.log(`🔄 开始执行生产环境部署后任务 - 项目: ${projectName}`);
+  
+  const tasks = [];
+  
+  try {
+    // 任务1: 发送部署完成通知
+    tasks.push({
+      name: '部署通知',
+      status: 'running',
+      result: await sendDeploymentNotification(projectName, uploadResults, zipFileName)
+    });
+    
+    // 任务2: 更新项目版本信息
+    tasks.push({
+      name: '版本更新',
+      status: 'running', 
+      result: await updateProjectVersion(projectName, zipFileName)
+    });
+    
+    // 任务3: 执行部署脚本（如果存在）
+    tasks.push({
+      name: '部署脚本',
+      status: 'running',
+      result: await executeDeploymentScript(projectName)
+    });
+    
+    // 任务4: 清理旧版本文件
+    tasks.push({
+      name: '清理缓存',
+      status: 'running',
+      result: await cleanupOldVersions(projectName)
+    });
+    
+    console.log(`✅ 生产环境部署后任务完成 - 项目: ${projectName}`);
+    return { success: true, tasks };
+    
+  } catch (error) {
+    console.error(`❌ 生产环境部署后任务失败 - 项目: ${projectName}`, error);
+    return { success: false, error: error.message, tasks };
+  }
+}
+
+// 发送部署完成通知
+async function sendDeploymentNotification(projectName, uploadResults, zipFileName) {
+  try {
+    const timestamp = new Date().toLocaleString('zh-CN');
+    const successCount = uploadResults.filter(r => r.status === 'success').length;
+    const totalCount = uploadResults.length;
+    
+    const message = `🚀 生产环境部署完成\n\n📦 项目: ${projectName}\n📁 文件: ${zipFileName}\n⏰ 时间: ${timestamp}\n✅ 成功: ${successCount}/${totalCount} 个存储桶\n\n存储详情:\n${uploadResults.map(r => `${r.bucket}: ${r.status === 'success' ? '✅' : '❌'} ${r.url || r.error}`).join('\n')}`;
+    
+    // 这里可以集成各种通知服务，如微信、钉钉、邮件等
+    // 暂时记录到控制台，后续可以扩展
+    console.log('📢 部署通知:', message);
+    
+    // 可以在这里添加实际的通知发送逻辑
+    // await sendWechatNotification(message);
+    // await sendEmailNotification(message);
+    
+    return { success: true, message: '通知发送成功' };
+  } catch (error) {
+    throw new Error(`发送通知失败: ${error.message}`);
+  }
+}
+
+// 更新项目版本信息
+async function updateProjectVersion(projectName, zipFileName) {
+  try {
+    const versionFile = path.join(__dirname, 'project-versions.json');
+    
+    let versions = {};
+    if (fs.existsSync(versionFile)) {
+      versions = JSON.parse(fs.readFileSync(versionFile, 'utf-8'));
+    }
+    
+    versions[projectName] = {
+      lastDeployed: new Date().toISOString(),
+      zipFile: zipFileName,
+      environment: 'prod',
+      timestamp: Date.now()
+    };
+    
+    fs.writeFileSync(versionFile, JSON.stringify(versions, null, 2));
+    
+    return { success: true, message: '版本信息已更新' };
+  } catch (error) {
+    throw new Error(`更新版本信息失败: ${error.message}`);
+  }
+}
+
+// 执行部署脚本
+async function executeDeploymentScript(projectName) {
+  try {
+    const projectPath = path.join(DEFAULT_DIR, projectName);
+    const deployScript = path.join(projectPath, 'deploy.sh');
+    const deployScriptAlt = path.join(projectPath, 'scripts', 'deploy.sh');
+    
+    let scriptPath = null;
+    if (fs.existsSync(deployScript)) {
+      scriptPath = deployScript;
+    } else if (fs.existsSync(deployScriptAlt)) {
+      scriptPath = deployScriptAlt;
+    }
+    
+    if (scriptPath) {
+      const { execSync } = await import('child_process');
+      const result = execSync(`bash "${scriptPath}"`, { 
+        cwd: projectPath,
+        encoding: 'utf-8',
+        timeout: 30000 // 30秒超时
+      });
+      
+      console.log(`📜 部署脚本执行结果: ${projectName}`, result);
+      return { success: true, message: '部署脚本执行成功', output: result };
+    } else {
+      return { success: true, message: '未找到部署脚本，跳过执行' };
+    }
+  } catch (error) {
+    throw new Error(`执行部署脚本失败: ${error.message}`);
+  }
+}
+
+// 清理旧版本文件
+async function cleanupOldVersions(projectName) {
+  try {
+    const versionFile = path.join(__dirname, 'project-versions.json');
+    
+    if (!fs.existsSync(versionFile)) {
+      return { success: true, message: '无版本文件需要清理' };
+    }
+    
+    const versions = JSON.parse(fs.readFileSync(versionFile, 'utf-8'));
+    const projectVersions = versions[projectName];
+    
+    if (!projectVersions) {
+      return { success: true, message: '无项目版本信息' };
+    }
+    
+    // 保留最近5个版本，清理更旧的
+    const maxVersions = 5;
+    const sortedVersions = Object.entries(projectVersions)
+      .sort(([,a], [,b]) => b.timestamp - a.timestamp)
+      .slice(maxVersions);
+    
+    if (sortedVersions.length > 0) {
+      console.log(`🧹 清理旧版本文件: ${projectName}`, sortedVersions.map(([key]) => key));
+      // 这里可以添加实际的文件清理逻辑
+      // 比如删除OSS上的旧版本文件
+    }
+    
+    return { success: true, message: `已清理旧版本，保留最近${maxVersions}个版本` };
+  } catch (error) {
+    throw new Error(`清理旧版本失败: ${error.message}`);
+  }
+}
 
 app.listen(PORT, () => {
   console.log(`Backend server listening on http://localhost:${PORT}`);

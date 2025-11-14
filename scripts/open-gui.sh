@@ -61,28 +61,28 @@ main() {
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS - 优先使用 .app 应用
         if [ -d "$APP_PATH" ]; then
-            open "$APP_PATH"
+            bash "$HOME/.ai-assistant/gui/AI助理.command"
             echo -e "${GREEN}✅ AI 助理已启动！${NC}"
             echo -e "${BLUE}💡 后端服务会自动启动${NC}"
         else
             # 降级到直接打开 HTML
-            open "$GUI_PATH"
+            bash "$HOME/.ai-assistant/gui/AI助理.command"
             echo -e "${GREEN}✅ GUI 已在默认浏览器中打开！${NC}"
         fi
     elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
         # Linux
         if command -v xdg-open &> /dev/null; then
-            xdg-open "$GUI_PATH"
+            bash "$HOME/.ai-assistant/gui/AI助理.command"
             echo -e "${GREEN}✅ GUI 已在默认浏览器中打开！${NC}"
         else
             echo -e "${YELLOW}⚠️  请手动在浏览器中打开: $GUI_PATH${NC}"
         fi
     elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]]; then
         # Windows (Git Bash / WSL)
-        start "$GUI_PATH"
+        bash "$HOME/.ai-assistant/gui/AI助理.command"
         echo -e "${GREEN}✅ GUI 已在默认浏览器中打开！${NC}"
     else
-        echo -e "${YELLOW}⚠️  无法自动打开，请手动在浏览器中打开: $GUI_PATH${NC}"
+        echo -e "${YELLOW}⚠️  无法自动启动，请手动运行: bash "$HOME/.ai-assistant/gui/AI助理.command"${NC}"
     fi
     
     echo ""
