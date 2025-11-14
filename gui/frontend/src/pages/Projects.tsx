@@ -267,18 +267,23 @@ const Projects: React.FC = () => {
 
   const handleUpload = async (projectName: string) => {
     setSelectedProject(projectName);
-    // 加载OSS配置
-    await loadOSSConfig(projectName);
-
-    // 等待更长时间确保状态更新
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    // 检查是否有渠道配置
-    if (channels && channels.channels && Object.keys(channels.channels).length > 0) {
-      // 有渠道配置，显示渠道选择模态框
-      setUploadModalVisible(true);
-    } else {
-      // 没有渠道配置，显示简单环境选择模态框
+    
+    try {
+      // 加载OSS配置并获取结果
+      const configResult = await loadOSSConfig(projectName);
+      
+      // 检查是否有渠道配置
+      if (configResult.channels && configResult.channels.channels && Object.keys(configResult.channels.channels).length > 0) {
+        // 有渠道配置，显示渠道选择模态框
+        setUploadModalVisible(true);
+      } else {
+        // 没有渠道配置，显示简单环境选择模态框
+        setSimpleUploadModalVisible(true);
+      }
+    } catch (error) {
+      console.error('Failed to load OSS config:', error);
+      message.error('加载OSS配置失败，请重试');
+      // 即使失败也显示Modal，让用户看到错误信息
       setSimpleUploadModalVisible(true);
     }
   };
