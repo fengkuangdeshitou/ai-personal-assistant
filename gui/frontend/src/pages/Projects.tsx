@@ -1061,37 +1061,101 @@ const Projects: React.FC = () => {
 
       {/* 简单上传选项弹窗（无渠道配置的项目） */}
       <Modal
-        title={`上传到OSS: ${selectedProject}`}
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <CloudUploadOutlined style={{ color: '#1890ff' }} />
+            <span>上传到OSS</span>
+            <Tag color="blue">{selectedProject}</Tag>
+          </div>
+        }
         open={simpleUploadModalVisible}
         onCancel={() => setSimpleUploadModalVisible(false)}
         footer={null}
-        width={500}
+        width={600}
+        centered
+        bodyStyle={{ padding: '24px' }}
       >
         {ossLoading ? (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <LoadingOutlined style={{ fontSize: '24px' }} />
-            <div style={{ marginTop: '10px' }}>正在加载OSS配置...</div>
+          <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+            <LoadingOutlined style={{ fontSize: '32px', color: '#1890ff' }} />
+            <div style={{ marginTop: '16px', fontSize: '16px', color: '#666' }}>
+              正在加载OSS配置...
+            </div>
           </div>
         ) : ossConfig ? (
           <div>
-            <div style={{ marginBottom: '20px' }}>
-              <Text strong>选择上传环境:</Text>
+            <div style={{ marginBottom: '24px', textAlign: 'center' }}>
+              <Text strong style={{ fontSize: '16px', color: '#262626' }}>
+                选择上传环境
+              </Text>
+              <div style={{ marginTop: '8px', color: '#8c8c8c', fontSize: '14px' }}>
+                请选择要将项目上传到的环境
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: '12px', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', gap: '16px', flexDirection: 'column' }}>
               {ossConfig.buckets?.dev && (
                 <Card
                   hoverable
                   onClick={() => executeSimpleUpload('dev')}
-                  style={{ cursor: 'pointer' }}
+                  bodyStyle={{ padding: '20px' }}
+                  style={{
+                    cursor: 'pointer',
+                    border: '2px solid #f0f0f0',
+                    borderRadius: '12px',
+                    transition: 'all 0.3s ease',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = '#91d5ff';
+                    e.currentTarget.style.boxShadow = '0 4px 16px rgba(24,144,255,0.2)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = '#f0f0f0';
+                    e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
+                  }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontWeight: 'bold' }}>📦 开发环境</div>
-                      <div style={{ fontSize: '12px', color: '#666' }}>
-                        Bucket: {typeof ossConfig.buckets.dev === 'string' ? ossConfig.buckets.dev : ossConfig.buckets.dev.name}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                        <div style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '8px',
+                          background: 'linear-gradient(135deg, #87e8de, #36cfc9)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}>
+                          🧪
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: '600', fontSize: '16px', color: '#262626' }}>
+                            开发环境
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#52c41a', fontWeight: '500' }}>
+                            Development
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#8c8c8c', marginTop: '4px' }}>
+                        Bucket: <Text code style={{ fontSize: '12px' }}>
+                          {typeof ossConfig.buckets.dev === 'string' ? ossConfig.buckets.dev : ossConfig.buckets.dev.name}
+                        </Text>
                       </div>
                     </div>
-                    <CloudUploadOutlined style={{ fontSize: '20px', color: '#1890ff' }} />
+                    <div style={{
+                      width: '48px',
+                      height: '48px',
+                      borderRadius: '12px',
+                      background: 'linear-gradient(135deg, #91d5ff, #1890ff)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'white',
+                      fontSize: '20px'
+                    }}>
+                      <CloudUploadOutlined />
+                    </div>
                   </div>
                 </Card>
               )}
@@ -1099,29 +1163,79 @@ const Projects: React.FC = () => {
                 <Card
                   hoverable
                   onClick={() => executeSimpleUpload('prod')}
-                  style={{ cursor: 'pointer' }}
+                  bodyStyle={{ padding: '20px' }}
+                  style={{
+                    cursor: 'pointer',
+                    border: '2px solid #f0f0f0',
+                    borderRadius: '12px',
+                    transition: 'all 0.3s ease',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = '#ffccc7';
+                    e.currentTarget.style.boxShadow = '0 4px 16px rgba(255,77,79,0.2)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = '#f0f0f0';
+                    e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
+                  }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontWeight: 'bold' }}>🚀 生产环境</div>
-                      <div style={{ fontSize: '12px', color: '#666' }}>
-                        Bucket: {Array.isArray(ossConfig.buckets.prod)
-                          ? ossConfig.buckets.prod.map((b: any) => b.name || b).join(' + ')
-                          : (typeof ossConfig.buckets.prod === 'string' ? ossConfig.buckets.prod : ossConfig.buckets.prod.name)
-                        }
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                        <div style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '8px',
+                          background: 'linear-gradient(135deg, #ffccc7, #ff7875)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}>
+                          🚀
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: '600', fontSize: '16px', color: '#262626' }}>
+                            生产环境
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#f5222d', fontWeight: '500' }}>
+                            Production
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '13px', color: '#8c8c8c', marginTop: '4px' }}>
+                        Bucket: <Text code style={{ fontSize: '12px' }}>
+                          {Array.isArray(ossConfig.buckets.prod)
+                            ? ossConfig.buckets.prod.map((b: any) => b.name || b).join(' + ')
+                            : (typeof ossConfig.buckets.prod === 'string' ? ossConfig.buckets.prod : ossConfig.buckets.prod.name)
+                          }
+                        </Text>
                       </div>
                     </div>
-                    <CloudUploadOutlined style={{ fontSize: '20px', color: '#1890ff' }} />
+                    <div style={{
+                      width: '48px',
+                      height: '48px',
+                      borderRadius: '12px',
+                      background: 'linear-gradient(135deg, #ffccc7, #ff4d4f)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'white',
+                      fontSize: '20px'
+                    }}>
+                      <CloudUploadOutlined />
+                    </div>
                   </div>
                 </Card>
               )}
             </div>
             {!ossConfig.buckets?.dev && !ossConfig.buckets?.prod && (
               <Alert
-                message="未找到bucket配置"
+                message="未找到Bucket配置"
                 description="请先在oss-connection-config.json中配置项目的bucket信息"
                 type="warning"
                 showIcon
+                style={{ marginTop: '20px', borderRadius: '8px' }}
               />
             )}
           </div>
@@ -1129,66 +1243,162 @@ const Projects: React.FC = () => {
           <Alert
             message="未找到OSS配置"
             description="请先在oss-connection-config.json中配置项目信息"
-            type="warning"
+            type="error"
             showIcon
+            style={{ borderRadius: '8px' }}
           />
         )}
       </Modal>
 
       {/* 进度显示弹窗 */}
       <Modal
-        title={progressTitle}
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {currentOperation === 'upload' && <CloudUploadOutlined style={{ color: '#1890ff' }} />}
+            {currentOperation === 'build' && <BuildOutlined style={{ color: '#52c41a' }} />}
+            {currentOperation === 'git-pull' && <DownOutlined style={{ color: '#722ed1' }} />}
+            {currentOperation === 'git-push' && <UpOutlined style={{ color: '#eb2f96' }} />}
+            <span>{progressTitle}</span>
+          </div>
+        }
         open={progressModalVisible}
         footer={null}
         closable={false}
-        width={700}
+        width={800}
+        centered
+        bodyStyle={{ padding: '24px' }}
       >
-        <div style={{ padding: '20px' }}>
-          <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+        <div style={{ minHeight: '200px' }}>
+          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
             {currentOperation === 'upload' && (
-              <Progress
-                type="circle"
-                percent={progressPercent}
-                status={progressText.includes('失败') ? 'exception' : progressText.includes('成功') ? 'success' : 'active'}
-                style={{ marginBottom: '10px' }}
-              />
+              <div style={{ marginBottom: '20px' }}>
+                <Progress
+                  type="circle"
+                  percent={progressPercent}
+                  status={progressText.includes('失败') ? 'exception' : progressText.includes('成功') ? 'success' : 'active'}
+                  size={80}
+                  strokeWidth={8}
+                  strokeColor={
+                    progressText.includes('失败') ? '#ff4d4f' :
+                    progressText.includes('成功') ? '#52c41a' : '#1890ff'
+                  }
+                />
+              </div>
             )}
-            <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{progressText}</div>
+            <div style={{
+              fontSize: '18px',
+              fontWeight: '600',
+              color: '#262626',
+              marginBottom: '8px'
+            }}>
+              {progressText}
+            </div>
+            {currentOperation === 'upload' && (
+              <div style={{ fontSize: '14px', color: '#8c8c8c' }}>
+                {progressPercent < 30 && '正在准备文件...'}
+                {progressPercent >= 30 && progressPercent < 70 && '正在上传中...'}
+                {progressPercent >= 70 && progressPercent < 100 && '即将完成...'}
+                {progressPercent === 100 && '上传完成！'}
+              </div>
+            )}
           </div>
 
           {progressLogs.length > 0 && (
-            <div
-              ref={logsRef}
-              style={{
-                maxHeight: '300px',
-                overflowY: 'auto',
-                background: '#1e1e1e',
-                color: '#00ff00',
-                padding: '15px',
-                borderRadius: '8px',
-                fontFamily: 'Monaco, Menlo, "Ubuntu Mono", monospace',
-                fontSize: '12px',
-                whiteSpace: 'pre-wrap'
-              }}
-            >
-              {progressLogs.map((log, index) => (
-                <div key={index} style={{ marginBottom: '4px' }}>
-                  {log}
+            <div style={{ marginTop: '24px' }}>
+              <div style={{
+                fontSize: '14px',
+                fontWeight: '500',
+                color: '#262626',
+                marginBottom: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}>
+                📋 执行日志
+              </div>
+              <div
+                ref={logsRef}
+                style={{
+                  maxHeight: '350px',
+                  overflowY: 'auto',
+                  background: 'linear-gradient(135deg, #1a1a1a, #2a2a2a)',
+                  border: '1px solid #404040',
+                  borderRadius: '12px',
+                  padding: '20px',
+                  fontFamily: '"JetBrains Mono", "Fira Code", Monaco, Menlo, "Ubuntu Mono", monospace',
+                  fontSize: '13px',
+                  lineHeight: '1.6',
+                  color: '#e6f7ff',
+                  boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.3)',
+                  position: 'relative'
+                }}
+              >
+                {/* 添加终端风格的装饰 */}
+                <div style={{
+                  position: 'absolute',
+                  top: '8px',
+                  left: '12px',
+                  display: 'flex',
+                  gap: '6px'
+                }}>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ff5f57' }}></div>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ffbd2e' }}></div>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#28ca42' }}></div>
                 </div>
-              ))}
-              {Array.from(fileUploadStatus.entries()).map(([fileName, status]) => (
-                <div
-                  key={fileName}
-                  style={{
-                    marginBottom: '4px',
-                    color: status.status === 'uploading' ? '#ffa500' : // 橙色：正在上传
-                           status.status === 'uploaded' ? '#00ff00' : // 绿色：上传成功
-                           '#ff4444' // 红色：上传失败
-                  }}
-                >
-                  {fileName}: {status.message}
+
+                <div style={{ paddingTop: '20px' }}>
+                  {progressLogs.map((log, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        marginBottom: '6px',
+                        padding: '2px 0',
+                        borderLeft: log.includes('错误') || log.includes('失败') ? '3px solid #ff4d4f' :
+                                   log.includes('成功') || log.includes('完成') ? '3px solid #52c41a' :
+                                   '3px solid transparent'
+                      }}
+                    >
+                      <span style={{ color: '#888', marginRight: '8px' }}>$</span>
+                      {log}
+                    </div>
+                  ))}
+
+                  {/* 文件上传状态 */}
+                  {Array.from(fileUploadStatus.entries()).map(([fileName, status]) => (
+                    <div
+                      key={fileName}
+                      style={{
+                        marginBottom: '6px',
+                        padding: '4px 8px',
+                        borderRadius: '6px',
+                        background: status.status === 'uploading' ? 'rgba(255,165,0,0.1)' :
+                                  status.status === 'uploaded' ? 'rgba(82,196,26,0.1)' :
+                                  'rgba(255,68,68,0.1)',
+                        border: `1px solid ${
+                          status.status === 'uploading' ? '#ffa500' :
+                          status.status === 'uploaded' ? '#52c41a' :
+                          '#ff4444'
+                        }`,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                      }}
+                    >
+                      <span style={{
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        background: status.status === 'uploading' ? '#ffa500' :
+                                   status.status === 'uploaded' ? '#52c41a' :
+                                   '#ff4444'
+                      }}></span>
+                      <span style={{ fontSize: '12px', fontFamily: 'Arial, sans-serif' }}>
+                        {fileName}: {status.message}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </div>
           )}
         </div>

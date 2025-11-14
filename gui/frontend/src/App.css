@@ -5,25 +5,31 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: #f5f5f5;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   min-height: 100vh;
+  color: #1a1a1a;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .main-layout {
   min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
 .main-layout .ant-layout {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: transparent;
 }
 
 .content-area {
-  padding: 30px;
+  padding: 32px;
   min-height: 100vh;
   overflow-y: auto;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  margin-left: 260px;
+  margin-left: 280px;
+  transition: margin-left 0.3s ease;
 }
 
 .content-area .ant-layout-content {
@@ -31,23 +37,25 @@ body {
 }
 
 .container {
-  background: white;
-  border-radius: 20px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-  max-width: 1200px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: 24px;
+  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.15);
+  max-width: 1400px;
   margin: 0 auto;
-  padding: 40px;
-  animation: slideIn 0.5s ease-out;
+  padding: 48px;
+  animation: slideIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 @keyframes slideIn {
   from {
     opacity: 0;
-    transform: translateY(-30px);
+    transform: translateY(-40px) scale(0.95);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -117,48 +125,99 @@ body {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
-  padding: 12px 25px;
-  border-radius: 25px;
+  padding: 14px 32px;
+  border-radius: 16px;
   font-size: 1em;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.3s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.3);
+  position: relative;
+  overflow: hidden;
+}
+
+.btn::before, .action-btn::before, .save-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s;
 }
 
 .btn:hover, .action-btn:hover, .save-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 30px rgba(102, 126, 234, 0.4);
+}
+
+.btn:hover::before, .action-btn:hover::before, .save-btn:hover::before {
+  left: 100%;
+}
+
+.btn:active, .action-btn:active, .save-btn:active {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 10px rgba(102, 126, 234, 0.3);
 }
 
 .form-group {
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .form-group label {
   display: block;
-  margin-bottom: 5px;
-  color: #333;
-  font-weight: 500;
+  margin-bottom: 8px;
+  color: #374151;
+  font-weight: 600;
+  font-size: 0.95rem;
 }
 
-.form-group input {
+.form-group input, .form-group textarea, .form-group select {
   width: 100%;
-  padding: 12px;
-  border: 2px solid #e0e0e0;
-  border-radius: 8px;
-  font-size: 1em;
-  transition: border-color 0.3s;
+  padding: 14px 16px;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  font-size: 1rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(10px);
 }
 
-.form-group input:focus {
+.form-group input:focus, .form-group textarea:focus, .form-group select:focus {
   outline: none;
   border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.form-group textarea {
+  resize: vertical;
+  min-height: 120px;
 }
 
 /* 响应式设计 */
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .content-area {
     margin-left: 0;
-    padding: 20px;
+    padding: 24px;
+  }
+
+  .container {
+    padding: 32px;
+    border-radius: 20px;
+  }
+}
+
+@media (max-width: 768px) {
+  .content-area {
+    padding: 16px;
+  }
+
+  .container {
+    padding: 24px;
+    border-radius: 16px;
+    margin: 0 8px;
   }
 
   .sidebar {
@@ -192,5 +251,17 @@ body {
 
   .sidebar-footer {
     display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .container {
+    padding: 16px;
+    margin: 0 4px;
+  }
+
+  .btn, .action-btn, .save-btn {
+    padding: 12px 24px;
+    font-size: 0.9rem;
   }
 }
