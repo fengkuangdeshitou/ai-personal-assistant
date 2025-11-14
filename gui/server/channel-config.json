@@ -5,6 +5,13 @@
       "channels": {
         "hg": {
           "name": "嘿咕游戏",
+          "scripts": {
+            "pre-build": [
+              "echo '切换到嘿咕游戏渠道'",
+              "npm run channel:hg 2>/dev/null || echo 'npm script not found, skipping'"
+            ],
+            "post-build": []
+          },
           "buckets": {
             "dev": "hg-dev-placeholder",
             "prod": "heiguyx"
@@ -56,10 +63,6 @@
             },
             "src/BoxType.js": {
               "rules": [
-                {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const BoxType = 'hg')\\s*$"
-                },
                 {
                   "action": "uncomment",
                   "pattern": "^\\s*//\\s*(export const BoxType = 'hg')\\s*$"
@@ -114,6 +117,13 @@
         },
         "05": {
           "name": "0.05折手游",
+          "scripts": {
+            "pre-build": [
+              "echo '切换到0.05折手游渠道'",
+              "npm run channel:05 2>/dev/null || echo 'npm script not found, skipping'"
+            ],
+            "post-build": []
+          },
           "buckets": {
             "dev": "05-dev-placeholder",
             "prod": "005zhegame"
@@ -170,10 +180,6 @@
                   "pattern": "^\\s*(export const BoxType = 'hg')\\s*$"
                 },
                 {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const BoxType = '05')\\s*$"
-                },
-                {
                   "action": "uncomment",
                   "pattern": "^\\s*//\\s*(export const BoxType = '05')\\s*$"
                 },
@@ -223,6 +229,13 @@
         },
         "01": {
           "name": "0.01折游戏",
+          "scripts": {
+            "pre-build": [
+              "echo '切换到0.01折游戏渠道'",
+              "npm run channel:01 2>/dev/null || echo 'npm script not found, skipping'"
+            ],
+            "post-build": []
+          },
           "buckets": {
             "dev": "01-dev-placeholder",
             "prod": "01zhegame"
@@ -283,10 +296,6 @@
                   "pattern": "^\\s*(export const BoxType = '05')\\s*$"
                 },
                 {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const BoxType = '01')\\s*$"
-                },
-                {
                   "action": "uncomment",
                   "pattern": "^\\s*//\\s*(export const BoxType = '01')\\s*$"
                 },
@@ -332,6 +341,13 @@
         },
         "hz": {
           "name": "惠爪游戏",
+          "scripts": {
+            "pre-build": [
+              "echo '切换到惠爪游戏渠道'",
+              "npm run channel:hz 2>/dev/null || echo 'npm script not found, skipping'"
+            ],
+            "post-build": []
+          },
           "buckets": {
             "dev": "hz-dev-placeholder",
             "prod": "ihuizhua"
@@ -394,10 +410,6 @@
                 {
                   "action": "comment",
                   "pattern": "^\\s*(export const BoxType = '01')\\s*$"
-                },
-                {
-                  "action": "comment",
-                  "pattern": "^\\s*(export const BoxType = 'hz')\\s*$"
                 },
                 {
                   "action": "uncomment",

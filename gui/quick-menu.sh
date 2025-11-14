@@ -26,8 +26,8 @@ echo ""
 echo "  6️⃣  扫描并更新项目列表"
 echo "     cd server && ./scan-projects.sh"
 echo ""
-echo "  7️⃣  在浏览器中打开 GUI"
-echo "     open index.html"
+echo "  7️⃣  启动React前端应用"
+echo "     cd frontend && npm start"
 echo ""
 echo "─────────────────────────────────────────────────────────────────"
 echo ""
@@ -59,8 +59,8 @@ case $choice in
         cd server && ./scan-projects.sh
         ;;
     7)
-        echo "🌐 打开 GUI..."
-        open index.html
+        echo "🚀 启动React前端应用..."
+        cd frontend && npm start
         ;;
     *)
         echo "❌ 无效选项"
