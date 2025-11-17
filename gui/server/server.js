@@ -837,18 +837,27 @@ app.post('/api/build-channel', async (req, res) => {
 });
 
 // 流式构建（实时输出）
-app.post('/api/build-stream', async (req, res) => {
+app.get('/api/build-stream', async (req, res) => {
   try {
-    const { projectName, channel } = req.body;
+    const { projectName, channel } = req.query;
     
     if (!projectName) {
       return res.status(400).json({ error: 'Missing projectName' });
     }
     
-    const projectPath = path.join(DEFAULT_DIR, projectName);
+    // 从配置中获取项目路径
+    let projects = readConfig();
+    if (!projects) projects = scanProjects(DEFAULT_DIR);
+    
+    const project = projects.find(p => p.name === projectName);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found in config' });
+    }
+    
+    const projectPath = project.path;
     
     if (!fs.existsSync(projectPath)) {
-      return res.status(404).json({ error: 'Project not found' });
+      return res.status(404).json({ error: 'Project path does not exist' });
     }
     
     // 设置 SSE 响应头
@@ -945,9 +954,9 @@ app.post('/api/build-stream', async (req, res) => {
 });
 
 // 流式上传到 OSS（实时进度）
-app.post('/api/upload-stream', async (req, res) => {
+app.get('/api/upload-stream', async (req, res) => {
   try {
-    const { projectName, path: projectPath, channelId, env } = req.body;
+    const { projectName, path: projectPath, channelId, env } = req.query;
     
     if (!projectName || !channelId || !env) {
       return res.status(400).json({ ok: false, error: 'Missing required parameters' });
@@ -1117,11 +1126,11 @@ app.post('/api/upload-stream', async (req, res) => {
 });
 
 // 流式上传压缩包到 OSS（实时进度）
-app.post('/api/upload-zip-stream', async (req, res) => {
+app.get('/api/upload-zip-stream', async (req, res) => {
   try {
-    const { projectName, path: projectPath, channelId, env } = req.body;
+    const { projectName, path: projectPath, channelId, env, isBackup } = req.query;
     
-    if (!projectName || !channelId || !env) {
+    if (!projectName || !env) {
       return res.status(400).json({ ok: false, error: 'Missing required parameters' });
     }
     

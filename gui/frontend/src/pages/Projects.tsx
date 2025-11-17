@@ -1,13 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Row, Col, Card, Statistic, Button, List, Avatar, Space, Typography,
-  Tag, message, Modal, Select, Input, Form, Tooltip, Progress, Alert
+  Button, Avatar, Typography,
+  Tag, message, Modal, Select, Progress, Spin
 } from 'antd';
 import {
   FolderOpenOutlined,
-  FireOutlined,
-  CheckCircleOutlined,
-  PauseCircleOutlined,
   GlobalOutlined,
   SettingOutlined,
   MobileOutlined,
@@ -16,11 +13,10 @@ import {
   BuildOutlined,
   CloudUploadOutlined,
   ReloadOutlined,
-  PlusOutlined,
-  LoadingOutlined
+  PlusOutlined
 } from '@ant-design/icons';
 import { useProjects, useOSSConfig } from '../api';
-import { gitApi, buildApi, ossApi } from '../api/client';
+import { gitApi } from '../api/client';
 import './Projects.css';
 
 const { Title, Text } = Typography;
@@ -53,7 +49,7 @@ const Projects: React.FC = () => {
   const [progressLogs, setProgressLogs] = useState<string[]>([]);
   const [fileUploadStatus, setFileUploadStatus] = useState<Map<string, { status: 'uploading' | 'uploaded' | 'failed', message: string }>>(new Map());
   const [currentOperation, setCurrentOperation] = useState<'git-pull' | 'git-push' | 'build' | 'upload' | null>(null);
-  const [selectedChannel, setSelectedChannel] = useState<string>('');
+  const [selectedChannel, setSelectedChannel] = useState<string | undefined>(undefined);
   const [selectedEnv, setSelectedEnv] = useState<'dev' | 'prod'>('dev');
 
   // 移除uploadAsZip状态，直接使用压缩上传作为默认行为
@@ -66,14 +62,6 @@ const Projects: React.FC = () => {
       logsRef.current.scrollTop = logsRef.current.scrollHeight;
     }
   }, [progressLogs, fileUploadStatus]);
-
-  // 项目统计数据
-  const projectStats = {
-    total: 26,
-    active: 12,
-    completed: 8,
-    paused: 6
-  };
 
   // 项目分类数据
   const projectCategories = [
@@ -189,12 +177,26 @@ const Projects: React.FC = () => {
 
   const handleBuild = async (projectName: string) => {
     setSelectedProject(projectName);
-    // 加载OSS配置以获取渠道信息
-    await loadOSSConfig(projectName);
-    setBuildModalVisible(true);
+
+    try {
+      // 加载OSS配置并获取结果
+      const configResult = await loadOSSConfig(projectName);
+
+      // 检查是否有渠道配置
+      if (configResult.channels && configResult.channels.channels && Object.keys(configResult.channels.channels).length > 0) {
+        // 有渠道配置，显示渠道选择模态框
+        setBuildModalVisible(true);
+      } else {
+        // 没有渠道配置，显示环境选择模态框
+        setSimpleUploadModalVisible(true);
+      }
+    } catch (error) {
+      console.error('Failed to load OSS config:', error);
+      message.error('加载渠道配置失败，请重试');
+    }
   };
 
-  const executeBuild = async (channel: string) => {
+  const executeBuildOnly = async (channel: string) => {
     setBuildModalVisible(false);
     setCurrentOperation('build');
     setProgressTitle(`构建项目: ${selectedProject} (${channel})`);
@@ -205,10 +207,14 @@ const Projects: React.FC = () => {
     setProgressModalVisible(true);
 
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/build-stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectName: selectedProject, channel })
+      // 构建查询参数
+      const params = new URLSearchParams({ projectName: selectedProject });
+      if (channel && channel !== 'default') {
+        params.append('channel', channel);
+      }
+
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/build-stream?${params}`, {
+        method: 'GET'
       });
 
       if (!response.ok) {
@@ -265,6 +271,90 @@ const Projects: React.FC = () => {
     }
   };
 
+  const executeBuild = async (channel: string, env: 'dev' | 'prod') => {
+    setBuildModalVisible(false);
+    setCurrentOperation('upload');
+    setProgressTitle(`构建并上传: ${selectedProject} (${channel} - ${env === 'dev' ? '开发' : '生产'})`);
+    setProgressPercent(0);
+    setProgressText('准备构建...');
+    setProgressLogs([]);
+    setFileUploadStatus(new Map()); // 清空文件状态
+    setProgressModalVisible(true);
+
+    try {
+      // 构建查询参数
+      const params = new URLSearchParams({ projectName: selectedProject });
+      if (channel && channel !== 'default') {
+        params.append('channel', channel);
+      }
+
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/build-stream?${params}`, {
+        method: 'GET'
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('无法获取响应流');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              setProgressLogs(prev => [...prev, data.message]);
+
+              if (data.type === 'log' || data.type === 'stdout') {
+                setProgressText(data.message);
+                // 构建过程中不显示进度条进度
+              } else if (data.type === 'stderr') {
+                setProgressText(`⚠️ ${data.message}`);
+              } else if (data.type === 'success') {
+                setProgressPercent(100);
+                setProgressText('✅ 构建成功，开始上传...');
+                message.success(`✅ 构建成功: ${selectedProject}`);
+                // 构建成功后，直接开始上传
+                setTimeout(async () => {
+                  try {
+                    await executeUpload(channel, env);
+                  } catch (uploadError: any) {
+                    setProgressText('❌ 上传失败');
+                    message.error(`❌ 上传失败: ${uploadError.message}`);
+                    setTimeout(() => setProgressModalVisible(false), 3000);
+                  }
+                }, 1000);
+              } else if (data.type === 'error') {
+                setProgressText('❌ 构建失败');
+                message.error(`❌ 构建失败: ${data.message}`);
+                setTimeout(() => setProgressModalVisible(false), 3000);
+              }
+            } catch (e) {
+              console.error('解析SSE数据失败:', e);
+            }
+          }
+        }
+      }
+    } catch (error: any) {
+      setProgressText('❌ 构建失败');
+      message.error(`❌ 构建失败: ${error.message}`);
+      setTimeout(() => setProgressModalVisible(false), 3000);
+    }
+  };
+
   const handleUpload = async (projectName: string) => {
     setSelectedProject(projectName);
     
@@ -274,7 +364,8 @@ const Projects: React.FC = () => {
       
       // 检查是否有渠道配置
       if (configResult.channels && configResult.channels.channels && Object.keys(configResult.channels.channels).length > 0) {
-        // 有渠道配置，显示渠道选择模态框
+        // 有渠道配置，显示渠道和环境选择模态框
+        setSelectedChannel(undefined); // 重置选中状态
         setUploadModalVisible(true);
       } else {
         // 没有渠道配置，显示简单环境选择模态框
@@ -301,56 +392,61 @@ const Projects: React.FC = () => {
     setProgressPercent(0);
     setProgressText('准备构建...');
     setProgressLogs([]);
+    setFileUploadStatus(new Map()); // 清空之前的文件上传状态
     setProgressModalVisible(true);
 
     try {
       // 第一步：构建项目
       setProgressText('正在构建项目...');
-      const buildResponse = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/build-stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectName: selectedProject })
-      });
 
-      if (!buildResponse.ok) {
-        throw new Error(`构建请求失败: HTTP ${buildResponse.status}`);
-      }
+      // 使用 EventSource 处理构建流
+      const buildUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/build-stream?projectName=${encodeURIComponent(selectedProject)}`;
+      const buildEventSource = new EventSource(buildUrl);
 
-      const buildReader = buildResponse.body?.getReader();
-      if (!buildReader) {
-        throw new Error('无法获取构建响应流');
-      }
-
-      const decoder = new TextDecoder();
-      let buildBuffer = '';
       let buildSuccess = false;
 
-      while (true) {
-        const { done, value } = await buildReader.read();
-        if (done) break;
+      await new Promise<void>((resolve, reject) => {
+        buildEventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            setProgressLogs(prev => [...prev, data.message]);
 
-        buildBuffer += decoder.decode(value, { stream: true });
-        const lines = buildBuffer.split('\n\n');
-        buildBuffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              setProgressLogs(prev => [...prev, data.message]);
-
-              if (data.type === 'success') {
-                buildSuccess = true;
-                setProgressText('构建完成，开始上传...');
-              } else if (data.type === 'error') {
-                throw new Error(`构建失败: ${data.message}`);
-              }
-            } catch (e) {
-              console.error('解析构建SSE数据失败:', e);
+            if (data.type === 'start') {
+              setProgressText(data.message);
+            } else if (data.type === 'progress') {
+              setProgressText(data.message);
+              setProgressPercent(data.progress || 0);
+            } else if (data.type === 'success') {
+              setProgressPercent(100);
+              setProgressText('✅ 构建完成');
+              buildSuccess = true;
+              buildEventSource.close();
+              resolve();
+            } else if (data.type === 'error') {
+              setProgressText('❌ 构建失败');
+              message.error(`❌ 构建失败: ${data.message}`);
+              buildEventSource.close();
+              reject(new Error(data.message));
             }
+          } catch (e) {
+            console.error('解析构建SSE数据失败:', e);
           }
-        }
-      }
+        };
+
+        buildEventSource.onerror = (error) => {
+          console.error('构建EventSource错误:', error);
+          setProgressText('❌ 构建连接失败');
+          message.error('❌ 构建连接失败');
+          buildEventSource.close();
+          reject(new Error('构建连接失败'));
+        };
+
+        // 设置超时
+        setTimeout(() => {
+          buildEventSource.close();
+          reject(new Error('构建超时'));
+        }, 300000); // 5分钟超时
+      });
 
       if (!buildSuccess) {
         throw new Error('构建未完成');
@@ -359,162 +455,150 @@ const Projects: React.FC = () => {
       // 第二步：上传到OSS
       setProgressPercent(0); // 重置进度为0，开始上传
       setFileUploadStatus(new Map()); // 清空文件状态
-      
+
       // 所有环境都先执行正常的逐个文件上传
-      const normalUploadApi = 'upload-stream';
-      const normalResponse = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/${normalUploadApi}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectName: selectedProject,
-          path: project.path,
-          channelId: 'default', // 使用默认渠道ID
-          env
-        })
+      const normalUploadUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/upload-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=default&env=${env}`;
+      const normalEventSource = new EventSource(normalUploadUrl);
+
+      // 处理正常的上传过程
+      await new Promise<void>((resolve, reject) => {
+        normalEventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            setProgressLogs(prev => [...prev, data.message]);
+
+            if (data.type === 'start') {
+              setProgressText(data.message);
+            } else if (data.type === 'bucket_start') {
+              setProgressText(`${data.bucketIndex}/${data.totalBuckets}: ${data.message}`);
+            } else if (data.type === 'uploading') {
+              setProgressText(`正在上传: ${data.file}`);
+              setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploading', message: '正在上传...' })));
+              setProgressPercent(data.globalProgress || 0);
+            } else if (data.type === 'uploaded') {
+              setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploaded', message: `✅ ${data.file} 上传成功` })));
+              setProgressPercent(data.globalProgress || 0);
+            } else if (data.type === 'failed') {
+              setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'failed', message: `❌ 上传失败: ${data.error}` })));
+              setProgressPercent(data.globalProgress || 0);
+            } else if (data.type === 'bucket_complete') {
+              setProgressText(`${data.bucket} 上传完成 (${data.bucketIndex}/${data.totalBuckets})`);
+            } else if (data.type === 'complete') {
+              setProgressPercent(100);
+              setProgressText('✅ 上传完成');
+              message.success(`✅ 上传成功: ${selectedProject}`);
+              normalEventSource.close();
+              resolve();
+            } else if (data.type === 'error') {
+              setProgressText('❌ 上传失败');
+              message.error(`❌ 上传失败: ${data.message}`);
+              normalEventSource.close();
+              setTimeout(() => setProgressModalVisible(false), 3000);
+              reject(new Error(data.message));
+            }
+          } catch (e) {
+            console.error('解析上传SSE数据失败:', e);
+          }
+        };
+
+        normalEventSource.onerror = (error) => {
+          console.error('上传EventSource错误:', error);
+          setProgressText('❌ 上传连接失败');
+          message.error('❌ 上传连接失败');
+          normalEventSource.close();
+          reject(new Error('上传连接失败'));
+        };
+
+        // 设置超时
+        setTimeout(() => {
+          normalEventSource.close();
+          reject(new Error('上传超时'));
+        }, 600000); // 10分钟超时
       });
 
-      if (!normalResponse.ok) {
-        throw new Error(`HTTP ${normalResponse.status}`);
-      }
-
-      const normalReader = normalResponse.body?.getReader();
-      if (!normalReader) {
-        throw new Error('无法获取上传响应流');
-      }
-
-      let normalBuffer = '';
-
-      while (true) {
-        const { done, value } = await normalReader.read();
-        if (done) break;
-
-        normalBuffer += decoder.decode(value, { stream: true });
-        const lines = normalBuffer.split('\n\n');
-        normalBuffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              setProgressLogs(prev => [...prev, data.message]);
-
-              if (data.type === 'start') {
-                setProgressText(data.message);
-              } else if (data.type === 'uploading') {
-                setProgressText(`正在上传文件...`);
-                setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploading', message: '正在上传...' })));
-                setProgressPercent(data.globalProgress || data.progress || 0); // 使用全局进度
-              } else if (data.type === 'uploaded') {
-                setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploaded', message: '✅ 上传成功' })));
-                setProgressPercent(data.globalProgress || data.progress || 0);
-              } else if (data.type === 'failed') {
-                setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'failed', message: `❌ 上传失败: ${data.error}` })));
-                setProgressPercent(data.globalProgress || data.progress || 0);
-              } else if (data.type === 'complete') {
-                setProgressPercent(100); // 正常上传完成，设为100%
-                setProgressText('✅ 正常上传完成，开始版本备份...');
-              } else if (data.type === 'error') {
-                setProgressText('❌ 上传失败');
-                message.error(`❌ 上传失败: ${data.message}`);
-                setTimeout(() => setProgressModalVisible(false), 3000);
-                return; // 上传失败，直接返回
-              }
-            } catch (e) {
-              console.error('解析SSE数据失败:', e);
-            }
-          }
-        }
-      }
 
       // 第三步：生产环境额外执行压缩包备份
       if (env === 'prod') {
         setProgressPercent(0); // 从0%重新开始备份进度
         setFileUploadStatus(new Map()); // 清空文件状态
-        
-        const backupUploadApi = 'upload-zip-stream';
-        const backupResponse = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/${backupUploadApi}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            projectName: selectedProject,
-            path: project.path,
-            channelId: 'default',
-            env,
-            isBackup: true // 标记为备份上传
-          })
-        });
 
-        if (!backupResponse.ok) {
-          throw new Error(`备份上传请求失败: HTTP ${backupResponse.status}`);
-        }
+        const backupUploadUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/upload-zip-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=default&env=${env}&isBackup=true`;
+        const backupEventSource = new EventSource(backupUploadUrl);
 
-        const backupReader = backupResponse.body?.getReader();
-        if (!backupReader) {
-          throw new Error('无法获取备份上传响应流');
-        }
+        await new Promise<void>((resolve, reject) => {
+        backupEventSource.onopen = () => {
+          console.log('备份EventSource连接已建立');
+        };
 
-        let backupBuffer = '';
-
-        while (true) {
-          const { done, value } = await backupReader.read();
-          if (done) break;
-
-          backupBuffer += decoder.decode(value, { stream: true });
-          const lines = backupBuffer.split('\n\n');
-          backupBuffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                setProgressLogs(prev => [...prev, data.message]);
-
-                if (data.type === 'start') {
-                  setProgressText(data.message);
-                } else if (data.type === 'compressing') {
-                  setProgressText(data.message);
-                  setProgressPercent(data.progress || 0); // 压缩阶段0-100%
-                } else if (data.type === 'compressed') {
-                  setProgressText(data.message);
-                  setProgressPercent(50); // 压缩完成，进度设为50%，准备开始上传
-                } else if (data.type === 'bucket_start') {
-                  setProgressText(`${data.bucketIndex}/${data.totalBuckets}: ${data.message}`);
-                  // 不要重置进度，每个bucket的进度是整体进度的一部分
-                } else if (data.type === 'uploading') {
-                  setProgressText(`正在备份到 ${data.bucket}...`);
-                  setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploading', message: '正在备份...' })));
-                  // 上传阶段50-100%，根据bucket进度分配
-                  const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
-                  setProgressPercent(Math.round(uploadProgress));
-                } else if (data.type === 'uploaded') {
-                  setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploaded', message: '✅ 备份成功' })));
-                  const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
-                  setProgressPercent(Math.round(uploadProgress));
-                } else if (data.type === 'failed') {
-                  setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'failed', message: `❌ 备份失败: ${data.error}` })));
-                  const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
-                  setProgressPercent(Math.round(uploadProgress));
-                } else if (data.type === 'bucket_complete') {
-                  setProgressText(`${data.bucket} 备份完成 (${data.bucketIndex}/${data.totalBuckets})`);
-                  const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
-                  setProgressPercent(Math.round(uploadProgress));
-                } else if (data.type === 'complete') {
-                  setProgressPercent(100);
-                  setProgressText('🎉 生产环境部署完成！正在执行部署后任务...');
-                  message.success(`🎉 生产环境部署完成: ${selectedProject}`);
-                  // 生产环境延迟关闭，让用户看到部署任务的执行
-                  setTimeout(() => setProgressModalVisible(false), 5000);
-                } else if (data.type === 'error') {
-                  setProgressText('❌ 备份失败');
-                  message.error(`❌ 备份失败: ${data.message}`);
-                  setTimeout(() => setProgressModalVisible(false), 3000);
-                }
-              } catch (e) {
-                console.error('解析备份SSE数据失败:', e);
+        backupEventSource.onmessage = (event) => {
+          console.log('备份EventSource收到消息:', event.data);
+          try {
+            const data = JSON.parse(event.data);
+            setProgressLogs(prev => [...prev, data.message]);              if (data.type === 'start') {
+                setProgressText(data.message);
+              } else if (data.type === 'compressing') {
+                setProgressText(data.message);
+                setProgressPercent(data.progress || 0); // 压缩阶段0-100%
+              } else if (data.type === 'compressed') {
+                setProgressText(data.message);
+                setProgressPercent(50); // 压缩完成，进度设为50%，准备开始上传
+              } else if (data.type === 'bucket_start') {
+                setProgressText(`${data.bucketIndex}/${data.totalBuckets}: ${data.message}`);
+                // 不要重置进度，每个bucket的进度是整体进度的一部分
+              } else if (data.type === 'uploading') {
+                setProgressText(`正在备份到 ${data.bucket}...`);
+                setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploading', message: '正在备份...' })));
+                // 上传阶段50-100%，根据bucket进度分配
+                const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
+                setProgressPercent(Math.round(uploadProgress));
+              } else if (data.type === 'uploaded') {
+                setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploaded', message: '✅ 备份成功' })));
+                const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
+                setProgressPercent(Math.round(uploadProgress));
+              } else if (data.type === 'failed') {
+                setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'failed', message: `❌ 备份失败: ${data.error}` })));
+                const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
+                setProgressPercent(Math.round(uploadProgress));
+              } else if (data.type === 'bucket_complete') {
+                setProgressText(`${data.bucket} 备份完成 (${data.bucketIndex}/${data.totalBuckets})`);
+                const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
+                setProgressPercent(Math.round(uploadProgress));
+              } else if (data.type === 'complete') {
+                setProgressPercent(100);
+                setProgressText('🎉 生产环境部署完成！正在执行部署后任务...');
+                message.success(`🎉 生产环境部署完成: ${selectedProject}`);
+                // 生产环境延迟关闭，让用户看到部署任务的执行
+                setTimeout(() => setProgressModalVisible(false), 5000);
+                backupEventSource.close();
+                resolve();
+              } else if (data.type === 'error') {
+                setProgressText('❌ 备份失败');
+                message.error(`❌ 备份失败: ${data.message}`);
+                backupEventSource.close();
+                setTimeout(() => setProgressModalVisible(false), 3000);
+                reject(new Error(data.message));
               }
+            } catch (e) {
+              console.error('解析备份SSE数据失败:', e);
             }
-          }
-        }
+          };
+
+          backupEventSource.onerror = (error) => {
+            console.error('备份EventSource错误:', error);
+            console.error('EventSource readyState:', backupEventSource.readyState);
+            console.error('EventSource url:', backupEventSource.url);
+            setProgressText('❌ 备份连接失败');
+            message.error('❌ 备份连接失败');
+            backupEventSource.close();
+            reject(new Error('备份连接失败'));
+          };
+
+          // 设置超时
+          setTimeout(() => {
+            backupEventSource.close();
+            reject(new Error('备份超时'));
+          }, 900000); // 15分钟超时
+        });
       } else {
         // 开发环境直接完成
         setProgressPercent(100);
@@ -527,6 +611,89 @@ const Projects: React.FC = () => {
       message.error(`❌ 操作失败: ${error.message}`);
       setTimeout(() => setProgressModalVisible(false), 3000);
     }
+  };
+
+  const executeBackup = async (channelId: string, env: 'dev' | 'prod', project: any, onComplete: () => void) => {
+    setProgressPercent(0); // 从0%重新开始备份进度
+    setFileUploadStatus(new Map()); // 清空文件状态
+
+    const backupUploadUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/upload-zip-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=${encodeURIComponent(channelId)}&env=${env}&isBackup=true`;
+    const backupEventSource = new EventSource(backupUploadUrl);
+
+    backupEventSource.onopen = () => {
+      console.log('备份EventSource连接已建立');
+    };
+
+    backupEventSource.onmessage = (event) => {
+      console.log('备份EventSource收到消息:', event.data);
+      try {
+        const data = JSON.parse(event.data);
+        setProgressLogs(prev => [...prev, data.message]);
+
+        if (data.type === 'start') {
+          setProgressText(data.message);
+        } else if (data.type === 'compressing') {
+          setProgressText(data.message);
+          setProgressPercent(data.progress || 0); // 压缩阶段0-100%
+        } else if (data.type === 'compressed') {
+          setProgressText(data.message);
+          setProgressPercent(50); // 压缩完成，进度设为50%，准备开始上传
+        } else if (data.type === 'bucket_start') {
+          setProgressText(`${data.bucketIndex}/${data.totalBuckets}: ${data.message}`);
+          // 不要重置进度，每个bucket的进度是整体进度的一部分
+        } else if (data.type === 'uploading') {
+          setProgressText(`正在备份到 ${data.bucket}...`);
+          setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploading', message: '正在备份...' })));
+          // 上传阶段50-100%，根据bucket进度分配
+          const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
+          setProgressPercent(Math.round(uploadProgress));
+        } else if (data.type === 'uploaded') {
+          setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploaded', message: '✅ 备份成功' })));
+          const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
+          setProgressPercent(Math.round(uploadProgress));
+        } else if (data.type === 'failed') {
+          setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'failed', message: `❌ 备份失败: ${data.error}` })));
+          const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
+          setProgressPercent(Math.round(uploadProgress));
+        } else if (data.type === 'bucket_complete') {
+          setProgressText(`${data.bucket} 备份完成 (${data.bucketIndex}/${data.totalBuckets})`);
+          const uploadProgress = 50 + (data.globalProgress || 0) * 0.5;
+          setProgressPercent(Math.round(uploadProgress));
+        } else if (data.type === 'complete') {
+          setProgressPercent(100);
+          setProgressText('🎉 生产环境部署完成！正在执行部署后任务...');
+          message.success(`🎉 生产环境部署完成: ${selectedProject}`);
+          // 生产环境延迟关闭，让用户看到部署任务的执行
+          setTimeout(() => setProgressModalVisible(false), 5000);
+          backupEventSource.close();
+          onComplete();
+        } else if (data.type === 'error') {
+          setProgressText('❌ 备份失败');
+          message.error(`❌ 备份失败: ${data.message}`);
+          backupEventSource.close();
+          setTimeout(() => setProgressModalVisible(false), 3000);
+          onComplete(); // 即使失败也要完成
+        }
+      } catch (e) {
+        console.error('解析备份SSE数据失败:', e);
+      }
+    };
+
+    backupEventSource.onerror = (error) => {
+      console.error('备份EventSource错误:', error);
+      console.error('EventSource readyState:', backupEventSource.readyState);
+      console.error('EventSource url:', backupEventSource.url);
+      setProgressText('❌ 备份连接失败');
+      message.error('❌ 备份连接失败');
+      backupEventSource.close();
+      onComplete(); // 即使失败也要完成
+    };
+
+    // 设置超时
+    setTimeout(() => {
+      backupEventSource.close();
+      onComplete(); // 超时也完成
+    }, 900000); // 15分钟超时
   };
 
   const executeUpload = async (channelId: string, env: 'dev' | 'prod') => {
@@ -538,229 +705,83 @@ const Projects: React.FC = () => {
 
     setUploadModalVisible(false);
     setCurrentOperation('upload');
-    setProgressTitle(`构建并上传: ${selectedProject} (${channelId} - ${env === 'dev' ? '开发' : '生产'})`);
+    setProgressTitle(`上传: ${selectedProject} (${channelId} - ${env === 'dev' ? '开发' : '生产'})`);
     setProgressPercent(0);
-    setProgressText('准备构建...');
+    setProgressText('准备上传...');
     setProgressLogs([]);
     setFileUploadStatus(new Map()); // 清空文件状态
     setProgressModalVisible(true);
 
     try {
-      // 第一步：构建项目
-      setProgressText('正在构建项目...');
-      const buildResponse = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/build-stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectName: selectedProject,
-          channel: channelId
-        })
-      });
+      // 直接开始上传（构建已在executeBuild中完成）
+      setProgressText('正在上传...');
 
-      if (!buildResponse.ok) {
-        throw new Error(`构建请求失败: HTTP ${buildResponse.status}`);
-      }
-
-      const buildReader = buildResponse.body?.getReader();
-      if (!buildReader) {
-        throw new Error('无法获取构建响应流');
-      }
-
-      const decoder = new TextDecoder();
-      let buildBuffer = '';
-      let buildSuccess = false;
-
-      while (true) {
-        const { done, value } = await buildReader.read();
-        if (done) break;
-
-        buildBuffer += decoder.decode(value, { stream: true });
-        const lines = buildBuffer.split('\n\n');
-        buildBuffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              setProgressLogs(prev => [...prev, data.message]);
-
-              if (data.type === 'success') {
-                buildSuccess = true;
-                setProgressText('构建完成，开始上传...');
-              } else if (data.type === 'error') {
-                throw new Error(`构建失败: ${data.message}`);
-              }
-            } catch (e) {
-              console.error('解析构建SSE数据失败:', e);
-            }
-          }
-        }
-      }
-
-      if (!buildSuccess) {
-        throw new Error('构建未完成');
-      }
-
-      // 第二步：上传到OSS
+      // 上传到OSS
       setProgressPercent(0); // 重置进度为0，开始上传
       setFileUploadStatus(new Map()); // 清空文件状态
-      
-      // 所有环境都先执行正常的逐个文件上传
-      const normalUploadApi = 'upload-stream';
-      const normalResponse = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/${normalUploadApi}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectName: selectedProject,
-          path: project.path,
-          channelId,
-          env
-        })
+
+      // 使用 EventSource 处理上传流
+      const uploadUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/upload-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=${encodeURIComponent(channelId)}&env=${env}`;
+      const uploadEventSource = new EventSource(uploadUrl);
+
+      await new Promise<void>((resolve, reject) => {
+        uploadEventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            setProgressLogs(prev => [...prev, data.message]);
+
+            if (data.type === 'start') {
+              setProgressText(data.message);
+            } else if (data.type === 'uploading') {
+              setProgressText(`正在上传文件...`);
+              setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploading', message: '正在上传...' })));
+              setProgressPercent(data.globalProgress || 0);
+            } else if (data.type === 'uploaded') {
+              setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploaded', message: `✅ ${data.file} 上传成功` })));
+            } else if (data.type === 'complete') {
+              setProgressPercent(100);
+              setProgressText('✅ 上传完成');
+              message.success(`✅ 上传成功: ${selectedProject}`);
+              uploadEventSource.close();
+              
+              // 多渠道生产环境额外执行压缩包备份
+              if (env === 'prod') {
+                // 不在这里等待备份完成，而是启动备份并在完成后关闭模态框
+                executeBackup(channelId, env, project, () => {
+                  setTimeout(() => setProgressModalVisible(false), 2000);
+                  resolve();
+                });
+              } else {
+                // 开发环境直接完成
+                setTimeout(() => setProgressModalVisible(false), 2000);
+                resolve();
+              }
+            } else if (data.type === 'error') {
+              setProgressText('❌ 上传失败');
+              message.error(`❌ 上传失败: ${data.message}`);
+              uploadEventSource.close();
+              setTimeout(() => setProgressModalVisible(false), 3000);
+              reject(new Error(data.message));
+            }
+          } catch (e) {
+            console.error('解析上传SSE数据失败:', e);
+          }
+        };
+
+        uploadEventSource.onerror = (error) => {
+          console.error('上传EventSource错误:', error);
+          setProgressText('❌ 上传连接失败');
+          message.error('❌ 上传连接失败');
+          uploadEventSource.close();
+          reject(new Error('上传连接失败'));
+        };
+
+        // 设置超时
+        setTimeout(() => {
+          uploadEventSource.close();
+          reject(new Error('上传超时'));
+        }, 600000); // 10分钟超时
       });
-
-      if (!normalResponse.ok) {
-        throw new Error(`HTTP ${normalResponse.status}`);
-      }
-
-      const normalReader = normalResponse.body?.getReader();
-      if (!normalReader) {
-        throw new Error('无法获取上传响应流');
-      }
-
-      let normalBuffer = '';
-
-      while (true) {
-        const { done, value } = await normalReader.read();
-        if (done) break;
-
-        normalBuffer += decoder.decode(value, { stream: true });
-        const lines = normalBuffer.split('\n\n');
-        normalBuffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              setProgressLogs(prev => [...prev, data.message]);
-
-              if (data.type === 'start') {
-                setProgressText(data.message);
-              } else if (data.type === 'uploading') {
-                setProgressText('正在上传文件...');
-                setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploading', message: '正在上传...' })));
-                setProgressPercent(data.globalProgress || data.progress || 0); // 使用全局进度
-              } else if (data.type === 'uploaded') {
-                setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploaded', message: '✅ 上传成功' })));
-                setProgressPercent(data.globalProgress || data.progress || 0);
-              } else if (data.type === 'failed') {
-                setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'failed', message: `❌ 上传失败: ${data.error}` })));
-                setProgressPercent(data.globalProgress || data.progress || 0);
-              } else if (data.type === 'complete') {
-                setProgressPercent(100); // 正常上传完成，设为100%
-                setProgressText('✅ 正常上传完成，开始版本备份...');
-              } else if (data.type === 'error') {
-                setProgressText('❌ 上传失败');
-                message.error(`❌ 上传失败: ${data.message}`);
-                setTimeout(() => setProgressModalVisible(false), 3000);
-                return; // 上传失败，直接返回
-              }
-            } catch (e) {
-              console.error('解析SSE数据失败:', e);
-            }
-          }
-        }
-      }
-
-      // 第三步：生产环境额外执行压缩包备份
-      if (env === 'prod') {
-        setProgressPercent(0); // 从0%重新开始备份进度
-        setFileUploadStatus(new Map()); // 清空文件状态
-        
-        const backupUploadApi = 'upload-zip-stream';
-        const backupResponse = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/${backupUploadApi}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            projectName: selectedProject,
-            path: project.path,
-            channelId,
-            env,
-            isBackup: true // 标记为备份上传
-          })
-        });
-
-        if (!backupResponse.ok) {
-          throw new Error(`备份上传请求失败: HTTP ${backupResponse.status}`);
-        }
-
-        const backupReader = backupResponse.body?.getReader();
-        if (!backupReader) {
-          throw new Error('无法获取备份上传响应流');
-        }
-
-        let backupBuffer = '';
-
-        while (true) {
-          const { done, value } = await backupReader.read();
-          if (done) break;
-
-          backupBuffer += decoder.decode(value, { stream: true });
-          const lines = backupBuffer.split('\n\n');
-          backupBuffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                setProgressLogs(prev => [...prev, data.message]);
-
-                if (data.type === 'start') {
-                  setProgressText(data.message);
-                } else if (data.type === 'compressing') {
-                  setProgressText(data.message);
-                  setProgressPercent(data.progress || 0); // 压缩阶段0-100%
-                } else if (data.type === 'compressed') {
-                  setProgressText(data.message);
-                  setProgressPercent(100); // 压缩完成设为100%
-                } else if (data.type === 'bucket_start') {
-                  setProgressText(`${data.bucketIndex}/${data.totalBuckets}: ${data.message}`);
-                  setProgressPercent(0); // 备份上传从0%开始
-                } else if (data.type === 'uploading') {
-                  setProgressText(`正在备份到 ${data.bucket}...`);
-                  setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploading', message: '正在备份...' })));
-                  setProgressPercent(data.bucketProgress || data.progress); // 备份上传0-100%
-                } else if (data.type === 'uploaded') {
-                  setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'uploaded', message: '✅ 备份成功' })));
-                  setProgressPercent(data.bucketProgress || data.progress);
-                } else if (data.type === 'failed') {
-                  setFileUploadStatus(prev => new Map(prev.set(data.file, { status: 'failed', message: `❌ 备份失败: ${data.error}` })));
-                  setProgressPercent(data.bucketProgress || data.progress);
-                } else if (data.type === 'bucket_complete') {
-                  setProgressText(`${data.bucket} 备份完成 (${data.bucketIndex}/${data.totalBuckets})`);
-                } else if (data.type === 'complete') {
-                  setProgressPercent(100);
-                  setProgressText('🎉 生产环境部署完成！正在执行部署后任务...');
-                  message.success(`🎉 生产环境部署完成: ${selectedProject}`);
-                  // 生产环境延迟关闭，让用户看到部署任务的执行
-                  setTimeout(() => setProgressModalVisible(false), 5000);
-                } else if (data.type === 'error') {
-                  setProgressText('❌ 备份失败');
-                  message.error(`❌ 备份失败: ${data.message}`);
-                  setTimeout(() => setProgressModalVisible(false), 3000);
-                }
-              } catch (e) {
-                console.error('解析备份SSE数据失败:', e);
-              }
-            }
-          }
-        }
-      } else {
-        // 开发环境直接完成
-        setProgressPercent(100);
-        setProgressText('✅ 上传成功');
-        message.success(`✅ 上传成功: ${selectedProject}`);
-        setTimeout(() => setProgressModalVisible(false), 2000);
-      }
     } catch (error: any) {
       setProgressText('❌ 操作失败');
       message.error(`❌ 操作失败: ${error.message}`);
@@ -768,639 +789,296 @@ const Projects: React.FC = () => {
     }
   };
 
-  const handleScanProjects = async () => {
-    await scanProjects();
-    message.success('项目扫描完成');
-  };
-
   return (
     <div className="projects-container">
+      {/* 页面头部 */}
       <div className="projects-header">
-        <Title level={1}>💼 项目管理</Title>
-        <Text className="projects-subtitle">管理您的开发项目</Text>
-        <Space>
-          <Button
-            type="primary"
-            icon={<ReloadOutlined />}
-            onClick={handleScanProjects}
-            loading={isLoading}
-          >
+        <div>
+          <Title level={1}>项目管理中心</Title>
+          <p className="projects-subtitle">智能管理您的开发项目，高效协作与部署</p>
+        </div>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <Button type="primary" icon={<ReloadOutlined />} size="large" onClick={() => loadProjects()}>
+            刷新项目
+          </Button>
+          <Button icon={<PlusOutlined />} size="large" onClick={() => scanProjects()}>
             扫描项目
           </Button>
-          <Button type="default" icon={<PlusOutlined />}>
-            新建项目
-          </Button>
-        </Space>
+        </div>
       </div>
 
-      {/* 项目统计 */}
-      <Card className="stats-section">
-        <Row gutter={[16, 16]}>
-          <Col xs={24} sm={12} md={6}>
-            <Card className="stat-card">
-              <Statistic
-                title="项目总数"
-                value={projectStats.total}
-                prefix={<FolderOpenOutlined />}
-                valueStyle={{ color: '#1890ff' }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} md={6}>
-            <Card className="stat-card">
-              <Statistic
-                title="活跃项目"
-                value={projectStats.active}
-                prefix={<FireOutlined />}
-                valueStyle={{ color: '#fa8c16' }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} md={6}>
-            <Card className="stat-card">
-              <Statistic
-                title="已完成"
-                value={projectStats.completed}
-                prefix={<CheckCircleOutlined />}
-                valueStyle={{ color: '#52c41a' }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} md={6}>
-            <Card className="stat-card">
-              <Statistic
-                title="已暂停"
-                value={projectStats.paused}
-                prefix={<PauseCircleOutlined />}
-                valueStyle={{ color: '#bfbfbf' }}
-              />
-            </Card>
-          </Col>
-        </Row>
-      </Card>
-
-      <Row gutter={[24, 24]}>
-        <Col xs={24} lg={16}>
-          {/* 最近项目 */}
-          <Card
-            title={
-              <Space>
-                <FireOutlined />
-                最近项目
-              </Space>
-            }
-            className="recent-projects-section"
-          >
-            <List
-              loading={isLoading}
-              dataSource={recentProjects}
-              renderItem={(project: Project) => (
-                <List.Item
-                  actions={[
-                    <Tooltip title="Git Pull">
-                      <Button
-                        type="text"
-                        icon={<DownOutlined />}
-                        onClick={() => handleGitPull(project.name)}
-                      />
-                    </Tooltip>,
-                    <Tooltip title="Git Push">
-                      <Button
-                        type="text"
-                        icon={<UpOutlined />}
-                        onClick={() => handleGitPush(project.name)}
-                      />
-                    </Tooltip>,
-                    <Tooltip title="构建项目">
-                      <Button
-                        type="text"
-                        icon={<BuildOutlined />}
-                        onClick={() => handleBuild(project.name)}
-                      />
-                    </Tooltip>,
-                    <Tooltip title="上传到OSS">
-                      <Button
-                        type="text"
-                        icon={<CloudUploadOutlined />}
-                        onClick={() => handleUpload(project.name)}
-                      />
-                    </Tooltip>
-                  ]}
-                >
-                  <List.Item.Meta
-                    avatar={<Avatar icon={<FolderOpenOutlined />} />}
-                    title={<strong>{project.name}</strong>}
-                    description={
-                      <Space direction="vertical" size="small">
-                        <Text type="secondary">
-                          最后更新: {formatRelativeTime(project.lastCommitTime || '')}
-                        </Text>
-                        {project.status && (
-                          <Space size="small">
-                            {project.status.modified > 0 && (
-                              <Tag color="orange">📝 {project.status.modified} 已修改</Tag>
-                            )}
-                            {project.status.added > 0 && (
-                              <Tag color="green">➕ {project.status.added} 已添加</Tag>
-                            )}
-                            {project.status.deleted > 0 && (
-                              <Tag color="red">➖ {project.status.deleted} 已删除</Tag>
-                            )}
-                            {project.status.modified === 0 && project.status.added === 0 && project.status.deleted === 0 && (
-                              <Tag color="default">✅ 无变化</Tag>
-                            )}
-                          </Space>
-                        )}
-                      </Space>
-                    }
-                  />
-                </List.Item>
-              )}
-            />
-            {recentProjects.length === 0 && !isLoading && (
-              <div className="empty-state">
-                <Text type="secondary">暂无项目数据</Text>
+      {/* 项目分类 */}
+      <div className="categories-section">
+        <h2 className="section-title">项目分类</h2>
+        <div className="categories-grid">
+          {projectCategories.map(category => (
+            <div key={category.type} className="category-card">
+              <div className="category-icon" style={{ color: category.color }}>
+                {category.icon}
               </div>
-            )}
-          </Card>
-        </Col>
+              <div className="category-info">
+                <h3 className="category-name">{category.name}</h3>
+                <span className="category-count">{category.count} 个项目</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
 
-        <Col xs={24} lg={8}>
-          {/* 项目分类 */}
-          <Card title="📂 项目分类" className="categories-section">
-            <List
-              dataSource={projectCategories}
-              renderItem={(category) => (
-                <List.Item>
-                  <Card
-                    className="category-card"
-                    style={{ borderLeft: `4px solid ${category.color}` }}
-                  >
-                    <Space>
-                      <Avatar
-                        icon={category.icon}
-                        style={{ backgroundColor: category.color }}
-                      />
-                      <div>
-                        <div style={{ fontWeight: 'bold' }}>{category.name}</div>
-                        <Text type="secondary">{category.count} 个项目</Text>
+      {/* 最近项目列表 */}
+      <div className="recent-projects-section">
+        <div className="section-header">
+          <h2 className="section-title">最近项目</h2>
+          <div className="section-actions">
+            <Button
+              type="primary"
+              icon={<ReloadOutlined />}
+              onClick={() => loadProjects()}
+              className="action-button"
+            >
+              刷新
+            </Button>
+            <Button
+              icon={<PlusOutlined />}
+              onClick={() => scanProjects()}
+              className="action-button"
+            >
+              扫描项目
+            </Button>
+          </div>
+        </div>
+        <div className="projects-list">
+          {isLoading ? (
+            <div className="loading-container">
+              <Spin size="large" />
+              <p>加载项目中...</p>
+            </div>
+          ) : (
+            recentProjects.map((project) => (
+              <div key={project.name} className="project-item">
+                <div className="project-avatar">
+                  <Avatar icon={<FolderOpenOutlined />} size="large" />
+                </div>
+                <div className="project-content">
+                  <div className="project-header">
+                    <h3 className="project-name">{project.name}</h3>
+                    {project.status && (
+                      <div className="project-status">
+                        {project.status.added > 0 && <Tag color="green">+{project.status.added}</Tag>}
+                        {project.status.modified > 0 && <Tag color="blue">~{project.status.modified}</Tag>}
+                        {project.status.deleted > 0 && <Tag color="red">-{project.status.deleted}</Tag>}
                       </div>
-                    </Space>
-                  </Card>
-                </List.Item>
-              )}
-            />
-          </Card>
-        </Col>
-      </Row>
+                    )}
+                  </div>
+                  <div className="project-meta">
+                    <div className="project-path">路径: {project.path}</div>
+                    {project.lastCommitTime && (
+                      <div className="project-commit-time">最后提交: {formatRelativeTime(project.lastCommitTime)}</div>
+                    )}
+                  </div>
+                </div>
+                <div className="project-actions">
+                  <Button
+                    size="small"
+                    icon={<DownOutlined />}
+                    onClick={() => handleGitPull(project.name)}
+                    className="action-button-small"
+                  >
+                    拉取
+                  </Button>
+                  <Button
+                    size="small"
+                    icon={<UpOutlined />}
+                    onClick={() => handleGitPush(project.name)}
+                    className="action-button-small"
+                  >
+                    推送
+                  </Button>
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={<BuildOutlined />}
+                    onClick={() => handleBuild(project.name)}
+                    className="action-button-small"
+                  >
+                    构建
+                  </Button>
+                  <Button
+                    type="primary"
+                    size="small"
+                    icon={<CloudUploadOutlined />}
+                    onClick={() => handleUpload(project.name)}
+                    className="action-button-small"
+                  >
+                    上传
+                  </Button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
 
-      {/* 构建选项弹窗 */}
+      {/* 构建模态框 */}
       <Modal
-        title={`构建项目: ${selectedProject}`}
+        title="选择构建渠道"
         open={buildModalVisible}
         onCancel={() => setBuildModalVisible(false)}
         footer={null}
-        width={600}
+        className="custom-modal"
       >
-        {ossLoading ? (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <LoadingOutlined style={{ fontSize: '24px' }} />
-            <div style={{ marginTop: '10px' }}>正在加载渠道配置...</div>
+        <div className="modal-content">
+          <div className="modal-label">
+            <Text>选择构建渠道:</Text>
           </div>
-        ) : (
-          <div>
-            <div style={{ marginBottom: '20px' }}>
-              <Text strong>选择构建渠道:</Text>
-            </div>
-            {channels?.channels && Object.keys(channels.channels).length > 0 ? (
-              <div style={{ display: 'grid', gap: '12px' }}>
-                {Object.entries(channels.channels).map(([channelId, channelConfig]: [string, any]) => (
-                  <Card
-                    key={channelId}
-                    hoverable
-                    onClick={() => executeBuild(channelId)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <div style={{ fontWeight: 'bold' }}>{channelConfig.name || channelId}</div>
-                        <div style={{ fontSize: '12px', color: '#666' }}>渠道ID: {channelId}</div>
-                      </div>
-                      <BuildOutlined style={{ fontSize: '20px', color: '#1890ff' }} />
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            ) : (
-              <Alert
-                message="未找到渠道配置"
-                description="请先配置项目的渠道信息"
-                type="warning"
-                showIcon
-              />
-            )}
+          <Select
+            className="modal-select"
+            placeholder="选择渠道"
+            value={selectedChannel}
+            onChange={(value) => setSelectedChannel(value)}
+          >
+            {channels && channels.channels && Object.entries(channels.channels).map(([channelId, channel]: [string, any]) => (
+              <Option key={channelId} value={channelId}>
+                {channel.name}
+              </Option>
+            ))}
+          </Select>
+          <div className="modal-actions">
+            <Button onClick={() => setBuildModalVisible(false)} className="cancel-button">
+              取消
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => executeBuildOnly(selectedChannel!)}
+              disabled={!selectedChannel}
+              className="primary-button"
+            >
+              开始构建
+            </Button>
           </div>
-        )}
+        </div>
       </Modal>
 
-      {/* 上传选项弹窗 */}
+      {/* 多渠道上传模态框 */}
       <Modal
-        title={`上传到OSS: ${selectedProject}`}
+        title="选择渠道和环境"
         open={uploadModalVisible}
         onCancel={() => setUploadModalVisible(false)}
         footer={null}
-        width={600}
+        className="custom-modal"
       >
-        {ossLoading ? (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <LoadingOutlined style={{ fontSize: '24px' }} />
-            <div style={{ marginTop: '10px' }}>正在加载OSS配置...</div>
+        <div className="modal-content">
+          <div className="modal-label">
+            <Text>选择渠道:</Text>
           </div>
-        ) : (
-          <div>
-            <div style={{ marginBottom: '20px' }}>
-              <Text strong>选择上传渠道和环境:</Text>
-            </div>
-            {channels?.channels && Object.keys(channels.channels).length > 0 ? (
-              <div style={{ display: 'grid', gap: '12px' }}>
-                {Object.entries(channels.channels).map(([channelId, channelConfig]: [string, any]) => (
-                  <Card key={channelId} style={{ marginBottom: '8px' }}>
-                    <div style={{ fontWeight: 'bold', marginBottom: '12px' }}>{channelConfig.name || channelId}</div>
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                      <Button
-                        type="default"
-                        icon={<CloudUploadOutlined />}
-                        onClick={() => executeUpload(channelId, 'dev')}
-                        style={{ flex: 1, background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white', border: 'none' }}
-                      >
-                        📦 开发环境
-                      </Button>
-                      <Button
-                        type="default"
-                        icon={<CloudUploadOutlined />}
-                        onClick={() => executeUpload(channelId, 'prod')}
-                        style={{ flex: 1, background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)', color: 'white', border: 'none' }}
-                      >
-                        🚀 生产环境
-                      </Button>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            ) : (
-              <Alert
-                message="未找到渠道配置"
-                description="请先配置项目的渠道信息"
-                type="warning"
-                showIcon
-              />
-            )}
+          <Select
+            className="modal-select"
+            placeholder="选择渠道"
+            value={selectedChannel}
+            onChange={(value) => setSelectedChannel(value)}
+          >
+            {channels && channels.channels && Object.entries(channels.channels).map(([channelId, channel]: [string, any]) => (
+              <Option key={channelId} value={channelId}>
+                {channel.name}
+              </Option>
+            ))}
+          </Select>
+          <div className="modal-label" style={{ marginTop: '16px' }}>
+            <Text>选择上传环境:</Text>
           </div>
-        )}
+          <Select
+            className="modal-select"
+            placeholder="选择环境"
+            value={selectedEnv}
+            onChange={(value) => setSelectedEnv(value)}
+          >
+            <Option value="dev">开发环境</Option>
+            <Option value="prod">生产环境</Option>
+          </Select>
+          <div className="modal-actions">
+            <Button onClick={() => setUploadModalVisible(false)} className="cancel-button">
+              取消
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => executeBuild(selectedChannel!, selectedEnv)}
+              disabled={!selectedChannel}
+              className="primary-button"
+            >
+              开始构建并上传
+            </Button>
+          </div>
+        </div>
       </Modal>
 
-      {/* 简单上传选项弹窗（无渠道配置的项目） */}
+      {/* 简单上传模态框 */}
       <Modal
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <CloudUploadOutlined style={{ color: '#1890ff' }} />
-            <span>上传到OSS</span>
-            <Tag color="blue">{selectedProject}</Tag>
-          </div>
-        }
+        title="选择上传环境"
         open={simpleUploadModalVisible}
         onCancel={() => setSimpleUploadModalVisible(false)}
         footer={null}
-        width={600}
-        centered
-        bodyStyle={{ padding: '24px' }}
+        className="custom-modal"
       >
-        {ossLoading ? (
-          <div style={{ textAlign: 'center', padding: '40px 20px' }}>
-            <LoadingOutlined style={{ fontSize: '32px', color: '#1890ff' }} />
-            <div style={{ marginTop: '16px', fontSize: '16px', color: '#666' }}>
-              正在加载OSS配置...
-            </div>
+        <div className="modal-content">
+          <div className="modal-label">
+            <Text>选择上传环境:</Text>
           </div>
-        ) : ossConfig ? (
-          <div>
-            <div style={{ marginBottom: '24px', textAlign: 'center' }}>
-              <Text strong style={{ fontSize: '16px', color: '#262626' }}>
-                选择上传环境
-              </Text>
-              <div style={{ marginTop: '8px', color: '#8c8c8c', fontSize: '14px' }}>
-                请选择要将项目上传到的环境
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '16px', flexDirection: 'column' }}>
-              {ossConfig.buckets?.dev && (
-                <Card
-                  hoverable
-                  onClick={() => executeSimpleUpload('dev')}
-                  bodyStyle={{ padding: '20px' }}
-                  style={{
-                    cursor: 'pointer',
-                    border: '2px solid #f0f0f0',
-                    borderRadius: '12px',
-                    transition: 'all 0.3s ease',
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = '#91d5ff';
-                    e.currentTarget.style.boxShadow = '0 4px 16px rgba(24,144,255,0.2)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = '#f0f0f0';
-                    e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                        <div style={{
-                          width: '32px',
-                          height: '32px',
-                          borderRadius: '8px',
-                          background: 'linear-gradient(135deg, #87e8de, #36cfc9)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}>
-                          🧪
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: '600', fontSize: '16px', color: '#262626' }}>
-                            开发环境
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#52c41a', fontWeight: '500' }}>
-                            Development
-                          </div>
-                        </div>
-                      </div>
-                      <div style={{ fontSize: '13px', color: '#8c8c8c', marginTop: '4px' }}>
-                        Bucket: <Text code style={{ fontSize: '12px' }}>
-                          {typeof ossConfig.buckets.dev === 'string' ? ossConfig.buckets.dev : ossConfig.buckets.dev.name}
-                        </Text>
-                      </div>
-                    </div>
-                    <div style={{
-                      width: '48px',
-                      height: '48px',
-                      borderRadius: '12px',
-                      background: 'linear-gradient(135deg, #91d5ff, #1890ff)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'white',
-                      fontSize: '20px'
-                    }}>
-                      <CloudUploadOutlined />
-                    </div>
-                  </div>
-                </Card>
-              )}
-              {ossConfig.buckets?.prod && (
-                <Card
-                  hoverable
-                  onClick={() => executeSimpleUpload('prod')}
-                  bodyStyle={{ padding: '20px' }}
-                  style={{
-                    cursor: 'pointer',
-                    border: '2px solid #f0f0f0',
-                    borderRadius: '12px',
-                    transition: 'all 0.3s ease',
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = '#ffccc7';
-                    e.currentTarget.style.boxShadow = '0 4px 16px rgba(255,77,79,0.2)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = '#f0f0f0';
-                    e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.1)';
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                        <div style={{
-                          width: '32px',
-                          height: '32px',
-                          borderRadius: '8px',
-                          background: 'linear-gradient(135deg, #ffccc7, #ff7875)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}>
-                          🚀
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: '600', fontSize: '16px', color: '#262626' }}>
-                            生产环境
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#f5222d', fontWeight: '500' }}>
-                            Production
-                          </div>
-                        </div>
-                      </div>
-                      <div style={{ fontSize: '13px', color: '#8c8c8c', marginTop: '4px' }}>
-                        Bucket: <Text code style={{ fontSize: '12px' }}>
-                          {Array.isArray(ossConfig.buckets.prod)
-                            ? ossConfig.buckets.prod.map((b: any) => b.name || b).join(' + ')
-                            : (typeof ossConfig.buckets.prod === 'string' ? ossConfig.buckets.prod : ossConfig.buckets.prod.name)
-                          }
-                        </Text>
-                      </div>
-                    </div>
-                    <div style={{
-                      width: '48px',
-                      height: '48px',
-                      borderRadius: '12px',
-                      background: 'linear-gradient(135deg, #ffccc7, #ff4d4f)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'white',
-                      fontSize: '20px'
-                    }}>
-                      <CloudUploadOutlined />
-                    </div>
-                  </div>
-                </Card>
-              )}
-            </div>
-            {!ossConfig.buckets?.dev && !ossConfig.buckets?.prod && (
-              <Alert
-                message="未找到Bucket配置"
-                description="请先在oss-connection-config.json中配置项目的bucket信息"
-                type="warning"
-                showIcon
-                style={{ marginTop: '20px', borderRadius: '8px' }}
-              />
-            )}
+          <Select
+            className="modal-select"
+            placeholder="选择环境"
+            value={selectedEnv}
+            onChange={(value) => setSelectedEnv(value)}
+          >
+            <Option value="dev">开发环境</Option>
+            <Option value="prod">生产环境</Option>
+          </Select>
+          <div className="modal-actions">
+            <Button onClick={() => setSimpleUploadModalVisible(false)} className="cancel-button">
+              取消
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => executeSimpleUpload(selectedEnv)}
+              className="primary-button"
+            >
+              开始上传
+            </Button>
           </div>
-        ) : (
-          <Alert
-            message="未找到OSS配置"
-            description="请先在oss-connection-config.json中配置项目信息"
-            type="error"
-            showIcon
-            style={{ borderRadius: '8px' }}
-          />
-        )}
+        </div>
       </Modal>
 
-      {/* 进度显示弹窗 */}
+      {/* 进度模态框 */}
       <Modal
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {currentOperation === 'upload' && <CloudUploadOutlined style={{ color: '#1890ff' }} />}
-            {currentOperation === 'build' && <BuildOutlined style={{ color: '#52c41a' }} />}
-            {currentOperation === 'git-pull' && <DownOutlined style={{ color: '#722ed1' }} />}
-            {currentOperation === 'git-push' && <UpOutlined style={{ color: '#eb2f96' }} />}
-            <span>{progressTitle}</span>
-          </div>
-        }
+        title={progressTitle}
         open={progressModalVisible}
         footer={null}
         closable={false}
         width={800}
-        centered
-        bodyStyle={{ padding: '24px' }}
+        className="progress-modal"
       >
-        <div style={{ minHeight: '200px' }}>
-          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-            {currentOperation === 'upload' && (
-              <div style={{ marginBottom: '20px' }}>
-                <Progress
-                  type="circle"
-                  percent={progressPercent}
-                  status={progressText.includes('失败') ? 'exception' : progressText.includes('成功') ? 'success' : 'active'}
-                  size={80}
-                  strokeWidth={8}
-                  strokeColor={
-                    progressText.includes('失败') ? '#ff4d4f' :
-                    progressText.includes('成功') ? '#52c41a' : '#1890ff'
-                  }
-                />
-              </div>
-            )}
-            <div style={{
-              fontSize: '18px',
-              fontWeight: '600',
-              color: '#262626',
-              marginBottom: '8px'
-            }}>
-              {progressText}
-            </div>
-            {currentOperation === 'upload' && (
-              <div style={{ fontSize: '14px', color: '#8c8c8c' }}>
-                {progressPercent < 30 && '正在准备文件...'}
-                {progressPercent >= 30 && progressPercent < 70 && '正在上传中...'}
-                {progressPercent >= 70 && progressPercent < 100 && '即将完成...'}
-                {progressPercent === 100 && '上传完成！'}
-              </div>
-            )}
+        <div className="progress-content">
+          <div className="progress-bar">
+            <Progress percent={progressPercent} status={progressPercent === 100 ? 'success' : 'active'} />
           </div>
-
-          {progressLogs.length > 0 && (
-            <div style={{ marginTop: '24px' }}>
-              <div style={{
-                fontSize: '14px',
-                fontWeight: '500',
-                color: '#262626',
-                marginBottom: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}>
-                📋 执行日志
-              </div>
+          <div className="progress-text">
+            <Text>{progressText}</Text>
+          </div>
+          <div
+            ref={logsRef}
+            className="logs-container"
+          >
+            {progressLogs.map((log, index) => (
+              <div key={index} className="log-line">{log}</div>
+            ))}
+            {Array.from(fileUploadStatus.entries()).map(([file, status]) => (
               <div
-                ref={logsRef}
-                style={{
-                  maxHeight: '350px',
-                  overflowY: 'auto',
-                  background: 'linear-gradient(135deg, #1a1a1a, #2a2a2a)',
-                  border: '1px solid #404040',
-                  borderRadius: '12px',
-                  padding: '20px',
-                  fontFamily: '"JetBrains Mono", "Fira Code", Monaco, Menlo, "Ubuntu Mono", monospace',
-                  fontSize: '13px',
-                  lineHeight: '1.6',
-                  color: '#e6f7ff',
-                  boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.3)',
-                  position: 'relative'
-                }}
+                key={file}
+                className={`file-status ${status.status === 'failed' ? 'failed' : status.status === 'uploaded' ? 'uploaded' : 'uploading'}`}
               >
-                {/* 添加终端风格的装饰 */}
-                <div style={{
-                  position: 'absolute',
-                  top: '8px',
-                  left: '12px',
-                  display: 'flex',
-                  gap: '6px'
-                }}>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ff5f57' }}></div>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ffbd2e' }}></div>
-                  <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#28ca42' }}></div>
-                </div>
-
-                <div style={{ paddingTop: '20px' }}>
-                  {progressLogs.map((log, index) => (
-                    <div
-                      key={index}
-                      style={{
-                        marginBottom: '6px',
-                        padding: '2px 0',
-                        borderLeft: log.includes('错误') || log.includes('失败') ? '3px solid #ff4d4f' :
-                                   log.includes('成功') || log.includes('完成') ? '3px solid #52c41a' :
-                                   '3px solid transparent'
-                      }}
-                    >
-                      <span style={{ color: '#888', marginRight: '8px' }}>$</span>
-                      {log}
-                    </div>
-                  ))}
-
-                  {/* 文件上传状态 */}
-                  {Array.from(fileUploadStatus.entries()).map(([fileName, status]) => (
-                    <div
-                      key={fileName}
-                      style={{
-                        marginBottom: '6px',
-                        padding: '4px 8px',
-                        borderRadius: '6px',
-                        background: status.status === 'uploading' ? 'rgba(255,165,0,0.1)' :
-                                  status.status === 'uploaded' ? 'rgba(82,196,26,0.1)' :
-                                  'rgba(255,68,68,0.1)',
-                        border: `1px solid ${
-                          status.status === 'uploading' ? '#ffa500' :
-                          status.status === 'uploaded' ? '#52c41a' :
-                          '#ff4444'
-                        }`,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px'
-                      }}
-                    >
-                      <span style={{
-                        width: '6px',
-                        height: '6px',
-                        borderRadius: '50%',
-                        background: status.status === 'uploading' ? '#ffa500' :
-                                   status.status === 'uploaded' ? '#52c41a' :
-                                   '#ff4444'
-                      }}></span>
-                      <span style={{ fontSize: '12px', fontFamily: 'Arial, sans-serif' }}>
-                        {fileName}: {status.message}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                {status.message}
               </div>
-            </div>
-          )}
+            ))}
+          </div>
         </div>
       </Modal>
     </div>
