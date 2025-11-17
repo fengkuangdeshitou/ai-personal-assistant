@@ -26,6 +26,7 @@ interface Project {
   name: string;
   path: string;
   lastCommitTime?: string;
+  branch?: string;
   status?: {
     modified: number;
     added: number;
@@ -872,9 +873,21 @@ const Projects: React.FC = () => {
                   </div>
                   <div className="project-meta">
                     <div className="project-path">路径: {project.path}</div>
-                    {project.lastCommitTime && (
-                      <div className="project-commit-time">最后提交: {formatRelativeTime(project.lastCommitTime)}</div>
-                    )}
+                    <div className="project-commit-info">
+                      {project.lastCommitTime && (
+                        <span className="project-commit-time">最后提交: {formatRelativeTime(project.lastCommitTime)}</span>
+                      )}
+                      {project.branch && (
+                        <Tag color="purple" style={{ marginLeft: '8px' }}>
+                          {project.branch}
+                        </Tag>
+                      )}
+                      {project.status && (project.status.modified > 0 || project.status.added > 0 || project.status.deleted > 0) && (
+                        <span className="project-changes" style={{ marginLeft: '8px', color: '#666' }}>
+                          改动: {project.status.modified + project.status.added + project.status.deleted} 个文件
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="project-actions">
