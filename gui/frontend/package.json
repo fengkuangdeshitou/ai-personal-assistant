@@ -18,13 +18,11 @@
     "start": "react-scripts start",
     "build": "./scripts/build.sh",
     "build:original": "react-scripts build",
-    "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
     "extends": [
-      "react-app",
-      "react-app/jest"
+      "react-app"
     ]
   },
   "browserslist": {
