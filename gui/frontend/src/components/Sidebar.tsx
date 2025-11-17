@@ -4,9 +4,7 @@ import {
   HomeOutlined,
   MessageOutlined,
   ProjectOutlined,
-  BarChartOutlined,
   ClockCircleOutlined,
-  ToolOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
 import './Sidebar.css';
@@ -36,19 +34,9 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
       label: '项目管理',
     },
     {
-      key: 'statistics',
-      icon: <BarChartOutlined />,
-      label: '数据统计',
-    },
-    {
       key: 'timeline',
       icon: <ClockCircleOutlined />,
       label: '工作记录',
-    },
-    {
-      key: 'tools',
-      icon: <ToolOutlined />,
-      label: '快速工具',
     },
     {
       key: 'settings',
