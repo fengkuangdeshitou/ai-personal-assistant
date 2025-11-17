@@ -421,45 +421,137 @@ app.get('/api/commits/today', async (req, res) => {
   }
 });
 
-// Execute git pull
-app.post('/api/git/pull', async (req, res) => {
+// Execute git pull with streaming output
+app.get('/api/git/pull-stream', async (req, res) => {
   try {
-    const { path: repoPath } = req.body || {};
-    if (!repoPath) return res.status(400).json({ error: 'Missing path' });
+    const { path: repoPath } = req.query;
+    if (!repoPath) {
+      return res.status(400).json({ error: 'Missing path' });
+    }
+
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
     const git = simpleGit({ baseDir: repoPath });
-    await git.fetch();
-    const result = await git.pull();
-    const counts = await getStatusCounts(repoPath);
-    const lastCommitTime = await getLastCommitTime(repoPath);
-    res.json({ ok: true, result, status: counts, lastCommitTime });
+
+    try {
+      // 发送开始消息
+      res.write(`data: ${JSON.stringify({ type: 'start', message: '开始执行 git pull...' })}\n\n`);
+
+      // 执行 git fetch
+      res.write(`data: ${JSON.stringify({ type: 'command', command: 'git fetch', message: '正在获取远程更新...' })}\n\n`);
+      await git.fetch();
+
+      // 执行 git pull
+      res.write(`data: ${JSON.stringify({ type: 'command', command: 'git pull', message: '正在拉取代码...' })}\n\n`);
+      const result = await git.pull();
+
+      // 获取更新后的状态
+      const counts = await getStatusCounts(repoPath);
+      const lastCommitTime = await getLastCommitTime(repoPath);
+
+      res.write(`data: ${JSON.stringify({ type: 'complete', message: '✅ 拉取完成', result, status: counts, lastCommitTime })}\n\n`);
+      res.end();
+
+    } catch (e) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: `❌ 拉取失败: ${e.message}` })}\n\n`);
+      res.end();
+    }
+
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('Git pull stream error:', e);
+    res.write(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`);
+    res.end();
   }
 });
 
-// Execute git push (with optional add/commit)
-app.post('/api/git/push', async (req, res) => {
+// Execute git push with streaming output
+app.get('/api/git/push-stream', async (req, res) => {
   try {
-    const { path: repoPath, message } = req.body || {};
-    if (!repoPath) return res.status(400).json({ error: 'Missing path' });
-    const git = simpleGit({ baseDir: repoPath });
-    // stage changes if any
-    const status = await git.status();
-    if (!status.isClean()) {
-      await git.add(['.']);
-      const msg = message || `chore: update from UI ${new Date().toISOString()}`;
-      try {
-        await git.commit(msg);
-      } catch (commitErr) {
-        // ignore if nothing to commit due to race
-      }
+    const { path: repoPath, message } = req.query;
+    if (!repoPath) {
+      return res.status(400).json({ error: 'Missing path' });
     }
-    const result = await git.push();
-    const counts = await getStatusCounts(repoPath);
-    const lastCommitTime = await getLastCommitTime(repoPath);
-    res.json({ ok: true, result, status: counts, lastCommitTime });
+
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const git = simpleGit({ baseDir: repoPath });
+
+    try {
+      // 发送开始消息
+      res.write(`data: ${JSON.stringify({ type: 'start', message: '开始执行 git push...' })}\n\n`);
+
+      // 检查远程仓库配置
+      res.write(`data: ${JSON.stringify({ type: 'command', command: 'git remote -v', message: '检查远程仓库配置...' })}\n\n`);
+      const remotes = await git.getRemotes(true);
+      if (remotes.length === 0) {
+        throw new Error('没有配置远程仓库，请先添加远程仓库：git remote add origin <url>');
+      }
+
+      const originRemote = remotes.find(r => r.name === 'origin');
+      if (!originRemote) {
+        throw new Error('没有找到 origin 远程仓库，请先添加：git remote add origin <url>');
+      }
+
+      res.write(`data: ${JSON.stringify({ type: 'info', message: `远程仓库: ${originRemote.refs.fetch}` })}\n\n`);
+
+      // 检查当前分支和上游分支
+      const branchInfo = await git.branch();
+      const currentBranch = branchInfo.current;
+      res.write(`data: ${JSON.stringify({ type: 'info', message: `当前分支: ${currentBranch}` })}\n\n`);
+
+      // 检查状态并暂存更改
+      res.write(`data: ${JSON.stringify({ type: 'command', command: 'git status', message: '检查工作区状态...' })}\n\n`);
+      const status = await git.status();
+
+      if (!status.isClean()) {
+        res.write(`data: ${JSON.stringify({ type: 'command', command: 'git add .', message: '暂存所有更改...' })}\n\n`);
+        await git.add(['.']);
+
+        const msg = message || `chore: update from UI ${new Date().toISOString()}`;
+        res.write(`data: ${JSON.stringify({ type: 'command', command: `git commit -m "${msg}"`, message: '提交更改...' })}\n\n`);
+        try {
+          await git.commit(msg);
+        } catch (commitErr) {
+          res.write(`data: ${JSON.stringify({ type: 'info', message: '没有需要提交的更改' })}\n\n`);
+        }
+      } else {
+        res.write(`data: ${JSON.stringify({ type: 'info', message: '工作区是干净的' })}\n\n`);
+      }
+
+      // 检查是否设置了上游分支
+      let result;
+      const branchDetails = branchInfo.branches[currentBranch];
+      if (!branchDetails || !branchDetails.tracking) {
+        res.write(`data: ${JSON.stringify({ type: 'command', command: `git push -u origin ${currentBranch}`, message: '设置上游分支并推送...' })}\n\n`);
+        result = await git.push(['-u', 'origin', currentBranch]);
+      } else {
+        // 执行推送
+        res.write(`data: ${JSON.stringify({ type: 'command', command: 'git push', message: '推送代码到远程...' })}\n\n`);
+        result = await git.push();
+      }
+
+      // 获取更新后的状态
+      const counts = await getStatusCounts(repoPath);
+      const lastCommitTime = await getLastCommitTime(repoPath);
+
+      res.write(`data: ${JSON.stringify({ type: 'complete', message: '✅ 推送完成', result, status: counts, lastCommitTime })}\n\n`);
+      res.end();
+
+    } catch (e) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: `❌ 推送失败: ${e.message}` })}\n\n`);
+      res.end();
+    }
+
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('Git push stream error:', e);
+    res.write(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`);
+    res.end();
   }
 });
 

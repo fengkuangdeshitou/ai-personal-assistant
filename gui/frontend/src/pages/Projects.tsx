@@ -16,7 +16,6 @@ import {
   PlusOutlined
 } from '@ant-design/icons';
 import { useProjects, useOSSConfig } from '../api';
-import { gitApi } from '../api/client';
 import './Projects.css';
 
 const { Title, Text } = Typography;
@@ -36,20 +35,18 @@ interface Project {
 
 const Projects: React.FC = () => {
   const { projects, isLoading, loadProjects, scanProjects } = useProjects();
-  const { ossConfig, channels, isLoading: ossLoading, loadOSSConfig } = useOSSConfig();
+  const { channels, loadOSSConfig } = useOSSConfig();
   const [recentProjects, setRecentProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>('');
   const [buildModalVisible, setBuildModalVisible] = useState(false);
   const [uploadModalVisible, setUploadModalVisible] = useState(false);
   const [simpleUploadModalVisible, setSimpleUploadModalVisible] = useState(false);
-  const [gitModalVisible, setGitModalVisible] = useState(false);
   const [progressModalVisible, setProgressModalVisible] = useState(false);
   const [progressTitle, setProgressTitle] = useState('');
   const [progressPercent, setProgressPercent] = useState(0);
   const [progressText, setProgressText] = useState('');
   const [progressLogs, setProgressLogs] = useState<string[]>([]);
   const [fileUploadStatus, setFileUploadStatus] = useState<Map<string, { status: 'uploading' | 'uploaded' | 'failed', message: string }>>(new Map());
-  const [currentOperation, setCurrentOperation] = useState<'git-pull' | 'git-push' | 'build' | 'upload' | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<string | undefined>(undefined);
   const [selectedEnv, setSelectedEnv] = useState<'dev' | 'prod'>('dev');
   const [projectGitStatus, setProjectGitStatus] = useState<Map<string, { operation: 'pull' | 'push' | null, progress: number, status: 'idle' | 'running' | 'success' | 'error', message: string }>>(new Map());
@@ -105,11 +102,6 @@ const Projects: React.FC = () => {
     return date.toLocaleDateString('zh-CN');
   };
 
-  // 检查API响应是否成功
-  const isResponseSuccess = (response: any): boolean => {
-    return response.ok === true || response.success === true;
-  };
-
   // 处理项目操作
   const handleGitPull = async (projectName: string) => {
     const project = projects.find(p => p.name === projectName);
@@ -127,7 +119,6 @@ const Projects: React.FC = () => {
     })));
 
     // 显示进度模态框
-    setCurrentOperation('git-pull');
     setProgressTitle(`拉取项目: ${projectName}`);
     setProgressPercent(0);
     setProgressText('正在拉取...');
@@ -135,22 +126,67 @@ const Projects: React.FC = () => {
     setProgressModalVisible(true);
 
     try {
-      const response = await gitApi.pull(project.path);
-      if (isResponseSuccess(response)) {
-        setProgressPercent(100);
-        setProgressText('✅ 拉取成功');
-        setProjectGitStatus(prev => new Map(prev.set(projectName, {
-          operation: 'pull',
-          progress: 100,
-          status: 'success',
-          message: '✅ 拉取成功'
-        })));
-        message.success(`✅ 拉取成功: ${projectName}`);
-        // 重新加载项目列表以更新状态
-        await loadProjects();
-      } else {
-        throw new Error(response.error || '拉取失败');
-      }
+      // 使用流式API
+      const pullUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/git/pull-stream?path=${encodeURIComponent(project.path)}`;
+      const pullEventSource = new EventSource(pullUrl);
+
+      await new Promise<void>((resolve, reject) => {
+        pullEventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            setProgressLogs(prev => [...prev, data.message]);
+
+            if (data.type === 'start') {
+              setProgressText(data.message);
+            } else if (data.type === 'command') {
+              setProgressText(`${data.command}: ${data.message}`);
+            } else if (data.type === 'info') {
+              setProgressText(data.message);
+            } else if (data.type === 'complete') {
+              setProgressPercent(100);
+              setProgressText('✅ 拉取成功');
+              setProjectGitStatus(prev => new Map(prev.set(projectName, {
+                operation: 'pull',
+                progress: 100,
+                status: 'success',
+                message: '✅ 拉取成功'
+              })));
+              message.success(`✅ 拉取成功: ${projectName}`);
+              // 重新加载项目列表以更新状态
+              loadProjects();
+              pullEventSource.close();
+              resolve();
+            } else if (data.type === 'error') {
+              setProgressText('❌ 拉取失败');
+              setProjectGitStatus(prev => new Map(prev.set(projectName, {
+                operation: 'pull',
+                progress: 0,
+                status: 'error',
+                message: '❌ 拉取失败'
+              })));
+              message.error(`❌ 拉取失败: ${data.message}`);
+              pullEventSource.close();
+              reject(new Error(data.message));
+            }
+          } catch (e) {
+            console.error('解析拉取SSE数据失败:', e);
+          }
+        };
+
+        pullEventSource.onerror = (error) => {
+          console.error('拉取EventSource错误:', error);
+          setProgressText('❌ 拉取连接失败');
+          message.error('❌ 拉取连接失败');
+          pullEventSource.close();
+          reject(new Error('拉取连接失败'));
+        };
+
+        // 设置超时
+        setTimeout(() => {
+          pullEventSource.close();
+          reject(new Error('拉取超时'));
+        }, 120000); // 2分钟超时
+      });
     } catch (error: any) {
       setProgressText('❌ 拉取失败');
       setProjectGitStatus(prev => new Map(prev.set(projectName, {
@@ -190,7 +226,6 @@ const Projects: React.FC = () => {
     })));
 
     // 显示进度模态框
-    setCurrentOperation('git-push');
     setProgressTitle(`推送项目: ${projectName}`);
     setProgressPercent(0);
     setProgressText('正在推送...');
@@ -198,22 +233,67 @@ const Projects: React.FC = () => {
     setProgressModalVisible(true);
 
     try {
-      const response = await gitApi.push(project.path);
-      if (isResponseSuccess(response)) {
-        setProgressPercent(100);
-        setProgressText('✅ 推送成功');
-        setProjectGitStatus(prev => new Map(prev.set(projectName, {
-          operation: 'push',
-          progress: 100,
-          status: 'success',
-          message: '✅ 推送成功'
-        })));
-        message.success(`✅ 推送成功: ${projectName}`);
-        // 重新加载项目列表以更新状态
-        await loadProjects();
-      } else {
-        throw new Error(response.error || '推送失败');
-      }
+      // 使用流式API
+      const pushUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/git/push-stream?path=${encodeURIComponent(project.path)}`;
+      const pushEventSource = new EventSource(pushUrl);
+
+      await new Promise<void>((resolve, reject) => {
+        pushEventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            setProgressLogs(prev => [...prev, data.message]);
+
+            if (data.type === 'start') {
+              setProgressText(data.message);
+            } else if (data.type === 'command') {
+              setProgressText(`${data.command}: ${data.message}`);
+            } else if (data.type === 'info') {
+              setProgressText(data.message);
+            } else if (data.type === 'complete') {
+              setProgressPercent(100);
+              setProgressText('✅ 推送成功');
+              setProjectGitStatus(prev => new Map(prev.set(projectName, {
+                operation: 'push',
+                progress: 100,
+                status: 'success',
+                message: '✅ 推送成功'
+              })));
+              message.success(`✅ 推送成功: ${projectName}`);
+              // 重新加载项目列表以更新状态
+              loadProjects();
+              pushEventSource.close();
+              resolve();
+            } else if (data.type === 'error') {
+              setProgressText('❌ 推送失败');
+              setProjectGitStatus(prev => new Map(prev.set(projectName, {
+                operation: 'push',
+                progress: 0,
+                status: 'error',
+                message: '❌ 推送失败'
+              })));
+              message.error(`❌ 推送失败: ${data.message}`);
+              pushEventSource.close();
+              reject(new Error(data.message));
+            }
+          } catch (e) {
+            console.error('解析推送SSE数据失败:', e);
+          }
+        };
+
+        pushEventSource.onerror = (error) => {
+          console.error('推送EventSource错误:', error);
+          setProgressText('❌ 推送连接失败');
+          message.error('❌ 推送连接失败');
+          pushEventSource.close();
+          reject(new Error('推送连接失败'));
+        };
+
+        // 设置超时
+        setTimeout(() => {
+          pushEventSource.close();
+          reject(new Error('推送超时'));
+        }, 120000); // 2分钟超时
+      });
     } catch (error: any) {
       setProgressText('❌ 推送失败');
       setProjectGitStatus(prev => new Map(prev.set(projectName, {
@@ -260,7 +340,6 @@ const Projects: React.FC = () => {
 
   const executeBuildOnly = async (channel: string) => {
     setBuildModalVisible(false);
-    setCurrentOperation('build');
     setProgressTitle(`构建项目: ${selectedProject} (${channel})`);
     setProgressPercent(0);
     setProgressText('准备构建...');
@@ -335,7 +414,6 @@ const Projects: React.FC = () => {
 
   const executeBuild = async (channel: string, env: 'dev' | 'prod') => {
     setBuildModalVisible(false);
-    setCurrentOperation('upload');
     setProgressTitle(`构建并上传: ${selectedProject} (${channel} - ${env === 'dev' ? '开发' : '生产'})`);
     setProgressPercent(0);
     setProgressText('准备构建...');
@@ -449,7 +527,6 @@ const Projects: React.FC = () => {
     }
 
     setSimpleUploadModalVisible(false);
-    setCurrentOperation('upload');
     setProgressTitle(`构建并上传: ${selectedProject} (${env === 'dev' ? '开发' : '生产'}环境)`);
     setProgressPercent(0);
     setProgressText('准备构建...');
@@ -766,7 +843,6 @@ const Projects: React.FC = () => {
     }
 
     setUploadModalVisible(false);
-    setCurrentOperation('upload');
     setProgressTitle(`上传: ${selectedProject} (${channelId} - ${env === 'dev' ? '开发' : '生产'})`);
     setProgressPercent(0);
     setProgressText('准备上传...');
