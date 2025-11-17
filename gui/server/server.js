@@ -403,11 +403,31 @@ app.get('/api/commits/weekly', async (req, res) => {
   }
 });
 
+// Get dashboard stats
+app.get('/api/stats', async (req, res) => {
+  try {
+    let projects = readConfig();
+    if (!projects) projects = scanProjects(DEFAULT_DIR);
+    
+    const activeProjects = projects.filter(p => p.active !== false);
+    
+    res.json({
+      projects: activeProjects.length,
+      totalProjects: projects.length
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Get today's git operations for all projects
 app.get('/api/git/today-operations', async (req, res) => {
   try {
     let projects = readConfig();
     if (!projects) projects = scanProjects(DEFAULT_DIR);
+    
+    // Filter to active projects only
+    projects = projects.filter(p => p.active !== false);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);

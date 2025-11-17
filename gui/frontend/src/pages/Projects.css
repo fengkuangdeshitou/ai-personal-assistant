@@ -153,6 +153,22 @@
   background: rgba(255, 255, 255, 0.95);
 }
 
+.category-card.active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 8px 32px rgba(102, 126, 234, 0.3);
+}
+
+.category-card.active .category-icon {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+}
+
+.category-card.active .category-name,
+.category-card.active .category-count {
+  color: white;
+}
+
 .category-icon {
   font-size: 2.5rem;
   margin-right: 20px;

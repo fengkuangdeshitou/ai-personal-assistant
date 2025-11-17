@@ -5,7 +5,6 @@ import {
 } from 'antd';
 import {
   FolderOpenOutlined,
-  GlobalOutlined,
   SettingOutlined,
   MobileOutlined,
   CloudUploadOutlined,
@@ -49,6 +48,7 @@ const Projects: React.FC = () => {
   const [fileUploadStatus, setFileUploadStatus] = useState<Map<string, { status: 'uploading' | 'uploaded' | 'failed', message: string }>>(new Map());
   const [selectedChannel, setSelectedChannel] = useState<string | undefined>(undefined);
   const [selectedEnv, setSelectedEnv] = useState<'dev' | 'prod'>('dev');
+  const [selectedType, setSelectedType] = useState<'box' | 'ios' | 'other'>('box');
   const [projectGitStatus, setProjectGitStatus] = useState<Map<string, { operation: 'pull' | 'push' | null, progress: number, status: 'idle' | 'running' | 'success' | 'error', message: string }>>(new Map());
 
   // 移除uploadAsZip状态，直接使用压缩上传作为默认行为
@@ -63,10 +63,11 @@ const Projects: React.FC = () => {
   }, [progressLogs, fileUploadStatus]);
 
   // 项目分类数据
+  const activeProjects = projects.filter(p => p.active);
   const projectCategories = [
-    { type: 'frontend', name: '前端项目', count: 15, icon: <GlobalOutlined />, color: '#1890ff' },
-    { type: 'backend', name: '后端项目', count: 8, icon: <SettingOutlined />, color: '#52c41a' },
-    { type: 'mobile', name: '移动端', count: 3, icon: <MobileOutlined />, color: '#fa8c16' }
+    { type: 'box', name: 'React项目', count: activeProjects.filter(p => p.type === 'box').length, icon: <SettingOutlined />, color: '#52c41a' },
+    { type: 'ios', name: 'iOS项目', count: activeProjects.filter(p => p.type === 'ios').length, icon: <MobileOutlined />, color: '#fa8c16' },
+    { type: 'other', name: '其他项目', count: activeProjects.filter(p => p.type === 'other').length, icon: <ToolOutlined />, color: '#722ed1' }
   ];
 
   useEffect(() => {
@@ -75,8 +76,11 @@ const Projects: React.FC = () => {
 
   useEffect(() => {
     if (projects && projects.length > 0) {
+      // 过滤项目
+      const baseFiltered = projects.filter(p => p.active);
+      const filtered = baseFiltered.filter(p => p.type === selectedType);
       // 按最后提交时间排序，取最近6个
-      const sorted = [...projects].sort((a: any, b: any) => {
+      const sorted = [...filtered].sort((a: any, b: any) => {
         const aTime = a.lastCommitTime ? new Date(a.lastCommitTime).getTime() : 0;
         const bTime = b.lastCommitTime ? new Date(b.lastCommitTime).getTime() : 0;
         return bTime - aTime;
@@ -85,7 +89,7 @@ const Projects: React.FC = () => {
     } else {
       setRecentProjects([]);
     }
-  }, [projects]);
+  }, [projects, selectedType]);
 
   // 格式化相对时间
   const formatRelativeTime = (dateString: string) => {
@@ -950,7 +954,12 @@ const Projects: React.FC = () => {
         <h2 className="section-title">项目分类</h2>
         <div className="categories-grid">
           {projectCategories.map(category => (
-            <div key={category.type} className="category-card">
+            <div 
+              key={category.type} 
+              className={`category-card ${selectedType === category.type ? 'active' : ''}`}
+              onClick={() => setSelectedType(category.type as any)}
+              style={{ cursor: 'pointer' }}
+            >
               <div className="category-icon" style={{ color: category.color }}>
                 {category.icon}
               </div>
