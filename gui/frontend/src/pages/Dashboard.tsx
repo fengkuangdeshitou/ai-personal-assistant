@@ -236,14 +236,6 @@ const Dashboard: React.FC = () => {
           <Button
             type="primary"
             size="large"
-            icon={<BarChartOutlined />}
-            onClick={() => window.location.hash = '#statistics'}
-          >
-            查看统计
-          </Button>
-          <Button
-            type="primary"
-            size="large"
             icon={<ProjectOutlined />}
             onClick={() => window.location.hash = '#projects'}
           >

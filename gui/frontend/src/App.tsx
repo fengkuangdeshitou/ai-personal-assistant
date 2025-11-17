@@ -5,9 +5,7 @@ import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Chat from './pages/Chat';
 import Projects from './pages/Projects';
-import Statistics from './pages/Statistics';
 import Timeline from './pages/Timeline';
-import Tools from './pages/Tools';
 import Settings from './pages/Settings';
 import './App.css';
 
@@ -26,12 +24,8 @@ function App() {
         return <Chat />;
       case 'projects':
         return <Projects />;
-      case 'statistics':
-        return <Statistics />;
       case 'timeline':
         return <Timeline />;
-      case 'tools':
-        return <Tools />;
       case 'settings':
         return <Settings />;
       default:
