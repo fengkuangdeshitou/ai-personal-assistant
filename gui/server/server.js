@@ -186,6 +186,16 @@ async function getStatusCounts(repoPath) {
   }
 }
 
+async function getCurrentBranch(repoPath) {
+  try {
+    const git = simpleGit({ baseDir: repoPath });
+    const branch = await git.branch();
+    return branch.current;
+  } catch (e) {
+    return 'unknown';
+  }
+}
+
 async function getWeeklyCommits(repoPath, days = 7) {
   try {
     const git = simpleGit({ baseDir: repoPath });
@@ -292,11 +302,15 @@ app.get('/api/projects', async (_req, res) => {
     projects = [];
   }
 
-  // Enrich with lastCommitTime
+  // Enrich with lastCommitTime, status, and branch
   const enriched = await Promise.all(
     projects.map(async (p) => {
-      const lastCommitTime = await getLastCommitTime(p.path);
-      return { ...p, lastCommitTime };
+      const [lastCommitTime, status, branch] = await Promise.all([
+        getLastCommitTime(p.path),
+        getStatusCounts(p.path),
+        getCurrentBranch(p.path)
+      ]);
+      return { ...p, lastCommitTime, status, branch };
     })
   );
   res.json({
@@ -312,11 +326,15 @@ app.post('/api/projects/scan', async (_req, res) => {
     // 重新扫描项目目录
     const scannedProjects = scanProjects(DEFAULT_DIR);
     
-    // Enrich with lastCommitTime
+    // Enrich with lastCommitTime, status, and branch
     const enriched = await Promise.all(
       scannedProjects.map(async (p) => {
-        const lastCommitTime = await getLastCommitTime(p.path);
-        return { ...p, lastCommitTime };
+        const [lastCommitTime, status, branch] = await Promise.all([
+          getLastCommitTime(p.path),
+          getStatusCounts(p.path),
+          getCurrentBranch(p.path)
+        ]);
+        return { ...p, lastCommitTime, status, branch };
       })
     );
     
