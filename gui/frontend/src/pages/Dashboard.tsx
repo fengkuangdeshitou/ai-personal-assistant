@@ -22,7 +22,7 @@ const Dashboard: React.FC = () => {
     commits: 3,
     insertions: 245,
     deletions: 12,
-    projects: 26,
+    projects: 0,
     productivity: 85
   });
 
@@ -84,16 +84,24 @@ const Dashboard: React.FC = () => {
     setWorkHours(hours);
   };
 
-  const loadStats = () => {
-    // 这里可以调用API获取真实数据
-    // 暂时使用模拟数据
-    setStats({
-      commits: Math.floor(Math.random() * 10) + 1,
-      insertions: Math.floor(Math.random() * 500) + 100,
-      deletions: Math.floor(Math.random() * 50) + 5,
-      projects: 26,
-      productivity: Math.floor(Math.random() * 30) + 70
-    });
+  const loadStats = async () => {
+    try {
+      console.log('Loading stats...');
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/stats`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      console.log('Stats data:', data);
+      
+      setStats(prev => ({
+        ...prev,
+        projects: data.projects || 0
+      }));
+    } catch (error) {
+      console.error('Load stats error:', error);
+      // 保持默认值或显示错误
+    }
   };
 
   const weeklyData = [120, 200, 150, 80, 70, 180, 250]; // 模拟周数据
