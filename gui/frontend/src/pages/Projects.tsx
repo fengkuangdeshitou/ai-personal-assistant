@@ -8,12 +8,12 @@ import {
   GlobalOutlined,
   SettingOutlined,
   MobileOutlined,
-  DownOutlined,
-  UpOutlined,
-  BuildOutlined,
   CloudUploadOutlined,
   ReloadOutlined,
-  PlusOutlined
+  PlusOutlined,
+  PullRequestOutlined,
+  ExportOutlined,
+  ToolOutlined
 } from '@ant-design/icons';
 import { useProjects, useOSSConfig } from '../api';
 import './Projects.css';
@@ -1000,13 +1000,6 @@ const Projects: React.FC = () => {
                 <div className="project-content">
                   <div className="project-header">
                     <h3 className="project-name">{project.name}</h3>
-                    {project.status && (
-                      <div className="project-status">
-                        {project.status.added > 0 && <Tag color="green">+{project.status.added}</Tag>}
-                        {project.status.modified > 0 && <Tag color="blue">~{project.status.modified}</Tag>}
-                        {project.status.deleted > 0 && <Tag color="red">-{project.status.deleted}</Tag>}
-                      </div>
-                    )}
                   </div>
                   <div className="project-meta">
                     <div className="project-path">路径: {project.path}</div>
@@ -1020,8 +1013,8 @@ const Projects: React.FC = () => {
                         </Tag>
                       )}
                       {project.status && (project.status.modified > 0 || project.status.added > 0 || project.status.deleted > 0) && (
-                        <span className="project-changes" style={{ marginLeft: '8px', color: '#666' }}>
-                          改动: {project.status.modified + project.status.added + project.status.deleted} 个文件
+                        <span className="project-changes" style={{ marginLeft: '8px' }}>
+                          改动: <span className="change-count">{project.status.modified + project.status.added + project.status.deleted}</span> 个文件
                         </span>
                       )}
                     </div>
@@ -1030,38 +1023,36 @@ const Projects: React.FC = () => {
                 <div className="project-actions">
                   <div className="action-buttons">
                     <Button
-                      size="small"
-                      icon={<DownOutlined />}
+                      size="middle"
+                      icon={<PullRequestOutlined />}
                       onClick={() => handleGitPull(project.name)}
                       loading={projectGitStatus.get(project.name)?.operation === 'pull' && projectGitStatus.get(project.name)?.status === 'running'}
-                      className="action-button-small"
+                      className="action-button pull-button"
                     >
                       拉取
                     </Button>
                     <Button
-                      size="small"
-                      icon={<UpOutlined />}
+                      size="middle"
+                      icon={<ExportOutlined />}
                       onClick={() => handleGitPush(project.name)}
                       loading={projectGitStatus.get(project.name)?.operation === 'push' && projectGitStatus.get(project.name)?.status === 'running'}
-                      className="action-button-small"
+                      className="action-button push-button"
                     >
                       推送
                     </Button>
                     <Button
-                      type="primary"
-                      size="small"
-                      icon={<BuildOutlined />}
+                      size="middle"
+                      icon={<ToolOutlined />}
                       onClick={() => handleBuild(project.name)}
-                      className="action-button-small"
+                      className="action-button build-button"
                     >
                       构建
                     </Button>
                     <Button
-                      type="primary"
-                      size="small"
+                      size="middle"
                       icon={<CloudUploadOutlined />}
                       onClick={() => handleUpload(project.name)}
-                      className="action-button-small"
+                      className="action-button upload-button"
                     >
                       上传
                     </Button>

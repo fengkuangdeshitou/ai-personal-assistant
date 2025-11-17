@@ -207,12 +207,64 @@
 .action-button {
   border-radius: 8px;
   font-weight: 500;
+  font-size: 0.9rem;
+  padding: 6px 16px;
+  min-height: 36px;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .action-button:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+/* 按钮颜色样式 */
+.pull-button {
+  background: linear-gradient(135deg, #00BFFF 0%, #1E90FF 20%);
+  border-color: #00BFFF;
+  color: white;
+}
+
+.pull-button:hover {
+  background: linear-gradient(135deg, #1E90FF 0%, #0000FF 20%);
+  border-color: #1E90FF;
+  box-shadow: 0 4px 12px rgba(0, 191, 255, 0.4);
+}
+
+.push-button {
+  background: linear-gradient(135deg, #32CD32 0%, #228B22 20%);
+  border-color: #32CD32;
+  color: white;
+}
+
+.push-button:hover {
+  background: linear-gradient(135deg, #228B22 0%, #006400 20%);
+  border-color: #228B22;
+  box-shadow: 0 4px 12px rgba(50, 205, 50, 0.4);
+}
+
+.build-button {
+  background: linear-gradient(135deg, #FF8C00 0%, #FF6347 20%);
+  border-color: #FF8C00;
+  color: white;
+}
+
+.build-button:hover {
+  background: linear-gradient(135deg, #FF6347 0%, #DC143C 20%);
+  border-color: #FF6347;
+  box-shadow: 0 4px 12px rgba(255, 140, 0, 0.4);
+}
+
+.upload-button {
+  background: linear-gradient(135deg, #DA70D6 0%, #BA55D3 20%);
+  border-color: #DA70D6;
+  color: white;
+}
+
+.upload-button:hover {
+  background: linear-gradient(135deg, #BA55D3 0%, #9932CC 20%);
+  border-color: #BA55D3;
+  box-shadow: 0 4px 12px rgba(218, 112, 214, 0.4);
 }
 
 .projects-list {
@@ -252,17 +304,27 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 2px;
 }
 
 .project-name {
-  margin: 0;
+  margin: 0 0 2px 0;
   font-size: 1.1rem;
   font-weight: 600;
   color: #1f2937;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.project-changes {
+  color: #666;
+  font-weight: 500;
+}
+
+.change-count {
+  color: #f59e0b;
+  font-weight: 600;
 }
 
 .project-status {
@@ -301,6 +363,13 @@
 
 .action-button-small:hover {
   transform: scale(1.05);
+}
+
+.action-buttons {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .loading-container {
