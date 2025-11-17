@@ -249,9 +249,12 @@ async function getTodayCommits(repoPath) {
     const git = simpleGit({ baseDir: repoPath });
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const sinceStr = today.toISOString();
+    // Use local date string for git log --since
+    const sinceStr = today.getFullYear() + '-' + 
+                     String(today.getMonth() + 1).padStart(2, '0') + '-' + 
+                     String(today.getDate()).padStart(2, '0');
     
-    const log = await git.log({ '--since': sinceStr, '--all': true });
+    const log = await git.log({ '--since': '1 day ago', '--all': true });
     const commits = log.all || [];
     
     const detailedCommits = await Promise.all(
@@ -400,26 +403,95 @@ app.get('/api/commits/weekly', async (req, res) => {
   }
 });
 
-// Get today's commits
-app.get('/api/commits/today', async (req, res) => {
+// Get today's git operations for all projects
+app.get('/api/git/today-operations', async (req, res) => {
   try {
     let projects = readConfig();
     if (!projects) projects = scanProjects(DEFAULT_DIR);
-    
-    const allCommits = [];
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    // Use local date instead of UTC to avoid timezone issues
+    const todayStr = today.getFullYear() + '-' + 
+                     String(today.getMonth() + 1).padStart(2, '0') + '-' + 
+                     String(today.getDate()).padStart(2, '0');
+
+    const allOperations = [];
+
     for (const project of projects) {
-      const commits = await getTodayCommits(project.path);
-      allCommits.push(...commits.map(c => ({ ...c, project: project.name })));
+      try {
+        const git = simpleGit({ baseDir: project.path });
+
+        // Get reflog to see all operations today
+        const reflog = await git.raw(['reflog', '--since', '1 day ago']);
+
+        // Parse reflog entries
+        const operations = [];
+        const lines = reflog.split('\n').filter(line => line.trim());
+
+        for (const line of lines) {
+          const match = line.match(/^(\w+)\s+HEAD@\{\d+\}:\s+(.+)$/);
+          if (match) {
+            const [, hash, message] = match;
+            const timestamp = new Date().toISOString(); // reflog doesn't include timestamps easily
+
+            operations.push({
+              hash: hash.substring(0, 7),
+              oldHash: '',
+              message: message.trim(),
+              author: 'unknown', // reflog doesn't include author easily
+              timestamp,
+              type: getOperationType(message)
+            });
+          }
+        }
+
+        // Also get today's commits
+        const commits = await getTodayCommits(project.path);
+
+        if (operations.length > 0 || commits.length > 0) {
+          allOperations.push({
+            project: project.name,
+            path: project.path,
+            operations: operations,
+            commits: commits,
+            totalOperations: operations.length,
+            totalCommits: commits.length
+          });
+        }
+
+      } catch (e) {
+        // Skip projects with git errors
+        console.warn(`Failed to get git operations for ${project.name}:`, e.message);
+      }
     }
-    
-    // Sort by date descending
-    allCommits.sort((a, b) => new Date(b.date) - new Date(a.date));
-    
-    res.json({ commits: allCommits, count: allCommits.length });
+
+    // Sort by total operations (most active first)
+    allOperations.sort((a, b) => (b.totalOperations + b.totalCommits) - (a.totalOperations + a.totalCommits));
+
+    res.json({
+      success: true,
+      date: todayStr,
+      projects: allOperations,
+      totalProjects: allOperations.length
+    });
+
   } catch (e) {
+    console.error('Get today operations error:', e);
     res.status(500).json({ error: e.message });
   }
 });
+
+// Helper function to determine operation type
+function getOperationType(message) {
+  if (message.includes('commit')) return 'commit';
+  if (message.includes('pull')) return 'pull';
+  if (message.includes('push')) return 'push';
+  if (message.includes('merge')) return 'merge';
+  if (message.includes('checkout')) return 'checkout';
+  if (message.includes('reset')) return 'reset';
+  return 'other';
+}
 
 // Execute git pull with streaming output
 app.get('/api/git/pull-stream', async (req, res) => {
