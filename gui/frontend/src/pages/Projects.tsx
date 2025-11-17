@@ -126,9 +126,19 @@ const Projects: React.FC = () => {
       message: '正在拉取...'
     })));
 
+    // 显示进度模态框
+    setCurrentOperation('git-pull');
+    setProgressTitle(`拉取项目: ${projectName}`);
+    setProgressPercent(0);
+    setProgressText('正在拉取...');
+    setProgressLogs([]);
+    setProgressModalVisible(true);
+
     try {
       const response = await gitApi.pull(project.path);
       if (isResponseSuccess(response)) {
+        setProgressPercent(100);
+        setProgressText('✅ 拉取成功');
         setProjectGitStatus(prev => new Map(prev.set(projectName, {
           operation: 'pull',
           progress: 100,
@@ -138,19 +148,11 @@ const Projects: React.FC = () => {
         message.success(`✅ 拉取成功: ${projectName}`);
         // 重新加载项目列表以更新状态
         await loadProjects();
-        
-        // 3秒后清除状态
-        setTimeout(() => {
-          setProjectGitStatus(prev => {
-            const newMap = new Map(prev);
-            newMap.delete(projectName);
-            return newMap;
-          });
-        }, 3000);
       } else {
         throw new Error(response.error || '拉取失败');
       }
     } catch (error: any) {
+      setProgressText('❌ 拉取失败');
       setProjectGitStatus(prev => new Map(prev.set(projectName, {
         operation: 'pull',
         progress: 0,
@@ -158,16 +160,18 @@ const Projects: React.FC = () => {
         message: '❌ 拉取失败'
       })));
       message.error(`❌ 拉取失败: ${error.message}`);
-      
-      // 5秒后清除错误状态
-      setTimeout(() => {
-        setProjectGitStatus(prev => {
-          const newMap = new Map(prev);
-          newMap.delete(projectName);
-          return newMap;
-        });
-      }, 5000);
+    } finally {
+      setTimeout(() => setProgressModalVisible(false), 2000);
     }
+
+    // 清除项目级别状态
+    setTimeout(() => {
+      setProjectGitStatus(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(projectName);
+        return newMap;
+      });
+    }, 3000);
   };
 
   const handleGitPush = async (projectName: string) => {
@@ -185,9 +189,19 @@ const Projects: React.FC = () => {
       message: '正在推送...'
     })));
 
+    // 显示进度模态框
+    setCurrentOperation('git-push');
+    setProgressTitle(`推送项目: ${projectName}`);
+    setProgressPercent(0);
+    setProgressText('正在推送...');
+    setProgressLogs([]);
+    setProgressModalVisible(true);
+
     try {
       const response = await gitApi.push(project.path);
       if (isResponseSuccess(response)) {
+        setProgressPercent(100);
+        setProgressText('✅ 推送成功');
         setProjectGitStatus(prev => new Map(prev.set(projectName, {
           operation: 'push',
           progress: 100,
@@ -197,19 +211,11 @@ const Projects: React.FC = () => {
         message.success(`✅ 推送成功: ${projectName}`);
         // 重新加载项目列表以更新状态
         await loadProjects();
-        
-        // 3秒后清除状态
-        setTimeout(() => {
-          setProjectGitStatus(prev => {
-            const newMap = new Map(prev);
-            newMap.delete(projectName);
-            return newMap;
-          });
-        }, 3000);
       } else {
         throw new Error(response.error || '推送失败');
       }
     } catch (error: any) {
+      setProgressText('❌ 推送失败');
       setProjectGitStatus(prev => new Map(prev.set(projectName, {
         operation: 'push',
         progress: 0,
@@ -217,16 +223,18 @@ const Projects: React.FC = () => {
         message: '❌ 推送失败'
       })));
       message.error(`❌ 推送失败: ${error.message}`);
-      
-      // 5秒后清除错误状态
-      setTimeout(() => {
-        setProjectGitStatus(prev => {
-          const newMap = new Map(prev);
-          newMap.delete(projectName);
-          return newMap;
-        });
-      }, 5000);
+    } finally {
+      setTimeout(() => setProgressModalVisible(false), 2000);
     }
+
+    // 清除项目级别状态
+    setTimeout(() => {
+      setProjectGitStatus(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(projectName);
+        return newMap;
+      });
+    }, 3000);
   };
 
   const handleBuild = async (projectName: string) => {
