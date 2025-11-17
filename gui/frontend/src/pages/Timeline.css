@@ -1,0 +1,102 @@
+.timeline-container {
+  padding: 20px;
+}
+
+.timeline-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.timeline-header h1 {
+  color: #1890ff;
+  margin-bottom: 8px;
+}
+
+.timeline-subtitle {
+  color: #666;
+  font-size: 14px;
+}
+
+.timeline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.timeline-card {
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 20px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.timeline-card:hover {
+  border-color: #1890ff;
+  box-shadow: 0 4px 12px rgba(24, 144, 255, 0.15);
+}
+
+.project-name {
+  font-size: 18px;
+  font-weight: bold;
+  color: #1890ff;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.project-stats {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.stat-number {
+  font-weight: bold;
+  color: #1890ff;
+}
+
+.timeline-modal .ant-timeline-item-content {
+  margin-left: 16px;
+}
+
+.operation-tag {
+  margin-right: 8px;
+}
+
+.commit-info {
+  font-size: 12px;
+  color: #666;
+  margin-top: 4px;
+}
+
+.file-changes {
+  font-size: 11px;
+  color: #999;
+  margin-top: 4px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: #999;
+}
+
+.empty-state-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  display: block;
+}
+
+.loading-container {
+  text-align: center;
+  padding: 60px 20px;
+}
