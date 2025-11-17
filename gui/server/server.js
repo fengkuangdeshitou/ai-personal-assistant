@@ -585,7 +585,20 @@ app.get('/api/git/push-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify({ type: 'command', command: 'git add .', message: '暂存所有更改...' })}\n\n`);
         await git.add(['.']);
 
-        const msg = message || `chore: update from UI ${new Date().toISOString()}`;
+        let defaultMsg = 'chore: update from UI';
+        if (status.modified.length > 0) {
+          const modifiedFiles = status.modified;
+          if (modifiedFiles.some(f => f.includes('.css'))) {
+            defaultMsg = 'style: update CSS styles';
+          } else if (modifiedFiles.some(f => f.includes('.tsx') || f.includes('.jsx'))) {
+            defaultMsg = 'feat: update React components';
+          } else if (modifiedFiles.some(f => f.includes('.json'))) {
+            defaultMsg = 'config: update configuration files';
+          } else {
+            defaultMsg = 'chore: update files';
+          }
+        }
+        const msg = message || `${defaultMsg} ${new Date().toISOString()}`;
         res.write(`data: ${JSON.stringify({ type: 'command', command: `git commit -m "${msg}"`, message: '提交更改...' })}\n\n`);
         try {
           await git.commit(msg);
