@@ -52,6 +52,7 @@ const Projects: React.FC = () => {
   const [currentOperation, setCurrentOperation] = useState<'git-pull' | 'git-push' | 'build' | 'upload' | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<string | undefined>(undefined);
   const [selectedEnv, setSelectedEnv] = useState<'dev' | 'prod'>('dev');
+  const [projectGitStatus, setProjectGitStatus] = useState<Map<string, { operation: 'pull' | 'push' | null, progress: number, status: 'idle' | 'running' | 'success' | 'error', message: string }>>(new Map());
 
   // 移除uploadAsZip状态，直接使用压缩上传作为默认行为
 
@@ -117,29 +118,55 @@ const Projects: React.FC = () => {
       return;
     }
 
-    setCurrentOperation('git-pull');
-    setProgressTitle(`拉取项目: ${projectName}`);
-    setProgressPercent(0);
-    setProgressText('正在拉取...');
-    setProgressLogs([]);
-    setProgressModalVisible(true);
+    // 设置项目级别的git状态
+    setProjectGitStatus(prev => new Map(prev.set(projectName, {
+      operation: 'pull',
+      progress: 0,
+      status: 'running',
+      message: '正在拉取...'
+    })));
 
     try {
       const response = await gitApi.pull(project.path);
       if (isResponseSuccess(response)) {
-        setProgressPercent(100);
-        setProgressText('✅ 拉取成功');
+        setProjectGitStatus(prev => new Map(prev.set(projectName, {
+          operation: 'pull',
+          progress: 100,
+          status: 'success',
+          message: '✅ 拉取成功'
+        })));
         message.success(`✅ 拉取成功: ${projectName}`);
         // 重新加载项目列表以更新状态
         await loadProjects();
+        
+        // 3秒后清除状态
+        setTimeout(() => {
+          setProjectGitStatus(prev => {
+            const newMap = new Map(prev);
+            newMap.delete(projectName);
+            return newMap;
+          });
+        }, 3000);
       } else {
         throw new Error(response.error || '拉取失败');
       }
     } catch (error: any) {
-      setProgressText('❌ 拉取失败');
+      setProjectGitStatus(prev => new Map(prev.set(projectName, {
+        operation: 'pull',
+        progress: 0,
+        status: 'error',
+        message: '❌ 拉取失败'
+      })));
       message.error(`❌ 拉取失败: ${error.message}`);
-    } finally {
-      setTimeout(() => setProgressModalVisible(false), 2000);
+      
+      // 5秒后清除错误状态
+      setTimeout(() => {
+        setProjectGitStatus(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(projectName);
+          return newMap;
+        });
+      }, 5000);
     }
   };
 
@@ -150,29 +177,55 @@ const Projects: React.FC = () => {
       return;
     }
 
-    setCurrentOperation('git-push');
-    setProgressTitle(`推送项目: ${projectName}`);
-    setProgressPercent(0);
-    setProgressText('正在推送...');
-    setProgressLogs([]);
-    setProgressModalVisible(true);
+    // 设置项目级别的git状态
+    setProjectGitStatus(prev => new Map(prev.set(projectName, {
+      operation: 'push',
+      progress: 0,
+      status: 'running',
+      message: '正在推送...'
+    })));
 
     try {
       const response = await gitApi.push(project.path);
       if (isResponseSuccess(response)) {
-        setProgressPercent(100);
-        setProgressText('✅ 推送成功');
+        setProjectGitStatus(prev => new Map(prev.set(projectName, {
+          operation: 'push',
+          progress: 100,
+          status: 'success',
+          message: '✅ 推送成功'
+        })));
         message.success(`✅ 推送成功: ${projectName}`);
         // 重新加载项目列表以更新状态
         await loadProjects();
+        
+        // 3秒后清除状态
+        setTimeout(() => {
+          setProjectGitStatus(prev => {
+            const newMap = new Map(prev);
+            newMap.delete(projectName);
+            return newMap;
+          });
+        }, 3000);
       } else {
         throw new Error(response.error || '推送失败');
       }
     } catch (error: any) {
-      setProgressText('❌ 推送失败');
+      setProjectGitStatus(prev => new Map(prev.set(projectName, {
+        operation: 'push',
+        progress: 0,
+        status: 'error',
+        message: '❌ 推送失败'
+      })));
       message.error(`❌ 推送失败: ${error.message}`);
-    } finally {
-      setTimeout(() => setProgressModalVisible(false), 2000);
+      
+      // 5秒后清除错误状态
+      setTimeout(() => {
+        setProjectGitStatus(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(projectName);
+          return newMap;
+        });
+      }, 5000);
     }
   };
 
@@ -891,48 +944,55 @@ const Projects: React.FC = () => {
                   </div>
                 </div>
                 <div className="project-actions">
-                  <Button
-                    size="small"
-                    icon={<DownOutlined />}
-                    onClick={() => handleGitPull(project.name)}
-                    className="action-button-small"
-                  >
-                    拉取
-                  </Button>
-                  <Button
-                    size="small"
-                    icon={<UpOutlined />}
-                    onClick={() => handleGitPush(project.name)}
-                    className="action-button-small"
-                  >
-                    推送
-                  </Button>
-                  <Button
-                    type="primary"
-                    size="small"
-                    icon={<BuildOutlined />}
-                    onClick={() => handleBuild(project.name)}
-                    className="action-button-small"
-                  >
-                    构建
-                  </Button>
-                  <Button
-                    type="primary"
-                    size="small"
-                    icon={<CloudUploadOutlined />}
-                    onClick={() => handleUpload(project.name)}
-                    className="action-button-small"
-                  >
-                    上传
-                  </Button>
+                  <div className="action-buttons">
+                    <Button
+                      size="small"
+                      icon={<DownOutlined />}
+                      onClick={() => handleGitPull(project.name)}
+                      loading={projectGitStatus.get(project.name)?.operation === 'pull' && projectGitStatus.get(project.name)?.status === 'running'}
+                      className="action-button-small"
+                    >
+                      拉取
+                    </Button>
+                    <Button
+                      size="small"
+                      icon={<UpOutlined />}
+                      onClick={() => handleGitPush(project.name)}
+                      loading={projectGitStatus.get(project.name)?.operation === 'push' && projectGitStatus.get(project.name)?.status === 'running'}
+                      className="action-button-small"
+                    >
+                      推送
+                    </Button>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<BuildOutlined />}
+                      onClick={() => handleBuild(project.name)}
+                      className="action-button-small"
+                    >
+                      构建
+                    </Button>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<CloudUploadOutlined />}
+                      onClick={() => handleUpload(project.name)}
+                      className="action-button-small"
+                    >
+                      上传
+                    </Button>
+                  </div>
+                  {projectGitStatus.has(project.name) && (
+                    <div className="git-status" style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
+                      {projectGitStatus.get(project.name)?.message}
+                    </div>
+                  )}
                 </div>
               </div>
             ))
           )}
         </div>
       </div>
-
-      {/* 构建模态框 */}
       <Modal
         title="选择构建渠道"
         open={buildModalVisible}
