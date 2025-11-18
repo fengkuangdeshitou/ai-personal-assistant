@@ -1,6 +1,5 @@
 import React, { useEffect } from 'react';
-import { Card, Button, message, Row, Col, Divider, List } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { Card, Row, Col } from 'antd';
 import './Settings.css';
 
 const Settings: React.FC = () => {
@@ -13,61 +12,52 @@ const Settings: React.FC = () => {
     // 从localStorage加载设置（如果有其他设置项）
   };
 
-  const saveSettings = () => {
-    // 保存设置（如果有其他设置项）
-    message.success('设置已保存');
-  };
-
-  const resetSettings = () => {
-    localStorage.clear();
-    message.success('设置已重置');
-  };
-
   return (
     <div className="settings-container">
-      <div className="settings-header">
-        <h1>🔧 AI 助理设置</h1>
-        <p className="settings-subtitle">个性化您的AI助理体验</p>
-      </div>
 
       <Row gutter={[24, 24]}>
         <Col xs={24}>
-          <Card title="⚙️ 系统配置" className="settings-card">
-            <List
-              itemLayout="horizontal"
-              dataSource={[
-                {
-                  title: '📦 版本信息',
-                  description: 'v1.6.54',
-                },
-                {
-                  title: '💻 运行平台',
-                  description: navigator.platform,
-                },
-              ]}
-              renderItem={(item) => (
-                <List.Item>
-                  <List.Item.Meta
-                    title={item.title}
-                    description={item.description}
-                  />
-                </List.Item>
-              )}
-            />
+          <Card title="⚙️ 系统信息" className="settings-card">
+            <div className="system-info-grid">
+              <div className="system-info-item">
+                <div className="system-info-icon">📦</div>
+                <div className="system-info-content">
+                  <div className="system-info-title">项目名称</div>
+                  <div className="system-info-value">AI 私人助理</div>
+                </div>
+              </div>
+              <div className="system-info-item">
+                <div className="system-info-icon">🏷️</div>
+                <div className="system-info-content">
+                  <div className="system-info-title">版本号</div>
+                  <div className="system-info-value">v1.6.55</div>
+                </div>
+              </div>
+              <div className="system-info-item">
+                <div className="system-info-icon">⚛️</div>
+                <div className="system-info-content">
+                  <div className="system-info-title">前端框架</div>
+                  <div className="system-info-value">React 18 + TypeScript</div>
+                </div>
+              </div>
+              <div className="system-info-item">
+                <div className="system-info-icon">🟢</div>
+                <div className="system-info-content">
+                  <div className="system-info-title">后端框架</div>
+                  <div className="system-info-value">Node.js + Express</div>
+                </div>
+              </div>
+              <div className="system-info-item">
+                <div className="system-info-icon">🎨</div>
+                <div className="system-info-content">
+                  <div className="system-info-title">UI 组件库</div>
+                  <div className="system-info-value">Ant Design 5.x</div>
+                </div>
+              </div>
+            </div>
           </Card>
         </Col>
       </Row>
-
-      <Divider />
-
-      <div className="settings-actions">
-        <Button type="primary" onClick={saveSettings} icon={<ReloadOutlined />}>
-          保存设置
-        </Button>
-        <Button danger onClick={resetSettings}>
-          重置设置
-        </Button>
-      </div>
     </div>
   );
 };
