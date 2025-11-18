@@ -44,6 +44,18 @@ function updateVersionInFile(filePath, oldVersion, newVersion) {
   }
 }
 
+// 获取文件中的当前版本号
+function getCurrentVersion(filePath) {
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const match = content.match(/v(\d+\.\d+\.\d+)/);
+    return match ? match[1] : BASE_VERSION;
+  } catch (error) {
+    console.error(`读取 ${filePath} 版本失败:`, error.message);
+    return BASE_VERSION;
+  }
+}
+
 // 主函数
 function main() {
   const newVersion = calculateVersion();
@@ -51,25 +63,14 @@ function main() {
 
   // 需要更新的文件和位置
   const filesToUpdate = [
-    {
-      path: path.join(__dirname, '../frontend/src/components/Sidebar.tsx'),
-      pattern: 'v1\\.[0-9]+\\.[0-9]+'
-    },
-    {
-      path: path.join(__dirname, '../frontend/src/pages/Dashboard.tsx'),
-      pattern: 'v1\\.[0-9]+\\.[0-9]+'
-    },
-    {
-      path: path.join(__dirname, '../frontend/src/pages/Settings.tsx'),
-      pattern: 'v1\\.[0-9]+\\.[0-9]+'
-    }
+    path.join(__dirname, '../frontend/src/components/Sidebar.tsx'),
+    path.join(__dirname, '../frontend/src/pages/Dashboard.tsx'),
+    path.join(__dirname, '../frontend/src/pages/Settings.tsx')
   ];
 
-  // 获取当前版本号进行替换
-  const currentVersion = '1.6.0';
-
-  filesToUpdate.forEach(({ path: filePath, pattern }) => {
+  filesToUpdate.forEach(filePath => {
     if (fs.existsSync(filePath)) {
+      const currentVersion = getCurrentVersion(filePath);
       updateVersionInFile(filePath, `v${currentVersion}`, `v${newVersion}`);
       updateVersionInFile(filePath, currentVersion, newVersion);
     } else {
