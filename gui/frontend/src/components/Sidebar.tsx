@@ -5,6 +5,7 @@ import {
   ProjectOutlined,
   ClockCircleOutlined,
   SettingOutlined,
+  RobotOutlined,
 } from '@ant-design/icons';
 import './Sidebar.css';
 
@@ -31,6 +32,11 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
       key: 'timeline',
       icon: <ClockCircleOutlined />,
       label: '工作记录',
+    },
+    {
+      key: 'gemini',
+      icon: <RobotOutlined />,
+      label: 'Gemini 聊天',
     },
     {
       key: 'settings',
