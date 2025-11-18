@@ -2,7 +2,6 @@ import React from 'react';
 import { Menu, Layout } from 'antd';
 import {
   HomeOutlined,
-  MessageOutlined,
   ProjectOutlined,
   ClockCircleOutlined,
   SettingOutlined,
@@ -22,11 +21,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
       key: 'dashboard',
       icon: <HomeOutlined />,
       label: '工作台',
-    },
-    {
-      key: 'chat',
-      icon: <MessageOutlined />,
-      label: 'AI 对话',
     },
     {
       key: 'projects',
@@ -49,7 +43,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
     <Sider className="sidebar" width={260}>
       <div className="sidebar-header">
         <h2>🤖 AI 助理</h2>
-        <p className="version">v1.5.0 Plus</p>
+        <p className="version">v1.6.53</p>
       </div>
 
       <Menu

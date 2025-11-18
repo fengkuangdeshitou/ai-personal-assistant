@@ -1,0 +1,83 @@
+.settings-container {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.settings-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.settings-header h1 {
+  font-size: 28px;
+  margin-bottom: 8px;
+  color: #1890ff;
+}
+
+.settings-subtitle {
+  color: #666;
+  font-size: 16px;
+}
+
+.settings-card {
+  height: 100%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: box-shadow 0.3s ease;
+}
+
+.settings-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.settings-card .ant-card-head {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.settings-card .ant-card-head-title {
+  color: white;
+  font-weight: 600;
+}
+
+.setting-item {
+  margin-bottom: 16px;
+}
+
+.setting-item label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: #333;
+}
+
+.setting-item .ant-input,
+.setting-item .ant-input-number {
+  width: 100%;
+}
+
+.settings-actions {
+  text-align: center;
+  margin-top: 32px;
+}
+
+.settings-actions .ant-btn {
+  margin: 0 8px;
+  min-width: 120px;
+}
+
+@media (max-width: 768px) {
+  .settings-container {
+    padding: 16px;
+  }
+
+  .settings-header h1 {
+    font-size: 24px;
+  }
+
+  .settings-actions .ant-btn {
+    display: block;
+    width: 100%;
+    margin: 8px 0;
+  }
+}

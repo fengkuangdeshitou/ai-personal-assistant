@@ -3,7 +3,6 @@ import { Layout, ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
-import Chat from './pages/Chat';
 import Projects from './pages/Projects';
 import Timeline from './pages/Timeline';
 import Settings from './pages/Settings';
@@ -20,8 +19,6 @@ function App() {
 
   const renderContent = () => {
     switch (currentSection) {
-      case 'chat':
-        return <Chat />;
       case 'projects':
         return <Projects />;
       case 'timeline':

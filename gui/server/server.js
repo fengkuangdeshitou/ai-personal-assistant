@@ -15,18 +15,21 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5178;
 
+// 默认项目目录
+const DEFAULT_DIR = '/Users/maiyou001/Project';
+
+// 配置文件路径
+const CONFIG_PATH = path.join(__dirname, 'projects.json');
+const OSS_CONFIG_PATH = path.join(__dirname, 'oss-connection-config.json');
+const CHANNEL_CONFIG_PATH = path.join(__dirname, 'channel-config.json');
+
+// 初始化AI服务
+// AI服务已移除
 app.use(cors());
 app.use(express.json());
 
 // 提供静态文件服务 - 从上级gui目录提供HTML文件
 app.use(express.static(path.join(__dirname, '..')));
-
-// Config: projects.json mapping or directory scan
-const CONFIG_PATH = path.join(__dirname, 'projects.json');
-const CHANNEL_CONFIG_PATH = path.join(__dirname, 'channel-config.json');
-const PROJECT_BUCKETS_PATH = path.join(__dirname, 'project-buckets.json');
-const OSS_CONFIG_PATH = path.join(__dirname, 'oss-connection-config.json');
-const DEFAULT_DIR = process.env.PROJECTS_DIR || '/Users/maiyou001/Project';
 
 // Less 编译相关常量
 const LESS_INPUT_PATH = 'src/css/css.less';

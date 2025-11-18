@@ -6,21 +6,6 @@ export interface ApiResponse<T = any> {
   ok?: boolean;
   message?: T;
   error?: string;
-  history?: ChatMessage[];
-}
-
-// 聊天消息接口
-export interface ChatMessage {
-  id: number;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: string;
-}
-
-// 发送消息请求接口
-export interface SendMessageRequest {
-  message: string;
-  model?: string;
 }
 
 // 创建axios实例
@@ -67,27 +52,6 @@ api.interceptors.response.use(
 );
 
 // API方法
-export const chatApi = {
-  // 发送聊天消息
-  sendMessage: async (data: SendMessageRequest): Promise<ApiResponse<ChatMessage>> => {
-    const response = await api.post('/api/chat/send', data);
-    return response.data;
-  },
-
-  // 获取聊天历史
-  getHistory: async (limit?: number): Promise<ApiResponse<ChatMessage[]>> => {
-    const params = limit ? { limit } : {};
-    const response = await api.get('/api/chat/history', { params });
-    return response.data;
-  },
-
-  // 清空聊天历史
-  clearHistory: async (): Promise<ApiResponse> => {
-    const response = await api.delete('/api/chat/clear');
-    return response.data;
-  },
-};
-
 // 项目管理API
 export const projectApi = {
   // 获取项目列表
