@@ -112,7 +112,7 @@ const Dashboard: React.FC = () => {
       <div className="dashboard-header">
         <div className="greeting-section">
           <Title level={1}>🤖 AI 私人助理</Title>
-          <Text className="subtitle">您的智能开发伙伴 v1.6.54</Text>
+          <Text className="subtitle">您的智能开发伙伴 v1.6.55</Text>
         </div>
         <div className="time-section">
           <Text strong className="greeting-text">{greeting}，疯狂的石头！</Text>
