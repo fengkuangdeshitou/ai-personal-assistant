@@ -43,7 +43,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
     <Sider className="sidebar" width={260}>
       <div className="sidebar-header">
         <h2>🤖 AI 助理</h2>
-        <p className="version">v1.6.53</p>
+        <p className="version">v1.6.54</p>
       </div>
 
       <Menu
