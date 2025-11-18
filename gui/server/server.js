@@ -8,12 +8,16 @@ import simpleGit from 'simple-git';
 import archiver from 'archiver';
 import OSS from 'ali-oss';
 import less from 'less'; // 🚨 新增 Less 库导入
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 5178;
+
+// 初始化 Google Generative AI
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyAYsda9YyPhdB2wotagGGVXWxVKHQei4pU');
 
 // 默认项目目录
 const DEFAULT_DIR = '/Users/maiyou001/Project';
@@ -2409,6 +2413,28 @@ async function cleanupOldVersions(projectName) {
     throw new Error(`清理旧版本失败: ${error.message}`);
   }
 }
+
+app.post('/api/gemini', async (req, res) => {
+  console.log('Received Gemini request:', req.body);
+  try {
+    const { message } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+    
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    console.log('Calling Gemini Text API...');
+    const result = await model.generateContent(message);
+    const response = await result.response;
+    const text = response.text();
+    console.log('Text response:', text);
+    
+    res.json({ response: text });
+  } catch (error) {
+    console.error('Gemini API error:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`Backend server listening on http://localhost:${PORT}`);

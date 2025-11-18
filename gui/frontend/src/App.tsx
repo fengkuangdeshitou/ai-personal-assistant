@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
 import Timeline from './pages/Timeline';
 import Settings from './pages/Settings';
+import GeminiChat from './components/GeminiChat';
 import './App.css';
 
 const { Content } = Layout;
@@ -23,6 +24,8 @@ function App() {
         return <Projects />;
       case 'timeline':
         return <Timeline />;
+      case 'gemini':
+        return <GeminiChat />;
       case 'settings':
         return <Settings />;
       default:
