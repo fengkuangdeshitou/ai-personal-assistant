@@ -38,7 +38,7 @@ const Settings: React.FC = () => {
               dataSource={[
                 {
                   title: '📦 版本信息',
-                  description: 'v1.6.53',
+                  description: 'v1.6.54',
                 },
                 {
                   title: '💻 运行平台',
