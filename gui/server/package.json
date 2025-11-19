@@ -8,6 +8,7 @@
     "dev": "node server.js"
   },
   "dependencies": {
+    "@alicloud/openapi-client": "^0.4.15",
     "@google/generative-ai": "^0.24.1",
     "ali-oss": "^6.23.0",
     "archiver": "^7.0.1",
