@@ -417,7 +417,7 @@ const Projects: React.FC = () => {
   };
 
   const executeBuild = async (channel: string, env: 'dev' | 'prod') => {
-    setBuildModalVisible(false);
+    setUploadModalVisible(false); // 关闭上传模态框
     setProgressTitle(`构建并上传: ${selectedProject} (${channel} - ${env === 'dev' ? '开发' : '生产'})`);
     setProgressPercent(0);
     setProgressText('准备构建...');
