@@ -665,7 +665,7 @@ const Projects: React.FC = () => {
         setProgressPercent(0); // 从0%重新开始备份进度
         setFileUploadStatus(new Map()); // 清空文件状态
 
-        const backupUploadUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/upload-zip-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=default&env=${env}&isBackup=true`;
+        const backupUploadUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/upload-zip-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&env=${env}&isBackup=true`;
         const backupEventSource = new EventSource(backupUploadUrl);
 
         await new Promise<void>((resolve, reject) => {
@@ -710,10 +710,57 @@ const Projects: React.FC = () => {
                 setProgressPercent(100);
                 setProgressText('🎉 生产环境部署完成！正在执行部署后任务...');
                 message.success(`🎉 生产环境部署完成: ${selectedProject}`);
-                // 生产环境延迟关闭，让用户看到部署任务的执行
-                setTimeout(() => setProgressModalVisible(false), 5000);
+                // 不要立即关闭EventSource，等待部署后任务完成
+                // setTimeout(() => setProgressModalVisible(false), 5000);
+                // backupEventSource.close();
+                // resolve();
+              } else if (data.type === 'post_deployment_start') {
+                setProgressText(data.message);
+                setProgressLogs(prev => [...prev, `🚀 ${data.message}`]);
+              } else if (data.type === 'post_deployment_task') {
+                setProgressText(`${data.task}: ${data.status === 'running' ? '运行中...' : '已完成'}`);
+                setProgressLogs(prev => [...prev, `${data.status === 'running' ? '▶️' : '✅'} ${data.task}: ${data.status === 'running' ? '运行中...' : '已完成'}`]);
+              } else if (data.type === 'post_deployment_complete') {
+                setProgressText('✅ 部署后任务执行完成');
+                setProgressLogs(prev => [...prev, `✅ 所有部署后任务执行完成`]);
+                message.success(data.message);
+                // 所有任务完成后关闭连接
                 backupEventSource.close();
+                setTimeout(() => setProgressModalVisible(false), 4000);
                 resolve();
+              } else if (data.type === 'post_deployment_failed') {
+                setProgressText(`❌ 部署后任务失败: ${data.message}`);
+                setProgressLogs(prev => [...prev, `❌ 部署后任务失败: ${data.message}`]);
+                message.error(data.message);
+                backupEventSource.close();
+                setTimeout(() => setProgressModalVisible(false), 3000);
+                reject(new Error(data.message));
+              } else if (data.type === 'post_deployment_error') {
+                setProgressText(`❌ 部署后任务执行出错: ${data.message}`);
+                message.error(data.message);
+                backupEventSource.close();
+                setTimeout(() => setProgressModalVisible(false), 3000);
+                reject(new Error(data.message));
+              } else if (data.type === 'cdn_refresh_start') {
+                setProgressText(data.message);
+              } else if (data.type === 'cdn_refresh_domains') {
+                setProgressText(`发现 ${data.count} 个CDN域名待刷新`);
+              } else if (data.type === 'cdn_refresh_domain') {
+                if (data.status === 'starting') {
+                  setProgressText(`开始刷新CDN域名: ${data.domain}`);
+                } else if (data.status === 'success') {
+                  setProgressText(`✅ CDN域名 ${data.domain} 刷新成功`);
+                } else if (data.status === 'failed') {
+                  setProgressText(`❌ CDN域名 ${data.domain} 刷新失败: ${data.error}`);
+                } else if (data.status === 'error') {
+                  setProgressText(`❌ CDN域名 ${data.domain} 刷新出错: ${data.error}`);
+                }
+              } else if (data.type === 'cdn_refresh_complete') {
+                setProgressText(`✅ CDN缓存刷新完成 - 成功: ${data.success}/${data.total}`);
+                message.success(`CDN刷新完成: ${data.success}/${data.total} 个域名`);
+              } else if (data.type === 'cdn_refresh_error') {
+                setProgressText(`❌ CDN缓存刷新失败: ${data.error}`);
+                message.error(`CDN刷新失败: ${data.error}`);
               } else if (data.type === 'error') {
                 setProgressText('❌ 备份失败');
                 message.error(`❌ 备份失败: ${data.message}`);
@@ -806,10 +853,66 @@ const Projects: React.FC = () => {
           setProgressPercent(100);
           setProgressText('🎉 生产环境部署完成！正在执行部署后任务...');
           message.success(`🎉 生产环境部署完成: ${selectedProject}`);
-          // 生产环境延迟关闭，让用户看到部署任务的执行
-          setTimeout(() => setProgressModalVisible(false), 5000);
+          // 不要立即关闭弹框，等待部署后任务完成
+          // setTimeout(() => setProgressModalVisible(false), 5000);
+          // backupEventSource.close();
+          // onComplete();
+        } else if (data.type === 'post_deployment_start') {
+          setProgressText(data.message);
+        } else if (data.type === 'post_deployment_task') {
+          setProgressText(`${data.task}: ${data.status === 'running' ? '运行中...' : '已完成'}`);
+        } else if (data.type === 'post_deployment_complete') {
+          setProgressText('✅ 部署后任务执行完成');
+          message.success(data.message);
+          // 所有任务完成后关闭连接和弹框
           backupEventSource.close();
           onComplete();
+        } else if (data.type === 'post_deployment_failed') {
+          setProgressText(`❌ 部署后任务失败: ${data.message}`);
+          message.error(data.message);
+          backupEventSource.close();
+          onComplete();
+        } else if (data.type === 'post_deployment_error') {
+          setProgressText(`❌ 部署后任务执行出错: ${data.message}`);
+          message.error(data.message);
+          backupEventSource.close();
+          onComplete();
+          setProgressText('✅ 部署后任务执行完成');
+          message.success(data.message);
+        } else if (data.type === 'post_deployment_failed') {
+          setProgressText(`❌ 部署后任务失败: ${data.message}`);
+          message.error(data.message);
+        } else if (data.type === 'post_deployment_error') {
+          setProgressText(`❌ 部署后任务执行出错: ${data.message}`);
+          message.error(data.message);
+        } else if (data.type === 'cdn_refresh_start') {
+          setProgressText(data.message);
+          setProgressLogs(prev => [...prev, `🔄 ${data.message}`]);
+        } else if (data.type === 'cdn_refresh_domains') {
+          setProgressText(`发现 ${data.count} 个CDN域名待刷新`);
+          setProgressLogs(prev => [...prev, `📋 发现 ${data.count} 个CDN域名: ${data.domains.join(', ')}`]);
+        } else if (data.type === 'cdn_refresh_domain') {
+          if (data.status === 'starting') {
+            setProgressText(`开始刷新CDN域名: ${data.domain}`);
+            setProgressLogs(prev => [...prev, `🔄 开始刷新CDN域名: ${data.domain}`]);
+          } else if (data.status === 'success') {
+            setProgressText(`✅ CDN域名 ${data.domain} 刷新成功`);
+            setProgressLogs(prev => [...prev, `✅ CDN域名 ${data.domain} 刷新成功 (任务ID: ${data.taskId})`]);
+          } else if (data.status === 'failed') {
+            setProgressText(`❌ CDN域名 ${data.domain} 刷新失败: ${data.error}`);
+            setProgressLogs(prev => [...prev, `❌ CDN域名 ${data.domain} 刷新失败: ${data.error}`]);
+          } else if (data.status === 'error') {
+            setProgressText(`❌ CDN域名 ${data.domain} 刷新出错: ${data.error}`);
+            setProgressLogs(prev => [...prev, `❌ CDN域名 ${data.domain} 刷新出错: ${data.error}`]);
+          }
+        } else if (data.type === 'cdn_refresh_complete') {
+          setProgressText(`✅ CDN缓存刷新完成 - 成功: ${data.success}/${data.total}`);
+          setProgressLogs(prev => [...prev, `✅ CDN缓存刷新完成 - 成功: ${data.success}/${data.total} 个域名`]);
+          message.success(`CDN刷新完成: ${data.success}/${data.total} 个域名`);
+        } else if (data.type === 'cdn_refresh_error') {
+          setProgressText(`❌ CDN缓存刷新失败: ${data.error}`);
+          setProgressLogs(prev => [...prev, `❌ CDN缓存刷新失败: ${data.error}`]);
+          message.error(`CDN刷新失败: ${data.error}`);
         } else if (data.type === 'error') {
           setProgressText('❌ 备份失败');
           message.error(`❌ 备份失败: ${data.message}`);
@@ -890,7 +993,7 @@ const Projects: React.FC = () => {
               if (env === 'prod') {
                 // 不在这里等待备份完成，而是启动备份并在完成后关闭模态框
                 executeBackup(channelId, env, project, () => {
-                  setTimeout(() => setProgressModalVisible(false), 2000);
+                  // 弹框关闭现在在executeBackup内部处理
                   resolve();
                 });
               } else {

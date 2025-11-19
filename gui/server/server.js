@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
 import simpleGit from 'simple-git';
 import archiver from 'archiver';
 import OSS from 'ali-oss';
@@ -1519,13 +1520,25 @@ app.get('/api/upload-zip-stream', async (req, res) => {
         const failCount = allResults.filter(r => r.status === 'failed').length;
         
         // 生产环境上传完成后的自动执行
-        if (env === 'prod' && successCount > 0) {
+        if (env === 'prod' && successCount > 0 && isBackup === 'true') {
+          console.log(`🚀 触发生产环境部署后任务 - 项目: ${projectName}, 渠道: ${channelId}, 环境: ${env}, isBackup: ${isBackup}, 成功数: ${successCount}`);
           try {
-            await executePostDeploymentTasks(projectName, allResults, zipFileName);
+            res.write(`data: ${JSON.stringify({ type: 'post_deployment_start', message: '开始执行部署后任务...' })}\n\n`);
+
+            const postDeploymentResult = await executePostDeploymentTasks(projectName, channelId, allResults, zipFileName, res);
+
+            if (postDeploymentResult.success) {
+              res.write(`data: ${JSON.stringify({ type: 'post_deployment_complete', message: '部署后任务执行完成', tasks: postDeploymentResult.tasks })}\n\n`);
+            } else {
+              res.write(`data: ${JSON.stringify({ type: 'post_deployment_failed', message: `部署后任务失败: ${postDeploymentResult.error}`, tasks: postDeploymentResult.tasks })}\n\n`);
+            }
           } catch (taskErr) {
             console.warn('Post-deployment tasks failed:', taskErr.message);
+            res.write(`data: ${JSON.stringify({ type: 'post_deployment_error', message: `部署后任务执行出错: ${taskErr.message}` })}\n\n`);
             // 不影响上传成功的结果，只记录警告
           }
+        } else {
+          console.log(`⏭️ 跳过部署后任务 - 环境: ${env}, 成功数: ${successCount}, isBackup: ${isBackup}`);
         }
         
         res.write(`data: ${JSON.stringify({ type: 'complete', uploaded: successCount, failed: failCount, results: allResults, message: env === 'prod' ? '生产环境部署完成' : '压缩包上传完成', zipFile: zipFileName })}\n\n`);
@@ -2257,50 +2270,76 @@ app.post('/api/clear-build', async (req, res) => {
 });
 
 // 生产环境部署完成后的自动执行任务
-async function executePostDeploymentTasks(projectName, uploadResults, zipFileName) {
-  console.log(`🔄 开始执行生产环境部署后任务 - 项目: ${projectName}`);
+async function executePostDeploymentTasks(projectName, channelId, uploadResults, zipFileName, res = null) {
+  console.log(`🔄 开始执行生产环境部署后任务 - 项目: ${projectName}, 渠道: ${channelId}, 备份结果数量: ${uploadResults.length}`);
   
-  const tasks = [];
+  // 验证备份是否成功
+  const backupSuccessCount = uploadResults.filter(r => r.status === 'success').length;
+  const totalBackups = uploadResults.length;
   
+  console.log(`📊 备份验证: ${backupSuccessCount}/${totalBackups} 个存储桶备份成功`);
+  
+  if (backupSuccessCount !== totalBackups) {
+    console.log(`⚠️ 备份未完全成功 (${backupSuccessCount}/${totalBackups})，跳过部署后任务`);
+    return { success: false, error: `备份失败: ${backupSuccessCount}/${totalBackups} 个存储桶备份成功`, tasks: [] };
+  }
+  
+  console.log(`✅ 备份验证通过，开始执行部署后任务`);  const tasks = [];
+
   try {
     // 任务1: 发送部署完成通知
+    if (res) res.write(`data: ${JSON.stringify({ type: 'post_deployment_task', task: '部署通知', status: 'running' })}\n\n`);
     tasks.push({
       name: '部署通知',
       status: 'running',
       result: await sendDeploymentNotification(projectName, uploadResults, zipFileName)
     });
-    
+    if (res) res.write(`data: ${JSON.stringify({ type: 'post_deployment_task', task: '部署通知', status: 'completed' })}\n\n`);
+
     // 任务2: 更新项目版本信息
+    if (res) res.write(`data: ${JSON.stringify({ type: 'post_deployment_task', task: '版本更新', status: 'running' })}\n\n`);
     tasks.push({
       name: '版本更新',
-      status: 'running', 
+      status: 'running',
       result: await updateProjectVersion(projectName, zipFileName)
     });
-    
+    if (res) res.write(`data: ${JSON.stringify({ type: 'post_deployment_task', task: '版本更新', status: 'completed' })}\n\n`);
+
     // 任务3: 执行部署脚本（如果存在）
+    if (res) res.write(`data: ${JSON.stringify({ type: 'post_deployment_task', task: '部署脚本', status: 'running' })}\n\n`);
     tasks.push({
       name: '部署脚本',
       status: 'running',
       result: await executeDeploymentScript(projectName)
     });
-    
+    if (res) res.write(`data: ${JSON.stringify({ type: 'post_deployment_task', task: '部署脚本', status: 'completed' })}\n\n`);
+
     // 任务4: 清理旧版本文件
+    if (res) res.write(`data: ${JSON.stringify({ type: 'post_deployment_task', task: '清理缓存', status: 'running' })}\n\n`);
     tasks.push({
       name: '清理缓存',
       status: 'running',
       result: await cleanupOldVersions(projectName)
     });
-    
+    if (res) res.write(`data: ${JSON.stringify({ type: 'post_deployment_task', task: '清理缓存', status: 'completed' })}\n\n`);
+
+    // 任务5: 刷新CDN缓存
+    if (res) res.write(`data: ${JSON.stringify({ type: 'post_deployment_task', task: 'CDN刷新', status: 'running' })}\n\n`);
+    tasks.push({
+      name: 'CDN刷新',
+      status: 'running',
+      result: await refreshCDNCache(projectName, channelId, res)
+    });
+    if (res) res.write(`data: ${JSON.stringify({ type: 'post_deployment_task', task: 'CDN刷新', status: 'completed' })}\n\n`);
+
     console.log(`✅ 生产环境部署后任务完成 - 项目: ${projectName}`);
     return { success: true, tasks };
-    
+
   } catch (error) {
     console.error(`❌ 生产环境部署后任务失败 - 项目: ${projectName}`, error);
     return { success: false, error: error.message, tasks };
   }
-}
-
-// 发送部署完成通知
+}// 发送部署完成通知
 async function sendDeploymentNotification(projectName, uploadResults, zipFileName) {
   try {
     const timestamp = new Date().toLocaleString('zh-CN');
@@ -2435,6 +2474,107 @@ app.post('/api/gemini', async (req, res) => {
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
+
+// CDN缓存刷新函数
+async function refreshCDNCache(projectName, channelId = null, res = null) {
+  try {
+    console.log(`🔄 开始刷新CDN缓存 - 项目: ${projectName}${channelId ? `, 渠道: ${channelId}` : ''}`);
+    if (res) res.write(`data: ${JSON.stringify({ type: 'cdn_refresh_start', message: `开始刷新 ${projectName} 的CDN缓存` })}\n\n`);
+    
+    // 读取OSS配置
+    const ossConfig = JSON.parse(fs.readFileSync(OSS_CONFIG_PATH, 'utf-8'));
+    const projectConfig = ossConfig.projects[projectName];
+    
+    let cdnDomains = [];
+    
+    // 检查是否是多渠道项目
+    if (projectConfig?.channels) {
+      // 多渠道项目：只刷新指定渠道的CDN域名
+      if (channelId && channelId !== 'default' && projectConfig.channels[channelId]?.buckets?.cdnDomains) {
+        console.log(`📋 刷新指定渠道 ${channelId} 的CDN域名`);
+        cdnDomains = projectConfig.channels[channelId].buckets.cdnDomains;
+      } else {
+        console.log(`⚠️ 未指定渠道或渠道 ${channelId} 未配置CDN域名`);
+        return { success: true, message: '未指定渠道或渠道未配置CDN域名' };
+      }
+    } else if (projectConfig?.buckets?.cdnDomains) {
+      // 单渠道项目：使用原有逻辑，忽略channelId
+      console.log(`📋 刷新单渠道项目 ${projectName} 的CDN域名`);
+      cdnDomains = projectConfig.buckets.cdnDomains;
+    }
+    
+    if (cdnDomains.length === 0) {
+      console.log(`⚠️ 项目 ${projectName} 未配置CDN域名，跳过刷新`);
+      return { success: true, message: '未配置CDN域名' };
+    }
+    
+    console.log(`📋 发现 ${cdnDomains.length} 个CDN域名:`, cdnDomains);
+    if (res) res.write(`data: ${JSON.stringify({ type: 'cdn_refresh_domains', domains: cdnDomains, count: cdnDomains.length })}\n\n`);
+    
+    // 使用阿里云CLI刷新每个域名
+    const results = [];
+    for (const domain of cdnDomains) {
+      try {
+        console.log(`🔄 刷新域名: ${domain}`);
+        if (res) res.write(`data: ${JSON.stringify({ type: 'cdn_refresh_domain', domain, status: 'starting' })}\n\n`);
+        
+        // 使用child_process执行aliyun CLI
+        const aliyun = spawn('aliyun', [
+          'cdn', 'RefreshObjectCaches',
+          '--ObjectPath', domain,
+          '--ObjectType', 'Directory'
+        ], { stdio: 'pipe' });
+        
+        let stdout = '';
+        let stderr = '';
+        
+        aliyun.stdout.on('data', (data) => {
+          stdout += data.toString();
+        });
+        
+        aliyun.stderr.on('data', (data) => {
+          stderr += data.toString();
+        });
+        
+        await new Promise((resolve, reject) => {
+          aliyun.on('close', (code) => {
+            if (code === 0) {
+              console.log(`✅ 域名 ${domain} 刷新成功`);
+              results.push({ domain, success: true, taskId: JSON.parse(stdout).RefreshTaskId });
+              if (res) res.write(`data: ${JSON.stringify({ type: 'cdn_refresh_domain', domain, status: 'success', taskId: JSON.parse(stdout).RefreshTaskId })}\n\n`);
+              resolve();
+            } else {
+              console.error(`❌ 域名 ${domain} 刷新失败:`, stderr);
+              results.push({ domain, success: false, error: stderr });
+              if (res) res.write(`data: ${JSON.stringify({ type: 'cdn_refresh_domain', domain, status: 'failed', error: stderr })}\n\n`);
+              reject(new Error(stderr));
+            }
+          });
+        });
+        
+      } catch (error) {
+        console.error(`❌ 刷新域名 ${domain} 时出错:`, error.message);
+        results.push({ domain, success: false, error: error.message });
+        if (res) res.write(`data: ${JSON.stringify({ type: 'cdn_refresh_domain', domain, status: 'error', error: error.message })}\n\n`);
+      }
+    }
+    
+    const successCount = results.filter(r => r.success).length;
+    console.log(`✅ CDN缓存刷新完成 - 成功: ${successCount}/${results.length}`);
+    if (res) res.write(`data: ${JSON.stringify({ type: 'cdn_refresh_complete', success: successCount, total: results.length, results })}\n\n`);
+    
+    return { 
+      success: successCount > 0, 
+      message: `刷新了 ${successCount}/${results.length} 个域名`,
+      results 
+    };
+    
+  } catch (error) {
+    console.error(`❌ CDN缓存刷新失败 - 项目: ${projectName}`, error);
+    if (res) res.write(`data: ${JSON.stringify({ type: 'cdn_refresh_error', error: error.message })}\n\n`);
+    return { success: false, error: error.message };
+  }
+}
 
 app.listen(PORT, () => {
   console.log(`Backend server listening on http://localhost:${PORT}`);
