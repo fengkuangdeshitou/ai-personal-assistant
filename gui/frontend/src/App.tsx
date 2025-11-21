@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { Layout, ConfigProvider } from 'antd';
+import { Layout, ConfigProvider, App as AntApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
 import Timeline from './pages/Timeline';
 import Settings from './pages/Settings';
+import CreateScheme from './pages/CreateScheme';
+import AuthSchemes from './pages/AuthSchemes';
 import GeminiChat from './components/GeminiChat';
 import './App.css';
 
@@ -26,23 +28,29 @@ function App() {
         return <Timeline />;
       case 'gemini':
         return <GeminiChat />;
+      case 'auth-schemes':
+        return <AuthSchemes />;
+      case 'create-scheme':
+        return <CreateScheme />;
       case 'settings':
         return <Settings />;
       default:
-        return <Dashboard />;
+        return <Dashboard currentSection={currentSection} onSectionChange={showSection} />;
     }
   };
 
   return (
     <ConfigProvider locale={zhCN}>
-      <Layout className="main-layout">
-        <Sidebar currentSection={currentSection} onSectionChange={showSection} />
-        <Layout>
-          <Content className="content-area">
-            {renderContent()}
-          </Content>
+      <AntApp>
+        <Layout className="main-layout">
+          <Sidebar currentSection={currentSection} onSectionChange={showSection} />
+          <Layout>
+            <Content className="content-area">
+              {renderContent()}
+            </Content>
+          </Layout>
         </Layout>
-      </Layout>
+      </AntApp>
     </ConfigProvider>
   );
 }

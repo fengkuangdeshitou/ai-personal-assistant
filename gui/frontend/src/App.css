@@ -32,6 +32,27 @@ body {
   transition: margin-left 0.3s ease;
 }
 
+/* 响应式设计 */
+@media (max-width: 1024px) {
+  .content-area {
+    margin-left: 0 !important;
+    padding: 24px 20px;
+  }
+}
+
+@media (max-width: 768px) {
+  .content-area {
+    margin-left: 0 !important;
+    padding: 20px 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .content-area {
+    padding: 16px 12px;
+  }
+}
+
 .content-area .ant-layout-content {
   background: transparent;
 }

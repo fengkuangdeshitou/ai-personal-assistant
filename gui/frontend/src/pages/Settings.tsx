@@ -30,7 +30,7 @@ const Settings: React.FC = () => {
                 <div className="system-info-icon">🏷️</div>
                 <div className="system-info-content">
                   <div className="system-info-title">版本号</div>
-                  <div className="system-info-value">v1.6.58</div>
+                  <div className="system-info-value">v1.6.59</div>
                 </div>
               </div>
               <div className="system-info-item">

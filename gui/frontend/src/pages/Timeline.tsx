@@ -47,6 +47,7 @@ const Timeline: React.FC = () => {
   const [projects, setProjects] = useState<ProjectOperations[]>([]);
   const [selectedProject, setSelectedProject] = useState<ProjectOperations | null>(null);
   const [modalVisible, setModalVisible] = useState(false);
+  const [messageApi, contextHolder] = message.useMessage();
 
   useEffect(() => {
     loadTodayOperations();
@@ -61,11 +62,11 @@ const Timeline: React.FC = () => {
       if (data.success) {
         setProjects(data.projects);
       } else {
-        message.error('获取工作记录失败');
+        messageApi.error('获取工作记录失败');
       }
     } catch (error) {
       console.error('Load today operations error:', error);
-      message.error('加载工作记录失败');
+      messageApi.error('加载工作记录失败');
     } finally {
       setLoading(false);
     }
@@ -200,6 +201,7 @@ const Timeline: React.FC = () => {
 
   return (
     <div className="container">
+      {contextHolder}
       <div className="header">
         <h1>⏰ 工作记录</h1>
         <div className="subtitle">今日所有项目的Git操作记录</div>
