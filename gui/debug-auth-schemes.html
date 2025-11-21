@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>检查认证方案存储数据</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            padding: 30px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #1a1a1a;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 16px;
+        }
+
+        .data-section {
+            margin-bottom: 30px;
+            border: 1px solid #e8e8e8;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .section-title {
+            background: #f9f9f9;
+            padding: 15px 20px;
+            font-weight: 600;
+            color: #1a1a1a;
+            border-bottom: 1px solid #e8e8e8;
+        }
+
+        .data-content {
+            padding: 20px;
+        }
+
+        .scheme-item {
+            border: 1px solid #e8e8e8;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            background: #fafafa;
+        }
+
+        .scheme-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .scheme-code {
+            font-weight: 600;
+            color: #1890ff;
+            font-size: 16px;
+        }
+
+        .scheme-type {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .scheme-type.ios {
+            background: #e6f7ff;
+            color: #1890ff;
+        }
+
+        .scheme-type.web {
+            background: #f6ffed;
+            color: #52c41a;
+        }
+
+        .field-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .field-item {
+            background: white;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #e8e8e8;
+        }
+
+        .field-label {
+            font-weight: 600;
+            color: #666;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .field-value {
+            color: #1a1a1a;
+            font-size: 14px;
+            word-break: break-all;
+        }
+
+        .field-value.empty {
+            color: #ff4d4f;
+            font-style: italic;
+        }
+
+        .analysis {
+            background: #fffbe6;
+            border: 1px solid #ffe58f;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+
+        .analysis h3 {
+            color: #d48806;
+            margin-bottom: 15px;
+        }
+
+        .analysis ul {
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .analysis li {
+            margin-bottom: 8px;
+        }
+
+        .highlight {
+            background: #fff1f0;
+            border-color: #ffccc7;
+        }
+
+        .highlight .section-title {
+            background: #fff1f0;
+            color: #ff4d4f;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .btn:hover {
+            border-color: #40a9ff;
+            color: #40a9ff;
+        }
+
+        .btn-primary {
+            background: #1890ff;
+            border-color: #1890ff;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #40a9ff;
+            border-color: #40a9ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 认证方案存储数据检查</h1>
+            <p>检查方案 FC220000012490068 的存储字段，分析重新上传失败的原因</p>
+        </div>
+
+        <div class="controls" style="margin-bottom: 20px;">
+            <button class="btn btn-primary" onclick="loadData()">加载认证方案数据</button>
+            <button class="btn" onclick="clearData()">清空数据</button>
+            <button class="btn" onclick="exportData()">导出数据</button>
+        </div>
+
+        <div class="data-section">
+            <div class="section-title">📋 认证方案列表</div>
+            <div class="data-content">
+                <div id="schemes-list">
+                    <p style="color: #999; text-align: center; padding: 40px;">点击"加载认证方案数据"查看存储的数据</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="data-section highlight">
+            <div class="section-title">⚠️ 问题分析</div>
+            <div class="data-content">
+                <div class="analysis">
+                    <h3>重新上传失败的可能原因：</h3>
+                    <ul>
+                        <li><strong>iOS方案缺少bundleId：</strong> 创建时没有保存PackName到bundleId字段</li>
+                        <li><strong>Web方案缺少url字段：</strong> 创建时只保存了bundleId，但没有保存url字段</li>
+                        <li><strong>字段名不匹配：</strong> 检查逻辑和保存逻辑的字段名不一致</li>
+                        <li><strong>数据类型错误：</strong> osType字段值与预期不符</li>
+                    </ul>
+                </div>
+
+                <div style="margin-top: 20px; padding: 15px; background: #f0f8ff; border-radius: 6px;">
+                    <h4 style="color: #1890ff; margin-bottom: 10px;">检查要点：</h4>
+                    <ul style="color: #666; line-height: 1.6;">
+                        <li>方案FC220000012490068的osType是什么？</li>
+                        <li>如果是iOS，bundleId字段是否存在且有值？</li>
+                        <li>如果是Web，url和bundleId字段是否都存在？</li>
+                        <li>检查重新上传逻辑中的字段检查是否正确</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function loadData() {
+            try {
+                const schemesData = localStorage.getItem('authSchemes');
+                if (!schemesData) {
+                    document.getElementById('schemes-list').innerHTML =
+                        '<p style="color: #ff4d4f; text-align: center; padding: 40px;">未找到认证方案数据，请先创建一些方案</p>';
+                    return;
+                }
+
+                const schemes = JSON.parse(schemesData);
+                displaySchemes(schemes);
+            } catch (error) {
+                console.error('加载数据失败:', error);
+                document.getElementById('schemes-list').innerHTML =
+                    '<p style="color: #ff4d4f; text-align: center; padding: 40px;">数据加载失败: ' + error.message + '</p>';
+            }
+        }
+
+        function displaySchemes(schemes) {
+            if (!schemes || schemes.length === 0) {
+                document.getElementById('schemes-list').innerHTML =
+                    '<p style="color: #999; text-align: center; padding: 40px;">暂无认证方案数据</p>';
+                return;
+            }
+
+            let html = '';
+            schemes.forEach((scheme, index) => {
+                const isTargetScheme = scheme.schemeCode === 'FC220000012490068';
+                const highlightClass = isTargetScheme ? 'highlight' : '';
+
+                html += `
+                    <div class="scheme-item ${highlightClass}" style="${isTargetScheme ? 'border-color: #ff4d4f;' : ''}">
+                        <div class="scheme-header">
+                            <div class="scheme-code">${scheme.schemeCode || '未设置'}</div>
+                            <div class="scheme-type ${scheme.osType === 'iOS' ? 'ios' : 'web'}">${scheme.osType || '未知'}</div>
+                        </div>
+                        <div class="field-grid">
+                            <div class="field-item">
+                                <div class="field-label">方案名称</div>
+                                <div class="field-value">${scheme.schemeName || '未设置'}</div>
+                            </div>
+                            <div class="field-item">
+                                <div class="field-label">应用名称</div>
+                                <div class="field-value">${scheme.appName || '未设置'}</div>
+                            </div>
+                            <div class="field-item">
+                                <div class="field-label">系统类型</div>
+                                <div class="field-value">${scheme.osType || '未设置'}</div>
+                            </div>
+                            <div class="field-item">
+                                <div class="field-label">秘钥</div>
+                                <div class="field-value ${!scheme.secretKey ? 'empty' : ''}">${scheme.secretKey ? '已设置' : '未设置'}</div>
+                            </div>
+                            <div class="field-item">
+                                <div class="field-label">Bundle ID</div>
+                                <div class="field-value ${!scheme.bundleId ? 'empty' : ''}">${scheme.bundleId || '未设置'}</div>
+                            </div>
+                            <div class="field-item">
+                                <div class="field-label">URL</div>
+                                <div class="field-value ${!scheme.url ? 'empty' : ''}">${scheme.url || '未设置'}</div>
+                            </div>
+                            <div class="field-item">
+                                <div class="field-label">Origin</div>
+                                <div class="field-value ${!scheme.origin ? 'empty' : ''}">${scheme.origin || '未设置'}</div>
+                            </div>
+                            <div class="field-item">
+                                <div class="field-label">创建时间</div>
+                                <div class="field-value">${scheme.createdAt ? new Date(scheme.createdAt).toLocaleString() : '未设置'}</div>
+                            </div>
+                            <div class="field-item">
+                                <div class="field-label">上传状态</div>
+                                <div class="field-value">${scheme.uploadStatus || '未上传'}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            document.getElementById('schemes-list').innerHTML = html;
+        }
+
+        function clearData() {
+            if (confirm('确定要清空所有认证方案数据吗？')) {
+                localStorage.removeItem('authSchemes');
+                document.getElementById('schemes-list').innerHTML =
+                    '<p style="color: #52c41a; text-align: center; padding: 40px;">数据已清空</p>';
+            }
+        }
+
+        function exportData() {
+            try {
+                const schemesData = localStorage.getItem('authSchemes');
+                if (!schemesData) {
+                    alert('没有数据可以导出');
+                    return;
+                }
+
+                const dataStr = JSON.stringify(JSON.parse(schemesData), null, 2);
+                const dataBlob = new Blob([dataStr], {type: 'application/json'});
+                const url = URL.createObjectURL(dataBlob);
+
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'auth-schemes-data.json';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            } catch (error) {
+                alert('导出失败: ' + error.message);
+            }
+        }
+
+        // 页面加载时自动加载数据
+        window.onload = loadData;
+    </script>
+</body>
+</html>

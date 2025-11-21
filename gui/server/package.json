@@ -8,11 +8,13 @@
     "dev": "node server.js"
   },
   "dependencies": {
+    "@alicloud/dypnsapi20170525": "^2.0.0",
     "@alicloud/openapi-client": "^0.4.15",
     "@google/generative-ai": "^0.24.1",
     "ali-oss": "^6.23.0",
     "archiver": "^7.0.1",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "express": "^4.19.2",
     "less": "^4.4.2",
     "simple-git": "^3.24.0"

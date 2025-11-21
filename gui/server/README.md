@@ -40,6 +40,99 @@ cd server
 
 扫描完成后会自动生成 `projects.json`，然后重启服务即可。
 
+## ☁️ 阿里云API测试脚本
+
+项目包含阿里云号码认证服务(Dypnsapi)的测试脚本：
+
+### QuerySchemeSecret - 查询方案秘钥 ✅
+```bash
+cd server
+export $(cat .env | grep -v '^#' | xargs)
+node query-scheme-secret.js [SCHEME_CODE]
+```
+
+此脚本可以成功查询现有认证方案的秘钥信息。
+
+### CreateVerifyScheme - 创建认证方案 ✅
+```bash
+cd server
+export $(cat .env | grep -v '^#' | xargs)
+node test-create-verify-scheme.js
+```
+
+#### API集成状态
+- ✅ 已集成到 `/api/create-scheme` 端点
+- ✅ 支持前端表单提交
+- ✅ 自动处理Android/iOS包名参数
+- ✅ API密钥有效，已通过身份验证
+- ✅ 参数格式已更新为阿里云标准（OsType字符串转换）
+- ✅ 支持PackSign、Origin、Url等完整参数
+- ⚠️ API调用返回"InvalidParameters"错误
+
+**当前状态**: 系统已完全集成阿里云API，参数格式正确，但阿里云返回参数无效错误。
+
+**已实现的参数处理**:
+- `SchemeName`: 方案名称
+- `AppName`: 应用名称
+- `OsType`: 自动转换 ("1"→"Android", "2"→"iOS")
+- `PackName`: Android包名 (Android时必需)
+- `PackSign`: Android包签名MD5 (Android时必需)
+- `BundleId`: iOS Bundle ID (iOS时必需)
+- `Origin`: H5页面源地址
+- `Url`: H5页面地址
+
+**可能原因**:
+1. **服务未开通**: 阿里云账户可能未开通号码认证服务
+2. **实名认证**: 账户需要完成企业实名认证（个人认证可能不支持）
+3. **地域限制**: 可能需要特定的地域配置
+4. **资源包**: 可能需要购买号码认证资源包
+
+**建议检查**:
+- 在阿里云控制台搜索"号码认证服务"确认是否已开通
+- 确认账户已完成企业实名认证（个人认证可能不支持）
+- 检查AccessKey是否有调用Dypnsapi的权限
+- 确认所在地域是否支持号码认证服务
+- 联系阿里云客服确认账户配置和服务开通状态
+
+**参数说明** (已更新):
+- `SchemeName`: 方案名称
+- `AppName`: 应用名称
+- `OsType`: 操作系统 ("Android"/"iOS"/"Harmony"/"Web")
+- `PackName`: Android包名 (Android时必需)
+- `PackSign`: Android包签名MD5 (Android时必需)
+- `BundleId`: iOS Bundle ID (iOS时必需)
+- `Origin`: H5页面源地址
+- `Url`: H5页面地址
+
+### 环境配置
+在 `.env` 文件中配置阿里云凭据：
+```bash
+ALICLOUD_ACCESS_KEY_ID=your-access-key-id
+ALICLOUD_ACCESS_KEY_SECRET=your-access-key-secret
+ALICLOUD_REGION=cn-hangzhou
+ALICLOUD_ENDPOINT=dypnsapi.aliyuncs.com
+SCHEME_CODE=your-scheme-code
+```
+
+**功能**: 创建号码认证方案，支持短信和语音认证。
+
+**文档**: [CREATE_VERIFY_SCHEME_README.md](CREATE_VERIFY_SCHEME_README.md)
+
+### QuerySchemeSecret - 查询方案认证秘钥
+```bash
+cd server
+node query-scheme-secret.js FC220000012470042
+```
+
+**功能**: 查询指定方案代码的认证秘钥（AccessToken和JwtToken）。
+
+**文档**: [QUERY_SCHEME_SECRET_README.md](QUERY_SCHEME_SECRET_README.md)
+
+### 配置说明
+1. 编辑 `.env` 文件，设置阿里云AccessKey
+2. 确保已开通阿里云号码认证服务
+3. 运行相应脚本进行测试
+
 ## 📋 API 接口
 
 ### GET /api/health

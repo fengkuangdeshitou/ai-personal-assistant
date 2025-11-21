@@ -6,6 +6,7 @@ import {
   ClockCircleOutlined,
   SettingOutlined,
   RobotOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons';
 import './Sidebar.css';
 
@@ -39,6 +40,11 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
       label: 'Gemini 聊天',
     },
     {
+      key: 'auth-schemes',
+      icon: <UnorderedListOutlined />,
+      label: '认证方案',
+    },
+    {
       key: 'settings',
       icon: <SettingOutlined />,
       label: '设置',
@@ -49,7 +55,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
     <Sider className="sidebar" width={260}>
       <div className="sidebar-header">
         <h2>🤖 AI 助理</h2>
-        <p className="version">v1.6.58</p>
+        <p className="version">v1.6.59</p>
       </div>
 
       <Menu
