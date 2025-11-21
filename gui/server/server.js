@@ -3,6 +3,8 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
+import https from 'https';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import simpleGit from 'simple-git';
@@ -10,6 +12,16 @@ import archiver from 'archiver';
 import OSS from 'ali-oss';
 import less from 'less'; // 🚨 新增 Less 库导入
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import dotenv from 'dotenv';
+import { createVerifyScheme } from './aliyun-dypns-sdk.js';
+import { querySchemeSecret } from './query-scheme-secret.js';
+import Client from '@alicloud/dypnsapi20170525';
+import * as $Dypnsapi from '@alicloud/dypnsapi20170525';
+import OpenApi, * as $OpenApi from '@alicloud/openapi-client';
+import Util from '@alicloud/tea-util';
+
+// 加载环境变量
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -302,8 +314,113 @@ async function getTodayCommits(repoPath) {
   }
 }
 
+// 阿里云RFC3986编码函数
+// 创建阿里云Dypnsapi客户端
+function createAliCloudClient(accessKeyId, accessKeySecret) {
+  let config = new $OpenApi.Config({});
+  config.accessKeyId = accessKeyId;
+  config.accessKeySecret = accessKeySecret;
+  return new Client(config);
+}
+
+// 创建阿里云认证方案的函数
+// 已移至 aliyun-dypns-sdk.js
+
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, port: PORT, projectsDir: DEFAULT_DIR });
+});
+
+// 创建阿里云认证方案
+app.post('/api/create-scheme', async (req, res) => {
+  try {
+    const schemeData = req.body;
+    console.log('创建认证方案:', schemeData);
+
+    // 阿里云配置
+    const accessKeyId = process.env.ALICLOUD_ACCESS_KEY_ID;
+    const accessKeySecret = process.env.ALICLOUD_ACCESS_KEY_SECRET;
+
+    if (!accessKeyId || !accessKeySecret) {
+      return res.status(400).json({
+        success: false,
+        error: '阿里云访问密钥未配置'
+      });
+    }
+
+    // 准备API参数
+    const apiData = {
+      schemeName: schemeData.SchemeName,
+      appName: schemeData.AppName,
+      osType: schemeData.AccessEnd === 'iOS' ? 'iOS' : 'Web'
+    };
+
+    // 根据类型添加特定参数
+    if (schemeData.AccessEnd === 'iOS') {
+      apiData.bundleId = schemeData.PackName;
+    } else if (schemeData.AccessEnd === 'Web') {
+      apiData.origin = schemeData.Origin;
+      apiData.url = schemeData.Url;
+    }
+
+    // 调用阿里云API创建方案
+    const result = await createVerifyScheme(accessKeyId, accessKeySecret, apiData);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: '认证方案创建成功',
+        data: result.data
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: result.error
+      });
+    }
+  } catch (error) {
+    console.error('创建方案失败:', error);
+    res.status(500).json({
+      success: false,
+      error: '创建方案失败: ' + error.message
+    });
+  }
+});
+
+// 查询方案秘钥
+app.post('/api/query-scheme-secret', async (req, res) => {
+  try {
+    const { schemeCode } = req.body;
+
+    if (!schemeCode) {
+      return res.status(400).json({
+        success: false,
+        error: '缺少方案代码参数'
+      });
+    }
+
+    console.log('查询方案秘钥:', schemeCode);
+
+    const result = await querySchemeSecret(schemeCode);
+
+    if (result && result.success) {
+      res.json({
+        success: true,
+        message: '秘钥查询成功',
+        data: result.data
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: result?.error || '查询秘钥失败'
+      });
+    }
+  } catch (error) {
+    console.error('查询秘钥失败:', error);
+    res.status(500).json({
+      success: false,
+      error: '查询秘钥失败: ' + error.message
+    });
+  }
 });
 
 app.get('/api/projects', async (_req, res) => {

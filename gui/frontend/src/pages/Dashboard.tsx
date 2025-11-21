@@ -1,10 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Row, Col, Card, Statistic, Button, Progress, Space, Typography } from 'antd';
+import { Row, Col, Card, Statistic, Button, Space, Typography } from 'antd';
 import {
-  ClockCircleOutlined,
   CodeOutlined,
   ProjectOutlined,
-  ThunderboltOutlined,
   ReloadOutlined,
   BarChartOutlined,
   SettingOutlined,
@@ -14,27 +12,26 @@ import './Dashboard.css';
 
 const { Title, Text } = Typography;
 
-const Dashboard: React.FC = () => {
+const Dashboard: React.FC<{ 
+  currentSection?: string;
+  onSectionChange?: (section: string) => void 
+}> = ({ currentSection = 'dashboard', onSectionChange }) => {
   const [greeting, setGreeting] = useState('');
   const [currentTime, setCurrentTime] = useState('');
-  const [workHours, setWorkHours] = useState(0);
   const [stats, setStats] = useState({
     commits: 3,
     insertions: 245,
     deletions: 12,
-    projects: 0,
-    productivity: 85
+    projects: 0
   });
 
   useEffect(() => {
     updateGreeting();
-    updateWorkHours();
     loadStats();
 
     // 每分钟更新一次时间
     const interval = setInterval(() => {
       updateGreeting();
-      updateWorkHours();
     }, 60000);
 
     return () => clearInterval(interval);
@@ -52,36 +49,6 @@ const Dashboard: React.FC = () => {
       day: 'numeric',
       weekday: 'long'
     }) + ' ' + now.toLocaleTimeString('zh-CN'));
-  };
-
-  const updateWorkHours = () => {
-    const now = new Date();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    let hours = 0;
-
-    // 工作时间: 9:30-12:30 (3h) + 14:00-18:30 (4.5h)
-    if (currentHour > 9 || (currentHour === 9 && currentMinute >= 30)) {
-      if (currentHour < 12 || (currentHour === 12 && currentMinute <= 30)) {
-        // 上午工作时间
-        const morningMinutes = (currentHour - 9) * 60 + currentMinute - 30;
-        hours = Math.max(0, morningMinutes / 60);
-      } else if (currentHour >= 12 && currentHour < 14) {
-        // 午休时间 12:30-14:00，显示上午的3小时
-        hours = 3;
-      } else if (currentHour >= 14) {
-        hours = 3; // 上午3小时
-        if (currentHour < 18 || (currentHour === 18 && currentMinute <= 30)) {
-          // 下午工作时间
-          const afternoonMinutes = (currentHour - 14) * 60 + currentMinute;
-          hours += afternoonMinutes / 60;
-        } else {
-          hours += 4.5; // 下午4.5小时
-        }
-      }
-    }
-
-    setWorkHours(hours);
   };
 
   const loadStats = async () => {
@@ -104,15 +71,13 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const weeklyData = [120, 200, 150, 80, 70, 180, 250]; // 模拟周数据
-
   return (
     <div className="dashboard-container">
       {/* 头部问候 */}
       <div className="dashboard-header">
         <div className="greeting-section">
           <Title level={1}>🤖 AI 私人助理</Title>
-          <Text className="subtitle">您的智能开发伙伴 v1.6.58</Text>
+          <Text className="subtitle">您的智能开发伙伴 v1.6.59</Text>
         </div>
         <div className="time-section">
           <Text strong className="greeting-text">{greeting}，疯狂的石头！</Text>
@@ -173,17 +138,6 @@ const Dashboard: React.FC = () => {
           <Col xs={24} sm={12} md={8} lg={6}>
             <Card className="stat-card">
               <Statistic
-                title="工作时长"
-                value={workHours.toFixed(1)}
-                suffix="h"
-                prefix={<ClockCircleOutlined />}
-                valueStyle={{ color: '#722ed1' }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} md={8} lg={6}>
-            <Card className="stat-card">
-              <Statistic
                 title="项目总数"
                 value={stats.projects}
                 prefix={<ProjectOutlined />}
@@ -191,77 +145,33 @@ const Dashboard: React.FC = () => {
               />
             </Card>
           </Col>
-          <Col xs={24} sm={12} md={8} lg={6}>
-            <Card className="stat-card">
-              <Statistic
-                title="生产力"
-                value={stats.productivity}
-                suffix="%"
-                prefix={<ThunderboltOutlined />}
-                valueStyle={{ color: '#fa8c16' }}
-              />
-              <Progress
-                percent={stats.productivity}
-                showInfo={false}
-                strokeColor="#fa8c16"
-                size="small"
-              />
-            </Card>
-          </Col>
         </Row>
-      </Card>
-
-      {/* 本周趋势 */}
-      <Card
-        title={
-          <Space>
-            📈 本周代码趋势
-          </Space>
-        }
-        className="chart-section"
-      >
-        <div className="weekly-chart">
-          {weeklyData.map((value, index) => {
-            const days = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-            const maxValue = Math.max(...weeklyData);
-            const height = (value / maxValue) * 100;
-
-            return (
-              <div key={index} className="chart-bar-container">
-                <div className="chart-bar" style={{ height: `${height}%` }}>
-                  <span className="chart-value">{value}</span>
-                </div>
-                <span className="chart-label">{days[index]}</span>
-              </div>
-            );
-          })}
-        </div>
       </Card>
 
       {/* 快速操作 */}
       <Card title="🚀 快速操作" className="actions-section">
         <Space wrap size="large">
           <Button
-            type="primary"
+            type={currentSection === 'projects' ? 'primary' : 'default'}
             size="large"
             icon={<ProjectOutlined />}
-            onClick={() => window.location.hash = '#projects'}
+            onClick={() => onSectionChange?.('projects')}
           >
             管理项目
           </Button>
           <Button
-            type="primary"
+            type={currentSection === 'gemini' ? 'primary' : 'default'}
             size="large"
             icon={<MessageOutlined />}
-            onClick={() => window.location.hash = '#chat'}
+            onClick={() => onSectionChange?.('gemini')}
           >
             AI对话
           </Button>
           <Button
-            type="default"
+            type={currentSection === 'settings' ? 'primary' : 'default'}
             size="large"
             icon={<SettingOutlined />}
-            onClick={() => window.location.hash = '#settings'}
+            onClick={() => onSectionChange?.('settings')}
           >
             系统设置
           </Button>

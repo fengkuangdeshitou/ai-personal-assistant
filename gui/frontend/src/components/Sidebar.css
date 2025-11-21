@@ -151,7 +151,7 @@
 }
 
 /* 响应式设计 */
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .sidebar {
     position: relative !important;
     height: auto !important;
@@ -160,28 +160,80 @@
   }
 
   .sidebar .ant-layout-sider-children {
-    flex-direction: row;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .sidebar-header {
-    margin-bottom: 0;
+    margin-bottom: 15px;
     padding-bottom: 15px;
-    margin-right: 20px;
+    text-align: center;
+    border-bottom: 2px solid rgba(102, 126, 234, 0.1);
   }
 
   .nav-menu {
-    flex: 1;
-    display: flex;
-    overflow-x: auto;
+    flex: none;
+    margin-bottom: 15px;
   }
 
   .nav-menu .ant-menu-item {
-    margin: 0 4px !important;
-    white-space: nowrap;
+    margin: 4px 0 !important;
+    padding: 12px 16px !important;
+    font-size: 0.9em;
   }
 
   .sidebar-footer {
-    display: none;
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #e0e0e0;
+    text-align: center;
+  }
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    position: relative !important;
+    height: auto !important;
+    width: 100% !important;
+    padding: 16px 12px !important;
+  }
+
+  .sidebar .ant-layout-sider-children {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .sidebar-header {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    text-align: center;
+    border-bottom: 2px solid rgba(102, 126, 234, 0.1);
+  }
+
+  .sidebar-header h2 {
+    font-size: 1.4em;
+  }
+
+  .sidebar-header .version {
+    font-size: 0.8em;
+  }
+
+  .nav-menu {
+    flex: none;
+    margin-bottom: 12px;
+  }
+
+  .nav-menu .ant-menu-item {
+    margin: 3px 0 !important;
+    padding: 10px 14px !important;
+    font-size: 0.85em;
+  }
+
+  .sidebar-footer {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #e0e0e0;
+    text-align: center;
+    font-size: 0.8em;
   }
 }
