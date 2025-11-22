@@ -331,10 +331,10 @@ const AuthSchemes: React.FC = () => {
   }, []);
 
   return (
-    <div style={{ padding: "20px", height: "100%", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       {contextHolder}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-        <h2 style={{ color: "white", margin: 0 }}>认证方案管理</h2>
+        <h2 style={{ color: "#1976d2", margin: 0 }}>认证方案管理</h2>
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -344,7 +344,7 @@ const AuthSchemes: React.FC = () => {
         </Button>
       </div>
 
-      <div style={{ flex: 1, overflow: "auto", backgroundColor: "white", borderRadius: "8px", padding: "16px", minHeight: "400px" }}>
+      <div style={{ flex: 1, overflow: "auto", backgroundColor: "white", borderRadius: "4px", padding: "16px", minHeight: "400px", marginTop: "20px", border: "1px solid rgba(0, 0, 0, 0.08)" }}>
         <Table
           columns={columns}
           dataSource={schemes}
