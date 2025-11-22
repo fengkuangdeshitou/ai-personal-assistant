@@ -150,6 +150,139 @@
   border-radius: 3px;
 }
 
+/* 移动端菜单按钮 */
+.mobile-menu-button {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 1000;
+}
+
+.menu-toggle-btn {
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-size: 1.2rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.3);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.menu-toggle-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 25px rgba(102, 126, 234, 0.4);
+}
+
+.menu-toggle-btn:active {
+  transform: scale(0.95);
+}
+
+/* 移动端抽屉样式 */
+.mobile-drawer .ant-drawer-content {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+}
+
+.mobile-drawer .ant-drawer-header {
+  background: transparent;
+  border-bottom: 1px solid rgba(102, 126, 234, 0.1);
+}
+
+.drawer-header {
+  text-align: center;
+}
+
+.drawer-header h2 {
+  color: #667eea;
+  font-size: 1.6em;
+  margin-bottom: 8px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.drawer-header .version {
+  color: #6b7280;
+  font-size: 0.9em;
+}
+
+.mobile-nav-menu {
+  background: transparent !important;
+  border: none !important;
+}
+
+.mobile-nav-menu .ant-menu-item {
+  margin: 6px 0 !important;
+  border-radius: 12px !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  height: auto !important;
+  line-height: normal !important;
+  padding: 14px 18px !important;
+  position: relative;
+  overflow: hidden;
+}
+
+.mobile-nav-menu .ant-menu-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.1), transparent);
+  transition: left 0.5s;
+}
+
+.mobile-nav-menu .ant-menu-item:hover {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%) !important;
+  color: #667eea !important;
+  transform: translateX(8px);
+  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.15);
+}
+
+.mobile-nav-menu .ant-menu-item:hover::before {
+  left: 100%;
+}
+
+.mobile-nav-menu .ant-menu-item-selected {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  color: white !important;
+  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.3);
+}
+
+.mobile-nav-menu .ant-menu-item-selected:hover {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  color: white !important;
+  transform: translateX(8px);
+}
+
+.mobile-nav-menu .ant-menu-item .anticon {
+  font-size: 1.3em !important;
+  margin-right: 14px !important;
+  min-width: 22px;
+  transition: transform 0.3s ease;
+}
+
+.mobile-nav-menu .ant-menu-item:hover .anticon {
+  transform: scale(1.1);
+}
+
+.mobile-footer {
+  margin-top: auto;
+  padding-top: 20px;
+  border-top: 1px solid #e0e0e0;
+  text-align: center;
+  font-size: 0.85em;
+  color: #999;
+}
+
 /* 响应式设计 */
 @media (max-width: 1024px) {
   .sidebar {
