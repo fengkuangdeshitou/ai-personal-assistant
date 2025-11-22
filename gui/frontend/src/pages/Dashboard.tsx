@@ -1,20 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Row, Col, Card, Statistic, Button, Space, Typography } from 'antd';
+import { Table, Button, Space, Typography, Card } from 'antd';
 import {
   CodeOutlined,
   ProjectOutlined,
   ReloadOutlined,
-  BarChartOutlined,
-  SettingOutlined,
-  MessageOutlined
+  BarChartOutlined
 } from '@ant-design/icons';
 import './Dashboard.css';
 
 const { Title, Text } = Typography;
 
-const Dashboard: React.FC<{ 
+const Dashboard: React.FC<{
   currentSection?: string;
-  onSectionChange?: (section: string) => void 
+  onSectionChange?: (section: string) => void
 }> = ({ currentSection = 'dashboard', onSectionChange }) => {
   const [greeting, setGreeting] = useState('');
   const [currentTime, setCurrentTime] = useState('');
@@ -60,7 +58,7 @@ const Dashboard: React.FC<{
       }
       const data = await response.json();
       console.log('Stats data:', data);
-      
+
       setStats(prev => ({
         ...prev,
         projects: data.projects || 0
@@ -71,13 +69,90 @@ const Dashboard: React.FC<{
     }
   };
 
+  // 统计数据表格列定义
+  const statsColumns = [
+    {
+      title: '指标',
+      dataIndex: 'metric',
+      key: 'metric',
+      width: '40%',
+      render: (text: string, record: any) => (
+        <Space>
+          {record.icon}
+          <span style={{ fontWeight: 500 }}>{text}</span>
+        </Space>
+      ),
+    },
+    {
+      title: '数值',
+      dataIndex: 'value',
+      key: 'value',
+      width: '30%',
+      render: (value: number, record: any) => (
+        <span style={{ color: record.color, fontWeight: 600, fontSize: '16px' }}>
+          {value.toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: '30%',
+      render: (status: string) => (
+        <span style={{
+          color: status === '正常' ? '#52c41a' : '#8c8c8c',
+          fontWeight: 500
+        }}>
+          {status}
+        </span>
+      ),
+    },
+  ];
+
+  // 统计数据
+  const statsData = [
+    {
+      key: '1',
+      metric: '今日提交',
+      value: stats.commits,
+      status: '正常',
+      icon: <CodeOutlined style={{ color: '#3f8600' }} />,
+      color: '#3f8600',
+    },
+    {
+      key: '2',
+      metric: '新增代码行',
+      value: stats.insertions,
+      status: '正常',
+      icon: <span style={{ color: '#1890ff' }}>➕</span>,
+      color: '#1890ff',
+    },
+    {
+      key: '3',
+      metric: '删除代码行',
+      value: stats.deletions,
+      status: '正常',
+      icon: <span style={{ color: '#cf1322' }}>➖</span>,
+      color: '#cf1322',
+    },
+    {
+      key: '4',
+      metric: '项目总数',
+      value: stats.projects,
+      status: '正常',
+      icon: <ProjectOutlined style={{ color: '#13c2c2' }} />,
+      color: '#13c2c2',
+    },
+  ];
+
   return (
     <div className="dashboard-container">
       {/* 头部问候 */}
       <div className="dashboard-header">
         <div className="greeting-section">
           <Title level={1}>🤖 AI 私人助理</Title>
-          <Text className="subtitle">您的智能开发伙伴 v1.6.61</Text>
+          <Text className="subtitle">您的智能开发伙伴 v1.6.64</Text>
         </div>
         <div className="time-section">
           <Text strong className="greeting-text">{greeting}，疯狂的石头！</Text>
@@ -86,7 +161,7 @@ const Dashboard: React.FC<{
         </div>
       </div>
 
-      {/* 今日统计 */}
+      {/* 今日统计 - 表格布局 */}
       <Card
         title={
           <Space>
@@ -104,78 +179,14 @@ const Dashboard: React.FC<{
         }
         className="stats-section"
       >
-        <Row gutter={[16, 16]}>
-          <Col xs={24} sm={12} md={8} lg={6}>
-            <Card className="stat-card">
-              <Statistic
-                title="今日提交"
-                value={stats.commits}
-                prefix={<CodeOutlined />}
-                valueStyle={{ color: '#3f8600' }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} md={8} lg={6}>
-            <Card className="stat-card">
-              <Statistic
-                title="新增代码行"
-                value={stats.insertions}
-                prefix="➕"
-                valueStyle={{ color: '#1890ff' }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} md={8} lg={6}>
-            <Card className="stat-card">
-              <Statistic
-                title="删除代码行"
-                value={stats.deletions}
-                prefix="➖"
-                valueStyle={{ color: '#cf1322' }}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12} md={8} lg={6}>
-            <Card className="stat-card">
-              <Statistic
-                title="项目总数"
-                value={stats.projects}
-                prefix={<ProjectOutlined />}
-                valueStyle={{ color: '#13c2c2' }}
-              />
-            </Card>
-          </Col>
-        </Row>
-      </Card>
-
-      {/* 快速操作 */}
-      <Card title="🚀 快速操作" className="actions-section">
-        <Space wrap size="large">
-          <Button
-            type={currentSection === 'projects' ? 'primary' : 'default'}
-            size="large"
-            icon={<ProjectOutlined />}
-            onClick={() => onSectionChange?.('projects')}
-          >
-            管理项目
-          </Button>
-          <Button
-            type={currentSection === 'gemini' ? 'primary' : 'default'}
-            size="large"
-            icon={<MessageOutlined />}
-            onClick={() => onSectionChange?.('gemini')}
-          >
-            AI对话
-          </Button>
-          <Button
-            type={currentSection === 'settings' ? 'primary' : 'default'}
-            size="large"
-            icon={<SettingOutlined />}
-            onClick={() => onSectionChange?.('settings')}
-          >
-            系统设置
-          </Button>
-        </Space>
+        <Table
+          columns={statsColumns}
+          dataSource={statsData}
+          pagination={false}
+          size="middle"
+          className="stats-table"
+          rowClassName={(record, index) => index % 2 === 0 ? 'table-row-even' : 'table-row-odd'}
+        />
       </Card>
     </div>
   );
