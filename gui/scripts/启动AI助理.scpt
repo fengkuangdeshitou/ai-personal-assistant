@@ -14,5 +14,17 @@ on error
     delay 2
 end try
 
-# 打开前端页面
-do shell script "open " & quoted form of (projectPath & "/index.html")
+# 检查并启动React前端应用
+try
+    do shell script "pgrep -f react-scripts"
+on error
+    # React应用未运行，启动它
+    do shell script "cd " & quoted form of projectPath & "/frontend && npm start > /tmp/ai-assistant-frontend.log 2>&1 &"
+    delay 10
+end try
+
+# 打开浏览器访问React应用
+tell application "Google Chrome"
+    activate
+    open location "http://localhost:3000"
+end tell

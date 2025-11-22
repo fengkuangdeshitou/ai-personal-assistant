@@ -1,9 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Button, Modal, message, Typography, Table, Space } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import CreateScheme from './CreateScheme';
-
-const { Title } = Typography;
 
 interface AuthScheme {
   id: string;
@@ -22,15 +20,13 @@ interface AuthScheme {
 
 const AuthSchemes: React.FC = () => {
   const [schemes, setSchemes] = useState<AuthScheme[]>([]);
-  const [loading, setLoading] = useState(false);
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [editingScheme, setEditingScheme] = useState<AuthScheme | null>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
 
   // 加载认证方案列表
-  const loadSchemes = async () => {
-    setLoading(true);
+  const loadSchemes = useCallback(async () => {
     try {
       // TODO: 从服务器获取方案列表
       // 暂时使用本地存储或模拟数据
@@ -43,10 +39,8 @@ const AuthSchemes: React.FC = () => {
     } catch (error) {
       console.error('加载方案列表失败:', error);
       messageApi.error('加载方案列表失败');
-    } finally {
-      setLoading(false);
     }
-  };
+  }, [messageApi]);
 
   // 复制秘钥到剪贴板
   const copySecretKey = async (secretKey: string) => {
@@ -328,7 +322,7 @@ const AuthSchemes: React.FC = () => {
   // 初始化加载
   useEffect(() => {
     loadSchemes();
-  }, []);
+  }, [loadSchemes]);
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
