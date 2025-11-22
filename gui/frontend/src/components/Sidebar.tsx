@@ -87,24 +87,26 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
 
         {/* 抽屉菜单 */}
         <Drawer
-          title={
-            <div className="drawer-header">
-              <h2>🤖 AI 助理</h2>
-              <p className="version">v1.6.61</p>
-            </div>
-          }
+          title={null}
           placement="left"
           onClose={() => setDrawerVisible(false)}
           open={drawerVisible}
           width={280}
           className="mobile-drawer"
+          headerStyle={{ display: 'none' }}
         >
+          <div className="mobile-drawer-header">
+            <h2>🤖 AI 助理</h2>
+            <p className="version">v1.6.61</p>
+          </div>
+
           <Menu
             mode="inline"
             selectedKeys={[currentSection]}
             onClick={handleMenuClick}
             className="nav-menu mobile-nav-menu"
             items={menuItems}
+            style={{ border: 'none', background: 'transparent' }}
           />
 
           <div className="sidebar-footer mobile-footer">
