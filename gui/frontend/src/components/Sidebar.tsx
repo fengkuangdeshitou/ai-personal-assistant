@@ -97,7 +97,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
         >
           <div className="mobile-drawer-header">
             <h2>🤖 AI 助理</h2>
-            <p className="version">v1.6.61</p>
+            <p className="version">v1.6.64</p>
           </div>
 
           <Menu
@@ -119,10 +119,10 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
   }
 
   return (
-    <Sider className="sidebar" width={260}>
+    <Sider className="sidebar" width={240}>
       <div className="sidebar-header">
         <h2>🤖 AI 助理</h2>
-        <p className="version">v1.6.61</p>
+        <p className="version">v1.6.64</p>
       </div>
 
       <Menu
