@@ -7,8 +7,9 @@ cd "$(dirname "$0")"
 
 # 静默检查并启动后端服务
 if ! lsof -i :5178 > /dev/null 2>&1; then
+    echo "🔄 正在启动后端服务..."
     cd server
-    node server.js > /tmp/ai-assistant-server.log 2>&1 &
+    nohup node server.js > /tmp/ai-assistant-server.log 2>&1 &
     cd ..
     sleep 2
 fi
@@ -17,8 +18,7 @@ fi
 if ! pgrep -f "react-scripts" > /dev/null 2>&1; then
     echo "🔄 正在启动React前端应用..."
     cd frontend
-    npm start &
-    disown
+    nohup npm start > /tmp/ai-assistant-frontend.log 2>&1 &
     # 等待React服务器启动
     sleep 10
     # 检查服务器是否启动成功
