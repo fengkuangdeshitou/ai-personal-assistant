@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Button, Avatar, Typography,
-  Tag, message, Modal, Select, Progress, Spin
+  Tag, message, Modal, Select, Progress, Spin, Alert
 } from 'antd';
 import {
   FolderOpenOutlined,
@@ -33,7 +33,7 @@ interface Project {
 }
 
 const Projects: React.FC = () => {
-  const { projects, isLoading, loadProjects, scanProjects } = useProjects();
+  const { projects, isLoading, error, loadProjects, scanProjects } = useProjects();
   const { channels, loadOSSConfig } = useOSSConfig();
   const [recentProjects, setRecentProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>('');
@@ -76,17 +76,26 @@ const Projects: React.FC = () => {
 
   useEffect(() => {
     if (projects && projects.length > 0) {
+      console.log('Projects data loaded:', projects.length, 'projects');
+      console.log('Active projects:', projects.filter(p => p.active).length);
+      console.log('Selected type:', selectedType);
+      
       // 过滤项目
       const baseFiltered = projects.filter(p => p.active);
       const filtered = baseFiltered.filter(p => p.type === selectedType);
+      console.log('Filtered projects for type', selectedType, ':', filtered.length);
+      
       // 按最后提交时间排序，取最近6个
       const sorted = [...filtered].sort((a: any, b: any) => {
         const aTime = a.lastCommitTime ? new Date(a.lastCommitTime).getTime() : 0;
         const bTime = b.lastCommitTime ? new Date(b.lastCommitTime).getTime() : 0;
         return bTime - aTime;
       });
+      console.log('Recent projects:', sorted.slice(0, 6).map(p => p.name));
+      
       setRecentProjects(sorted.slice(0, 6));
     } else {
+      console.log('No projects data or empty array');
       setRecentProjects([]);
     }
   }, [projects, selectedType]);
@@ -1000,10 +1009,29 @@ const Projects: React.FC = () => {
           </div>
         </div>
         <div className="projects-list">
-          {isLoading ? (
+          {error ? (
+            <div className="error-container">
+              <Alert
+                message="加载项目失败"
+                description={error}
+                type="error"
+                showIcon
+                action={
+                  <Button size="small" onClick={() => loadProjects()}>
+                    重试
+                  </Button>
+                }
+              />
+            </div>
+          ) : isLoading ? (
             <div className="loading-container">
               <Spin size="large" />
               <p>加载项目中...</p>
+            </div>
+          ) : recentProjects.length === 0 ? (
+            <div className="empty-container">
+              <p>暂无项目数据</p>
+              <Button onClick={() => loadProjects()}>刷新项目</Button>
             </div>
           ) : (
             recentProjects.map((project) => (
