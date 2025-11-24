@@ -1,7 +1,7 @@
 import React from 'react';
 import { Layout, ConfigProvider, App as AntApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';

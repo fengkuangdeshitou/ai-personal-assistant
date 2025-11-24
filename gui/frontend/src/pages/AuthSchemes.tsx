@@ -12,6 +12,7 @@ interface AuthScheme {
   secretKey?: string;
   createdAt: string;
   uploadStatus?: 'success' | 'failed' | 'pending'; // 添加上传状态
+  status?: 'exists' | 'new'; // 添加方案状态：已存在或新创建
   // 额外参数
   bundleId?: string;
   url?: string;
@@ -280,17 +281,17 @@ const AuthSchemes: React.FC = () => {
       ),
     },
     {
-      title: '上传状态',
-      dataIndex: 'uploadStatus',
-      key: 'uploadStatus',
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
       align: 'center' as const,
-      render: (uploadStatus: string) => {
-        if (uploadStatus === 'success') {
-          return <span style={{ color: '#52c41a', fontWeight: 'bold' }}>已上传</span>;
-        } else if (uploadStatus === 'failed') {
-          return <span style={{ color: '#ff4d4f', fontWeight: 'bold' }}>✗ 失败</span>;
+      render: (status: string) => {
+        if (status === 'exists') {
+          return <span style={{ color: '#1890ff', fontWeight: 'bold' }}>已存在</span>;
+        } else if (status === 'new') {
+          return <span style={{ color: '#52c41a', fontWeight: 'bold' }}>新创建</span>;
         } else {
-          return <span style={{ color: '#8c8c8c' }}>未上传</span>;
+          return <span style={{ color: '#8c8c8c' }}>未知</span>;
         }
       },
     },

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, Form, Input, Select, message, Spin } from 'antd';
 
 const { Option } = Select;
@@ -12,6 +12,7 @@ interface AuthScheme {
   secretKey?: string;
   createdAt: string;
   uploadStatus?: 'success' | 'failed' | 'pending'; // 添加上传状态
+  status?: 'exists' | 'new'; // 添加方案状态：已存在或新创建
   // 额外参数
   bundleId?: string;
   url?: string;
@@ -30,6 +31,13 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
   
   // 监听接入端字段的变化
   const accessEnd = Form.useWatch('AccessEnd', form);
+
+  // 当接入端变化时，更新OsType
+  useEffect(() => {
+    if (accessEnd) {
+      form.setFieldsValue({ OsType: accessEnd });
+    }
+  }, [accessEnd, form]);
 
   // 处理应用名称变化
   const handleAppNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -52,9 +60,84 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
         ...values,
         AppName: values.AppName?.trim().replace(/[\r\n]+/g, ''),
         PackName: values.PackName?.trim().replace(/[\r\n]+/g, ''),
+        Url: values.Url?.trim().replace(/[\r\n]+/g, ''),
+        Origin: values.Origin?.trim().replace(/[\r\n]+/g, ''),
+        // 确保OsType字段被传递
+        OsType: values.OsType || accessEnd,
       };
 
-      console.log('创建方案:', filteredValues);
+      console.log('创建方案 - 原始values:', values);
+      console.log('创建方案 - 过滤后values:', filteredValues);
+
+      // 获取bundle_id用于检查
+      const bundleId = filteredValues.AccessEnd === 'iOS' ? filteredValues.PackName : filteredValues.Url;
+
+      if (!bundleId) {
+        messageApi.error('缺少必要的bundle_id信息');
+        setLoading(false);
+        return;
+      }
+
+      // 测试用：模拟创建失败
+      if (filteredValues.SchemeName === 'test-fail') {
+        console.log('测试：模拟创建失败');
+        messageApi.error('创建失败，请稍后重试');
+        setLoading(false);
+        return;
+      }
+
+      // 先调用上传接口检查bundle_id是否已存在
+      console.log('检查bundle_id是否存在:', bundleId);
+      try {
+        const checkResponse = await fetch('https://api.mlgamebox.my16api.com/sdkIosOneLoginConfig', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ bundle_id: bundleId }),
+        });
+
+        if (checkResponse.ok) {
+          const checkResult = await checkResponse.json();
+          console.log('bundle_id检查结果:', checkResult);
+
+          // 判断bundle_id是否已存在：succeed=1且data是对象表示已存在
+          if (checkResult && checkResult.status && checkResult.status.succeed === 1 && checkResult.data && typeof checkResult.data === 'object') {
+            console.log('bundle_id已存在，创建已存在状态的方案对象');
+
+            // 创建已存在的方案对象
+            const existingScheme: AuthScheme = {
+              id: `existing_${bundleId}_${Date.now()}`,
+              schemeName: checkResult.data.name || filteredValues.SchemeName,
+              appName: checkResult.data.appname || filteredValues.AppName,
+              osType: filteredValues.AccessEnd,
+              schemeCode: checkResult.data.code || '已存在',
+              secretKey: checkResult.data.secret_key,
+              createdAt: new Date().toISOString(),
+              uploadStatus: 'success',
+              status: 'exists', // 标记为已存在
+              // 保存额外参数
+              bundleId: bundleId,
+              url: filteredValues.AccessEnd === 'Web' ? filteredValues.Url : undefined,
+              origin: filteredValues.AccessEnd === 'Web' ? filteredValues.Origin : undefined,
+            };
+
+            messageApi.info('该bundle_id对应的方案已存在，已添加到列表');
+            form.resetFields();
+            setLoading(false);
+
+            // 调用成功回调
+            if (onSuccess) {
+              onSuccess(existingScheme);
+            }
+            return;
+          }
+        } else {
+          console.log('bundle_id检查失败，继续创建流程');
+        }
+      } catch (checkError) {
+        console.warn('bundle_id检查出错，继续创建流程:', checkError);
+      }
 
       // 调用后端API创建阿里云认证方案
       const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/create-scheme`, {
@@ -144,6 +227,7 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
               secretKey: secretKey,
               createdAt: new Date().toISOString(),
               uploadStatus: 'success',
+              status: 'new', // 标记为新创建
               // 保存额外参数
               bundleId: filteredValues.AccessEnd === 'iOS' ? filteredValues.PackName : filteredValues.Url,
               url: filteredValues.AccessEnd === 'Web' ? filteredValues.Url : undefined,
@@ -241,7 +325,7 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
           onFinish={onFinish}
           initialValues={{
             AccessEnd: 'iOS',
-            OsType: '2',
+            OsType: 'iOS',
           }}
         >
           <Form.Item
