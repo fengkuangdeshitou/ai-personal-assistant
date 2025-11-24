@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Menu, Layout, Drawer } from 'antd';
+import { Link, useLocation } from 'react-router-dom';
 import {
   HomeOutlined,
   ProjectOutlined,
@@ -13,12 +14,10 @@ import './Sidebar.css';
 
 const { Sider } = Layout;
 
-interface SidebarProps {
-  currentSection: string;
-  onSectionChange: (section: string) => void;
-}
+interface SidebarProps {}
 
-const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) => {
+const Sidebar: React.FC<SidebarProps> = () => {
+  const location = useLocation();
   const [isMobile, setIsMobile] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
 
@@ -35,39 +34,38 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
 
   const menuItems = [
     {
-      key: 'dashboard',
+      key: '/dashboard',
       icon: <HomeOutlined />,
       label: '工作台',
     },
     {
-      key: 'projects',
+      key: '/projects',
       icon: <ProjectOutlined />,
       label: '项目管理',
     },
     {
-      key: 'timeline',
+      key: '/timeline',
       icon: <ClockCircleOutlined />,
       label: '工作记录',
     },
     {
-      key: 'gemini',
+      key: '/gemini',
       icon: <RobotOutlined />,
       label: 'Gemini 聊天',
     },
     {
-      key: 'auth-schemes',
+      key: '/auth-schemes',
       icon: <UnorderedListOutlined />,
       label: '认证方案',
     },
     {
-      key: 'settings',
+      key: '/settings',
       icon: <SettingOutlined />,
       label: '设置',
     },
   ];
 
   const handleMenuClick = ({ key }: { key: string }) => {
-    onSectionChange(key);
     setDrawerVisible(false); // 关闭抽屉
   };
 
@@ -102,10 +100,13 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
 
           <Menu
             mode="inline"
-            selectedKeys={[currentSection]}
+            selectedKeys={[location.pathname === '/' ? '/dashboard' : location.pathname]}
             onClick={handleMenuClick}
             className="nav-menu mobile-nav-menu"
-            items={menuItems}
+            items={menuItems.map(item => ({
+              ...item,
+              label: <Link to={item.key} onClick={() => setDrawerVisible(false)}>{item.label}</Link>
+            }))}
             style={{ border: 'none', background: 'transparent' }}
           />
 
@@ -127,10 +128,12 @@ const Sidebar: React.FC<SidebarProps> = ({ currentSection, onSectionChange }) =>
 
       <Menu
         mode="inline"
-        selectedKeys={[currentSection]}
-        onClick={({ key }) => onSectionChange(key)}
+        selectedKeys={[location.pathname === '/' ? '/dashboard' : location.pathname]}
         className="nav-menu"
-        items={menuItems}
+        items={menuItems.map(item => ({
+          ...item,
+          label: <Link to={item.key}>{item.label}</Link>
+        }))}
       />
 
       <div className="sidebar-footer">

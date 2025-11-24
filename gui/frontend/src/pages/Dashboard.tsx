@@ -10,10 +10,7 @@ import './Dashboard.css';
 
 const { Title, Text } = Typography;
 
-const Dashboard: React.FC<{
-  currentSection?: string;
-  onSectionChange?: (section: string) => void
-}> = ({ currentSection = 'dashboard', onSectionChange }) => {
+const Dashboard: React.FC = () => {
   const [greeting, setGreeting] = useState('');
   const [currentTime, setCurrentTime] = useState('');
   const [stats, setStats] = useState({
