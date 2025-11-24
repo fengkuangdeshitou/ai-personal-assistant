@@ -6,12 +6,15 @@ export const useProjects = () => {
   const [error, setError] = useState<string | null>(null);
 
   const loadProjects = useCallback(async () => {
+    console.log('Loading projects...');
     setIsLoading(true);
     setError(null);
 
     try {
       const response = await projectApi.getProjects();
+      console.log('API response:', response);
       if (response.success) {
+        console.log('Setting projects:', response.message?.length || 0, 'projects');
         setProjects(response.message || []);
       } else {
         setError(response.error || '加载项目失败');
