@@ -34,19 +34,27 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
   // 处理应用名称变化
   const handleAppNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const appName = e.target.value;
-    if (appName.includes('（') && appName.includes('）')) {
-      const schemeName = appName.split('（')[0].trim();
-      form.setFieldsValue({ SchemeName: schemeName });
-    } else if (appName.includes('(') && appName.includes(')')) {
-      const schemeName = appName.split('(')[0].trim();
-      form.setFieldsValue({ SchemeName: schemeName });
+    let schemeName = appName;
+    
+    // 如果应用名称包含"("，则取前面的部分
+    if (appName.includes('(')) {
+      schemeName = appName.split('(')[0].trim();
     }
+    
+    form.setFieldsValue({ SchemeName: schemeName });
   };
 
   const onFinish = async (values: any) => {
     setLoading(true);
     try {
-      console.log('创建方案:', values);
+      // 过滤应用名称和包名字段的前后空格和回车
+      const filteredValues = {
+        ...values,
+        AppName: values.AppName?.trim().replace(/[\r\n]+/g, ''),
+        PackName: values.PackName?.trim().replace(/[\r\n]+/g, ''),
+      };
+
+      console.log('创建方案:', filteredValues);
 
       // 调用后端API创建阿里云认证方案
       const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/create-scheme`, {
@@ -54,7 +62,7 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(values),
+        body: JSON.stringify(filteredValues),
       });
 
       if (response.ok) {
@@ -128,38 +136,38 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
           if (secretKey) {
             // 创建方案对象
             const newScheme: AuthScheme = {
-              id: Date.now().toString(),
-              schemeName: values.SchemeName,
-              appName: values.AppName,
-              osType: values.AccessEnd,
+              id: schemeCode,
+              schemeName: filteredValues.SchemeName,
+              appName: filteredValues.AppName,
+              osType: filteredValues.AccessEnd,
               schemeCode: schemeCode,
               secretKey: secretKey,
               createdAt: new Date().toISOString(),
               uploadStatus: 'success',
               // 保存额外参数
-              bundleId: values.AccessEnd === 'iOS' ? values.PackName : values.Url,
-              url: values.AccessEnd === 'Web' ? values.Url : undefined,
-              origin: values.AccessEnd === 'Web' ? values.Origin : undefined,
+              bundleId: filteredValues.AccessEnd === 'iOS' ? filteredValues.PackName : filteredValues.Url,
+              url: filteredValues.AccessEnd === 'Web' ? filteredValues.Url : undefined,
+              origin: filteredValues.AccessEnd === 'Web' ? filteredValues.Origin : undefined,
             };
 
             // 上传所有参数到接口
             console.log('上传参数到接口:', { schemeCode, secretKey });
             try {
               const uploadData: any = {
-                name: values.SchemeName,
+                name: filteredValues.SchemeName,
                 code: schemeCode,
-                appname: values.AppName,
-                type: values.AccessEnd === 'iOS' ? 'ios' : 'h5',  // 转换为小写格式
+                appname: filteredValues.AppName,
+                type: filteredValues.AccessEnd === 'iOS' ? 'ios' : 'h5',  // 转换为小写格式
                 secret_key: secretKey
               };
 
               // 根据类型添加特定参数
-              if (values.AccessEnd === 'iOS') {
-                uploadData.bundle_id = values.PackName;
-              } else if (values.AccessEnd === 'Web') {
-                uploadData.bundle_id = values.Url;  // Web类型使用URL作为bundle_id
-                uploadData.url = values.Url;
-                uploadData.origin = values.Origin;
+              if (filteredValues.AccessEnd === 'iOS') {
+                uploadData.bundle_id = filteredValues.PackName;
+              } else if (filteredValues.AccessEnd === 'Web') {
+                uploadData.bundle_id = filteredValues.Url;  // Web类型使用URL作为bundle_id
+                uploadData.url = filteredValues.Url;
+                uploadData.origin = filteredValues.Origin;
               }
 
               const uploadResponse = await fetch('https://api.mlgamebox.my16api.com/sdkIosOneLoginConfig', {
@@ -192,15 +200,15 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
             // 仍然创建方案对象，但没有秘钥
             const newScheme: AuthScheme = {
               id: Date.now().toString(),
-              schemeName: values.SchemeName,
-              appName: values.AppName,
-              osType: values.AccessEnd,
+              schemeName: filteredValues.SchemeName,
+              appName: filteredValues.AppName,
+              osType: filteredValues.AccessEnd,
               schemeCode: schemeCode,
               createdAt: new Date().toISOString(),
               // 保存额外参数
-              bundleId: values.AccessEnd === 'iOS' ? values.PackName : values.Url,
-              url: values.AccessEnd === 'Web' ? values.Url : undefined,
-              origin: values.AccessEnd === 'Web' ? values.Origin : undefined,
+              bundleId: filteredValues.AccessEnd === 'iOS' ? filteredValues.PackName : filteredValues.Url,
+              url: filteredValues.AccessEnd === 'Web' ? filteredValues.Url : undefined,
+              origin: filteredValues.AccessEnd === 'Web' ? filteredValues.Origin : undefined,
             };
             if (onSuccess) {
               onSuccess(newScheme);
@@ -241,7 +249,7 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
             name="SchemeName"
             rules={[{ required: true, message: '请输入方案名称' }]}
           >
-            <Input placeholder="例如：APP登录认证" />
+            <Input placeholder="根据应用名称自动生成" disabled />
           </Form.Item>
 
           <Form.Item

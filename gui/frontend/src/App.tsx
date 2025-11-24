@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Layout, ConfigProvider, App as AntApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
@@ -14,43 +15,29 @@ import './App.css';
 const { Content } = Layout;
 
 function App() {
-  const [currentSection, setCurrentSection] = useState('dashboard');
-
-  const showSection = (sectionId: string) => {
-    setCurrentSection(sectionId);
-  };
-
-  const renderContent = () => {
-    switch (currentSection) {
-      case 'projects':
-        return <Projects />;
-      case 'timeline':
-        return <Timeline />;
-      case 'gemini':
-        return <GeminiChat />;
-      case 'auth-schemes':
-        return <AuthSchemes />;
-      case 'create-scheme':
-        return <CreateScheme />;
-      case 'settings':
-        return <Settings />;
-      default:
-        return <Dashboard currentSection={currentSection} onSectionChange={showSection} />;
-    }
-  };
-
   return (
     <ConfigProvider locale={zhCN}>
-      <AntApp>
-        <Layout className="main-layout">
-          <Sidebar currentSection={currentSection} onSectionChange={showSection} />
-          <Layout>
-            <Content className="content-area">
-              {renderContent()}
-            </Content>
+      <Router>
+        <AntApp>
+          <Layout className="main-layout">
+            <Sidebar />
+            <Layout>
+              <Content className="content-area">
+                <Routes>
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/projects" element={<Projects />} />
+                  <Route path="/timeline" element={<Timeline />} />
+                  <Route path="/gemini" element={<GeminiChat />} />
+                  <Route path="/auth-schemes" element={<AuthSchemes />} />
+                  <Route path="/create-scheme" element={<CreateScheme />} />
+                  <Route path="/settings" element={<Settings />} />
+                </Routes>
+              </Content>
+            </Layout>
           </Layout>
-        </Layout>
-      </AntApp>
+        </AntApp>
+      </Router>
     </ConfigProvider>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, List, Typography, Tag, Spin, message, Modal, Timeline as AntTimeline } from 'antd';
 import { ClockCircleOutlined, BranchesOutlined, PullRequestOutlined, UploadOutlined, MergeOutlined, SwapOutlined, UndoOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import './Timeline.css';
@@ -49,11 +49,7 @@ const Timeline: React.FC = () => {
   const [modalVisible, setModalVisible] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
 
-  useEffect(() => {
-    loadTodayOperations();
-  }, []);
-
-  const loadTodayOperations = async () => {
+  const loadTodayOperations = useCallback(async () => {
     try {
       setLoading(true);
       const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/git/today-operations`);
@@ -70,7 +66,11 @@ const Timeline: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [messageApi]);
+
+  useEffect(() => {
+    loadTodayOperations();
+  }, [loadTodayOperations]);
 
   const getOperationIcon = (type: string) => {
     switch (type) {
