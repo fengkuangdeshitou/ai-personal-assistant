@@ -3,6 +3,7 @@ import { Card } from 'antd';
 import './Settings.css';
 
 const Settings: React.FC = () => {
+
   return (
     <div className="settings-container">
       <Card title="📊 系统信息" className="settings-card">
@@ -13,7 +14,7 @@ const Settings: React.FC = () => {
           </div>
           <div className="system-info-item">
             <span className="system-info-label">版本号：</span>
-            <span className="system-info-value">v1.6.69</span>
+            <span className="system-info-value">v1.6.70</span>
           </div>
           <div className="system-info-item">
             <span className="system-info-label">前端框架：</span>
