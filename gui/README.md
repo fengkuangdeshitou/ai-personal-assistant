@@ -4,6 +4,30 @@
 
 ## 🚀 快速启动
 
+### 使用 Homebrew 一键安装（推荐）
+```bash
+# 安装 AI 私人助理
+brew install ai
+
+# 启动应用
+ai
+```
+
+### 一键安装和卸载
+```bash
+# 安装所有依赖
+./scripts/ai-install
+
+# 卸载应用
+./scripts/ai-uninstall
+
+# 跨设备安装（推荐）
+./install.sh
+
+# 独立安装（无需克隆项目）
+curl -fsSL https://raw.githubusercontent.com/fengkuangdeshitou/ai-personal-assistant/main/install-standalone.sh | bash
+```
+
 ### 使用 macOS App（推荐）
 ```bash
 # 双击打开
@@ -48,6 +72,9 @@ open index.html
 
 ## 📖 详细文档
 
+- [安装指南](INSTALL.md)
+- [直接安装指南](DIRECT_INSTALL.md)
+- [团队部署指南](TEAM_DEPLOYMENT.md)
 - [多渠道构建系统](README-CHANNELS.md)
 - [服务器端文档](server/README.md)
 
