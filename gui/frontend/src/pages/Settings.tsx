@@ -13,7 +13,7 @@ const Settings: React.FC = () => {
           </div>
           <div className="system-info-item">
             <span className="system-info-label">版本号：</span>
-            <span className="system-info-value">v1.6.66</span>
+            <span className="system-info-value">v1.6.69</span>
           </div>
           <div className="system-info-item">
             <span className="system-info-label">前端框架：</span>
