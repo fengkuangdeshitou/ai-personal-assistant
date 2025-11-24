@@ -28,6 +28,15 @@ ai
 curl -fsSL https://raw.githubusercontent.com/fengkuangdeshitou/ai-personal-assistant/main/install-standalone.sh | bash
 ```
 
+### 桌面应用程序
+```bash
+# 构建 Windows EXE
+cd frontend && npm run build-win
+
+# 或使用专用脚本
+./scripts/build-windows-exe.sh
+```
+
 ### 使用 macOS App（推荐）
 ```bash
 # 双击打开
@@ -74,6 +83,7 @@ open index.html
 
 - [安装指南](INSTALL.md)
 - [直接安装指南](DIRECT_INSTALL.md)
+- [Windows EXE 打包指南](WINDOWS_BUILD_GUIDE.md)
 - [团队部署指南](TEAM_DEPLOYMENT.md)
 - [多渠道构建系统](README-CHANNELS.md)
 - [服务器端文档](server/README.md)
