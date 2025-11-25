@@ -2715,8 +2715,8 @@ async function refreshCDNCache(projectName, channelId = null, res = null) {
   }
 }
 
-app.listen(PORT, () => {
-  console.log(`Backend server listening on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Backend server listening on http://0.0.0.0:${PORT}`);
   console.log('Projects dir:', DEFAULT_DIR);
   if (!fs.existsSync(CONFIG_PATH)) {
     console.log('Tip: create server/projects.json to define project paths explicitly.');
