@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, List, Typography, Tag, Spin, message, Modal, Timeline as AntTimeline } from 'antd';
-import { ClockCircleOutlined, BranchesOutlined, PullRequestOutlined, UploadOutlined, MergeOutlined, SwapOutlined, UndoOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import { ClockCircleOutlined, BranchesOutlined, PullRequestOutlined, UploadOutlined, MergeOutlined, SwapOutlined, UndoOutlined, QuestionCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import './Timeline.css';
 
 const { Title, Text } = Typography;
@@ -97,7 +97,10 @@ const Timeline: React.FC = () => {
   };
 
   const formatTime = (timestamp: string) => {
-    return new Date(timestamp).toLocaleTimeString('zh-CN', {
+    const date = new Date(timestamp);
+    return date.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit'
@@ -203,8 +206,18 @@ const Timeline: React.FC = () => {
     <div className="container">
       {contextHolder}
       <div className="header">
-        <h1>⏰ 工作记录</h1>
-        <div className="subtitle">今日所有项目的Git操作记录</div>
+        <div>
+          <h1>⏰ 工作记录</h1>
+          <div className="subtitle">今日所有项目的Git操作记录</div>
+        </div>
+        <Button 
+          type="primary" 
+          icon={<ReloadOutlined />} 
+          onClick={loadTodayOperations}
+          loading={loading}
+        >
+          刷新
+        </Button>
       </div>
 
       {projects.length === 0 ? (
@@ -222,6 +235,12 @@ const Timeline: React.FC = () => {
           <div style={{ marginBottom: '16px', textAlign: 'center' }}>
             <Text type="secondary">
               共 {projects.length} 个项目有活动，今日共 {projects.reduce((sum, p) => sum + p.totalOperations + p.totalCommits, 0)} 次操作
+            </Text>
+            <br />
+            <Text type="secondary" style={{ fontSize: '12px' }}>
+              代码变更: +
+              {projects.reduce((sum, p) => sum + p.commits.reduce((s, c) => s + (c.insertions || 0), 0), 0)} -
+              {projects.reduce((sum, p) => sum + p.commits.reduce((s, c) => s + (c.deletions || 0), 0), 0)} 行
             </Text>
           </div>
 
@@ -248,6 +267,14 @@ const Timeline: React.FC = () => {
                         提交: {project.totalCommits}
                       </Tag>
                     </div>
+
+                    {project.commits.length > 0 && (
+                      <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>
+                        代码变更: +
+                        {project.commits.reduce((sum, c) => sum + (c.insertions || 0), 0)} -
+                        {project.commits.reduce((sum, c) => sum + (c.deletions || 0), 0)} 行
+                      </div>
+                    )}
 
                     <div style={{ fontSize: '12px', color: '#666' }}>
                       总活动: {project.totalOperations + project.totalCommits} 次
