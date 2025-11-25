@@ -303,7 +303,16 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
         }
       } else {
         const errorData = await response.json();
-        messageApi.error(errorData.error || '创建失败，请检查配置');
+        
+        // 特殊处理阿里云访问密钥未配置的错误
+        if (errorData.error && errorData.error.includes('阿里云访问密钥未配置')) {
+          messageApi.error({
+            content: '阿里云访问密钥未配置，请先在服务器环境变量中配置 ALICLOUD_ACCESS_KEY_ID 和 ALICLOUD_ACCESS_KEY_SECRET',
+            duration: 8,
+          });
+        } else {
+          messageApi.error(errorData.error || '创建失败，请检查配置');
+        }
       }
     } catch (error) {
       console.error('创建方案失败:', error);
