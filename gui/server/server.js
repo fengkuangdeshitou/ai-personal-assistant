@@ -533,19 +533,41 @@ app.get('/api/stats', async (req, res) => {
   try {
     let projects = readConfig();
     if (!projects) projects = scanProjects(DEFAULT_DIR);
-    
+
     const activeProjects = projects.filter(p => p.active !== false);
-    
+
+    // Calculate today's Git statistics
+    let totalCommits = 0;
+    let totalInsertions = 0;
+    let totalDeletions = 0;
+
+    for (const project of activeProjects) {
+      try {
+        const commits = await getTodayCommits(project.path);
+        totalCommits += commits.length;
+
+        // Sum up insertions and deletions from today's commits
+        for (const commit of commits) {
+          totalInsertions += commit.insertions || 0;
+          totalDeletions += commit.deletions || 0;
+        }
+      } catch (error) {
+        // Skip projects that can't be analyzed
+        console.warn(`Failed to analyze git stats for ${project.name}:`, error.message);
+      }
+    }
+
     res.json({
       projects: activeProjects.length,
-      totalProjects: projects.length
+      totalProjects: projects.length,
+      commits: totalCommits,
+      insertions: totalInsertions,
+      deletions: totalDeletions
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
-});
-
-// Get today's git operations for all projects
+});// Get today's git operations for all projects
 app.get('/api/git/today-operations', async (req, res) => {
   try {
     let projects = readConfig();

@@ -14,9 +14,9 @@ const Dashboard: React.FC = () => {
   const [greeting, setGreeting] = useState('');
   const [currentTime, setCurrentTime] = useState('');
   const [stats, setStats] = useState({
-    commits: 3,
-    insertions: 245,
-    deletions: 12,
+    commits: 0,
+    insertions: 0,
+    deletions: 0,
     projects: 0
   });
 
@@ -56,13 +56,21 @@ const Dashboard: React.FC = () => {
       const data = await response.json();
       console.log('Stats data:', data);
 
-      setStats(prev => ({
-        ...prev,
+      setStats({
+        commits: data.commits || 0,
+        insertions: data.insertions || 0,
+        deletions: data.deletions || 0,
         projects: data.projects || 0
-      }));
+      });
     } catch (error) {
       console.error('Load stats error:', error);
       // 保持默认值或显示错误
+      setStats({
+        commits: 0,
+        insertions: 0,
+        deletions: 0,
+        projects: 0
+      });
     }
   };
 
