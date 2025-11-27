@@ -16,7 +16,7 @@ npm install  # 首次运行
 node server.js
 ```
 
-服务默认监听 `http://localhost:5178`
+服务默认监听 `http://localhost:5178`，支持局域网访问（其他设备可通过 `http://<服务器IP>:5178` 访问）
 
 ## 🔍 自动扫描项目
 

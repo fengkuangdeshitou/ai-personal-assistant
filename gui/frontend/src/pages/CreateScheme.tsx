@@ -140,7 +140,8 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
       }
 
       // 调用后端API创建阿里云认证方案
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/create-scheme`, {
+      const apiBaseUrl = process.env.REACT_APP_API_URL || `${window.location.protocol}//${window.location.hostname}:5178`;
+      const response = await fetch(`${apiBaseUrl}/api/create-scheme`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -157,19 +158,19 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
           console.log('获取秘钥:', schemeCode);
           
           // 等待云服务处理创建的方案
-          console.log('等待 2 秒让云服务处理方案创建...');
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          console.log('等待 3 秒让云服务处理方案创建...');
+          await new Promise(resolve => setTimeout(resolve, 3000));
           
           let secretKey = null;
           let retryCount = 0;
-          const maxRetries = 3;
-          const retryDelay = 3000; // 3秒延迟
+          const maxRetries = 5;
+          const retryDelay = 5000; // 5秒延迟
 
           while (retryCount < maxRetries && !secretKey) {
             try {
               console.log(`尝试获取秘钥 (第${retryCount + 1}次)...`);
               
-              const secretResponse = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/query-scheme-secret`, {
+              const secretResponse = await fetch(`${apiBaseUrl}/api/query-scheme-secret`, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',

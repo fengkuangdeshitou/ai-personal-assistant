@@ -9,8 +9,15 @@ export interface ApiResponse<T = any> {
 }
 
 // 创建axios实例
+const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    return process.env.REACT_APP_API_URL || `${window.location.protocol}//${window.location.hostname}:5178`;
+  }
+  return process.env.REACT_APP_API_URL || 'http://localhost:5178';
+};
+
 const api: AxiosInstance = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5178',
+  baseURL: getApiBaseUrl(),
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',

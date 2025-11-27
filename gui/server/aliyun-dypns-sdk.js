@@ -33,6 +33,13 @@ export function createAliCloudClient(accessKeyId, accessKeySecret) {
  * @returns {Promise<Object>} API响应结果
  */
 export async function createVerifyScheme(accessKeyId, accessKeySecret, schemeData) {
+  console.log('开始创建认证方案，网络接口信息:');
+  const os = await import('os');
+  const networkInterfaces = os.networkInterfaces();
+  for (const [name, interfaces] of Object.entries(networkInterfaces)) {
+    console.log(`${name}:`, interfaces.map(iface => `${iface.address} (${iface.family})`).join(', '));
+  }
+  
   try {
     // 创建客户端
     const client = createAliCloudClient(accessKeyId, accessKeySecret);

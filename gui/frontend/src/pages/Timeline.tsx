@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, List, Typography, Tag, Spin, message, Modal, Timeline as AntTimeline, Button } from 'antd';
 import { ClockCircleOutlined, BranchesOutlined, PullRequestOutlined, UploadOutlined, MergeOutlined, SwapOutlined, UndoOutlined, QuestionCircleOutlined, ReloadOutlined } from '@ant-design/icons';
+import { getApiBaseUrl } from '../utils/api';
 import './Timeline.css';
 
 const { Title, Text } = Typography;
@@ -52,7 +53,7 @@ const Timeline: React.FC = () => {
   const loadTodayOperations = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/git/today-operations`);
+      const response = await fetch(`${getApiBaseUrl()}/api/git/today-operations`);
       const data: TodayOperationsResponse = await response.json();
 
       if (data.success) {

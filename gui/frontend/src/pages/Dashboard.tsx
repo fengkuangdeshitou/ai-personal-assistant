@@ -6,6 +6,7 @@ import {
   ReloadOutlined,
   BarChartOutlined
 } from '@ant-design/icons';
+import { getApiBaseUrl } from '../utils/api';
 import './Dashboard.css';
 
 const { Title, Text } = Typography;
@@ -49,7 +50,7 @@ const Dashboard: React.FC = () => {
   const loadStats = async () => {
     try {
       console.log('Loading stats...');
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/stats`);
+      const response = await fetch(`${getApiBaseUrl()}/api/stats`);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -157,7 +158,7 @@ const Dashboard: React.FC = () => {
       <div className="dashboard-header">
         <div className="greeting-section">
           <Title level={1}>🤖 AI 私人助理</Title>
-          <Text className="subtitle">您的智能开发伙伴 v1.6.76</Text>
+          <Text className="subtitle">您的智能开发伙伴 v1.6.78</Text>
         </div>
         <div className="time-section">
           <Text strong className="greeting-text">{greeting}，疯狂的石头！</Text>
