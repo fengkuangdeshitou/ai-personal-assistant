@@ -15,6 +15,7 @@ import {
   ToolOutlined
 } from '@ant-design/icons';
 import { useProjects, useOSSConfig } from '../api';
+import { getApiBaseUrl } from '../utils/api';
 import './Projects.css';
 
 const { Title, Text } = Typography;
@@ -140,7 +141,7 @@ const Projects: React.FC = () => {
 
     try {
       // 使用流式API
-      const pullUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/git/pull-stream?path=${encodeURIComponent(project.path)}`;
+      const pullUrl = `${getApiBaseUrl()}/api/git/pull-stream?path=${encodeURIComponent(project.path)}`;
       const pullEventSource = new EventSource(pullUrl);
 
       await new Promise<void>((resolve, reject) => {
@@ -247,7 +248,7 @@ const Projects: React.FC = () => {
 
     try {
       // 使用流式API
-      const pushUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/git/push-stream?path=${encodeURIComponent(project.path)}`;
+      const pushUrl = `${getApiBaseUrl()}/api/git/push-stream?path=${encodeURIComponent(project.path)}`;
       const pushEventSource = new EventSource(pushUrl);
 
       await new Promise<void>((resolve, reject) => {
@@ -367,7 +368,7 @@ const Projects: React.FC = () => {
         params.append('channel', channel);
       }
 
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/build-stream?${params}`, {
+      const response = await fetch(`${getApiBaseUrl()}/api/build-stream?${params}`, {
         method: 'GET'
       });
 
@@ -441,7 +442,7 @@ const Projects: React.FC = () => {
         params.append('channel', channel);
       }
 
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/build-stream?${params}`, {
+      const response = await fetch(`${getApiBaseUrl()}/api/build-stream?${params}`, {
         method: 'GET'
       });
 
@@ -552,7 +553,7 @@ const Projects: React.FC = () => {
       setProgressText('正在构建项目...');
 
       // 使用 EventSource 处理构建流
-      const buildUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/build-stream?projectName=${encodeURIComponent(selectedProject)}`;
+      const buildUrl = `${getApiBaseUrl()}/api/build-stream?projectName=${encodeURIComponent(selectedProject)}`;
       const buildEventSource = new EventSource(buildUrl);
 
       let buildSuccess = false;
@@ -608,7 +609,7 @@ const Projects: React.FC = () => {
       setFileUploadStatus(new Map()); // 清空文件状态
 
       // 所有环境都先执行正常的逐个文件上传
-      const normalUploadUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/upload-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=default&env=${env}`;
+      const normalUploadUrl = `${getApiBaseUrl()}/api/upload-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=default&env=${env}`;
       const normalEventSource = new EventSource(normalUploadUrl);
 
       // 处理正常的上传过程
@@ -689,7 +690,7 @@ const Projects: React.FC = () => {
     setProgressPercent(0); // 从0%重新开始备份进度
     setFileUploadStatus(new Map()); // 清空文件状态
 
-    const backupUploadUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/upload-zip-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=${encodeURIComponent(channelId)}&env=${env}&isBackup=true`;
+    const backupUploadUrl = `${getApiBaseUrl()}/api/upload-zip-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=${encodeURIComponent(channelId)}&env=${env}&isBackup=true`;
     const backupEventSource = new EventSource(backupUploadUrl);
 
     backupEventSource.onopen = () => {
@@ -877,7 +878,7 @@ const Projects: React.FC = () => {
       setFileUploadStatus(new Map()); // 清空文件状态
 
       // 使用 EventSource 处理上传流
-      const uploadUrl = `${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/upload-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=${encodeURIComponent(channelId)}&env=${env}`;
+      const uploadUrl = `${getApiBaseUrl()}/api/upload-stream?projectName=${encodeURIComponent(selectedProject)}&path=${encodeURIComponent(project.path)}&channelId=${encodeURIComponent(channelId)}&env=${env}`;
       const uploadEventSource = new EventSource(uploadUrl);
 
       await new Promise<void>((resolve, reject) => {

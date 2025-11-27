@@ -37,7 +37,8 @@ const GeminiChat: React.FC = () => {
     setLoading(true);
 
     try {
-      const response = await fetch('http://localhost:5178/api/gemini', {
+      const apiBaseUrl = process.env.REACT_APP_API_URL || `${window.location.protocol}//${window.location.hostname}:5178`;
+      const response = await fetch(`${apiBaseUrl}/api/gemini`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -37,8 +37,13 @@ async function querySchemeSecret(schemeCode) {
     const describeResponse = await callAliyunAPI('DescribeVerifyScheme', describeParams, accessKeyId, accessKeySecret, regionId, endpoint);
 
     if (describeResponse.statusCode !== 200) {
-      console.log('❌ 查询方案详情失败:', describeResponse.body.Message || '未知错误');
-      return;
+      console.log('❌ 查询方案详情失败:', describeResponse.body.Message || describeResponse.body || '未知错误');
+      console.log('响应状态码:', describeResponse.statusCode);
+      console.log('完整响应:', JSON.stringify(describeResponse, null, 2));
+      return {
+        success: false,
+        error: `查询方案详情失败: ${describeResponse.body.Message || '未知错误'}`
+      };
     }
 
     if (!describeResponse.body.SchemeQueryResultDTO) {
@@ -135,21 +140,34 @@ async function callAliyunAPI(action, params, accessKeyId, accessKeySecret, regio
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded'
-      }
+      },
+      timeout: 60000 // 60秒超时
     }, (res) => {
       let data = '';
       res.on('data', (chunk) => data += chunk);
       res.on('end', () => {
         try {
           const result = JSON.parse(data);
+          console.log(`阿里云API响应 (${action}):`, res.statusCode, JSON.stringify(result, null, 2));
           resolve({ statusCode: res.statusCode, body: result });
         } catch (e) {
+          console.error('解析响应失败:', e.message, '原始数据:', data);
           resolve({ statusCode: res.statusCode, body: data });
         }
       });
     });
 
-    req.on('error', reject);
+    req.on('error', (error) => {
+      console.error('阿里云API请求错误:', error.message);
+      reject(error);
+    });
+
+    req.on('timeout', () => {
+      console.error('阿里云API请求超时');
+      req.destroy();
+      reject(new Error('请求超时'));
+    });
+
     req.end();
   });
 }

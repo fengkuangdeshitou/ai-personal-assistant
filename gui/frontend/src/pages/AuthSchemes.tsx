@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Button, Modal, message, Typography, Table, Space } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
+import { getApiBaseUrl } from '../utils/api';
 import CreateScheme from './CreateScheme';
 
 interface AuthScheme {
@@ -171,7 +172,7 @@ const AuthSchemes: React.FC = () => {
     try {
       messageApi.loading('正在获取秘钥...', 0);
       
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5178'}/api/query-scheme-secret`, {
+      const response = await fetch(`${getApiBaseUrl()}/api/query-scheme-secret`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

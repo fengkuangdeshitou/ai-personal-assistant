@@ -30,7 +30,7 @@ const app = express();
 const PORT = process.env.PORT || 5178;
 
 // 初始化 Google Generative AI
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyAYsda9YyPhdB2wotagGGVXWxVKHQei4pU');
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyAA7NuiKYcSX_27DjvLQUgVAjjmcSRxZOU');
 
 // 默认项目目录
 const DEFAULT_DIR = '/Users/maiyou001/Project';
@@ -332,6 +332,8 @@ app.get('/api/health', (_req, res) => {
 
 // 创建阿里云认证方案
 app.post('/api/create-scheme', async (req, res) => {
+  const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 'unknown';
+  console.log('创建认证方案请求来自:', clientIP, 'body:', req.body);
   try {
     const schemeData = req.body;
     console.log('创建认证方案:', schemeData);
@@ -2600,7 +2602,7 @@ app.post('/api/gemini', async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
     
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
     console.log('Calling Gemini Text API...');
     const result = await model.generateContent(message);
     const response = await result.response;
