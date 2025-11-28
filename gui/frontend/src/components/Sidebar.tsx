@@ -8,6 +8,7 @@ import {
   SettingOutlined,
   UnorderedListOutlined,
   MenuOutlined,
+  FileProtectOutlined,
 } from '@ant-design/icons';
 import './Sidebar.css';
 
@@ -46,6 +47,11 @@ const Sidebar: React.FC<SidebarProps> = () => {
       key: '/timeline',
       icon: <ClockCircleOutlined />,
       label: '工作记录',
+    },
+    {
+      key: '/apk-hardening',
+      icon: <FileProtectOutlined />,
+      label: 'APK加固',
     },
     {
       key: '/auth-schemes',
@@ -89,7 +95,7 @@ const Sidebar: React.FC<SidebarProps> = () => {
         >
           <div className="mobile-drawer-header">
             <h2>🤖 AI 助理</h2>
-            <p className="version">v1.6.79</p>
+            <p className="version">v1.6.80</p>
           </div>
 
           <Menu
@@ -117,7 +123,7 @@ const Sidebar: React.FC<SidebarProps> = () => {
     <Sider className="sidebar" width={240}>
       <div className="sidebar-header">
         <h2>🤖 AI 助理</h2>
-        <p className="version">v1.6.79</p>
+        <p className="version">v1.6.80</p>
       </div>
 
       <Menu
