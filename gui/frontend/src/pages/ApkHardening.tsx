@@ -47,38 +47,39 @@ const ApkHardening: React.FC = () => {
     setIsHardening(true);
     setHardeningProgress(0);
 
-    // 模拟加固过程
-    const steps = [
-      '正在分析APK文件结构...',
-      '应用代码混淆...',
-      '加密资源文件...',
-      '添加反调试保护...',
-      '实施签名验证...',
-      '生成加固后的APK...'
-    ];
+    try {
+      const formData = new FormData();
+      formData.append('apk', fileList[0]);
 
-    for (let i = 0; i < steps.length; i++) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      setHardeningProgress(((i + 1) / steps.length) * 100);
-      message.info(steps[i]);
+      const response = await fetch('/api/apk/harden', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (result.success) {
+        setHardeningResult({
+          originalSize: result.data.originalSize,
+          hardenedSize: result.data.hardenedSize,
+          protections: result.data.protections,
+          downloadUrl: result.data.downloadUrl
+        });
+        message.success('APK加固完成！');
+      } else {
+        throw new Error(result.message || '加固失败');
+      }
+
+    } catch (error) {
+      console.error('APK加固失败:', error);
+      message.error(`加固失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      setIsHardening(false);
     }
-
-    // 模拟加固结果
-    setHardeningResult({
-      originalSize: '15.2 MB',
-      hardenedSize: '16.8 MB',
-      protections: [
-        { name: '代码混淆', status: 'success', description: '已混淆类名和方法名' },
-        { name: '资源加密', status: 'success', description: '已加密assets和res目录' },
-        { name: '反调试保护', status: 'success', description: '已添加反调试检测' },
-        { name: '签名验证', status: 'success', description: '已实施完整性校验' },
-        { name: '反逆向工程', status: 'warning', description: '基础保护已实施' }
-      ],
-      downloadUrl: '#'
-    });
-
-    setIsHardening(false);
-    message.success('APK加固完成！');
   };
 
   const hardeningFeatures = [
