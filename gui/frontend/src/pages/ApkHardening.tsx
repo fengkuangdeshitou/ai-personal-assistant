@@ -20,9 +20,9 @@ const ApkHardening: React.FC = () => {
         message.error('只能上传APK文件!');
         return false;
       }
-      const isLt50M = file.size / 1024 / 1024 < 50;
-      if (!isLt50M) {
-        message.error('APK文件大小不能超过50MB!');
+      const isLt200M = file.size / 1024 / 1024 < 200;
+      if (!isLt200M) {
+        message.error('APK文件大小不能超过200MB!');
         return false;
       }
       setFileList([file]);
@@ -125,7 +125,7 @@ const ApkHardening: React.FC = () => {
             </Button>
           </Upload>
           <p className="upload-hint">
-            支持.apk格式文件，文件大小不超过50MB
+            支持.apk格式文件，文件大小不超过200MB
           </p>
         </Card>
 

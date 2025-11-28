@@ -50,7 +50,7 @@ app.use(express.json());
 const upload = multer({
   dest: path.join(__dirname, 'uploads', 'apk'),
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB
+    fileSize: 200 * 1024 * 1024, // 200MB
   },
   fileFilter: (req, file, cb) => {
     if (file.mimetype === 'application/vnd.android.package-archive' || file.originalname.endsWith('.apk')) {
