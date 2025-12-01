@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Badge, Spin, message } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import { getApiBaseUrl } from '../utils/api';
 import './Settings.css';
 
 interface SystemStatus {
@@ -47,7 +48,7 @@ const Settings: React.FC = () => {
 
   const fetchSystemStatus = async () => {
     try {
-      const response = await fetch('http://localhost:5178/api/system-status');
+      const response = await fetch(`${getApiBaseUrl()}/api/system-status`);
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
@@ -128,7 +129,7 @@ const Settings: React.FC = () => {
           </div>
           <div className="system-info-item">
             <span className="system-info-label">版本号：</span>
-            <span className="system-info-value">v1.6.86</span>
+            <span className="system-info-value">v1.6.87</span>
           </div>
           <div className="system-info-item">
             <span className="system-info-label">前端框架：</span>

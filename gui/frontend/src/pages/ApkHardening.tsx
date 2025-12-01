@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Upload, Button, Card, Progress, message, List, Table, Space, Modal, Steps, Alert } from 'antd';
 import { FileProtectOutlined, CheckCircleOutlined, ExclamationCircleOutlined, DownloadOutlined, InboxOutlined, LoadingOutlined, LockOutlined, SafetyOutlined, SecurityScanOutlined } from '@ant-design/icons';
+import { getApiBaseUrl } from '../utils/api';
 import './ApkHardening.css';
 
 const { Step } = Steps;
@@ -39,7 +40,7 @@ const ApkHardening: React.FC = () => {
   const fetchHistory = async () => {
     setLoadingHistory(true);
     try {
-      const response = await fetch('http://localhost:5178/api/apk/history');
+      const response = await fetch(`${getApiBaseUrl()}/api/apk/history`);
       const result = await response.json();
       if (result.success) {
         setHistoryList(result.data);
@@ -55,7 +56,8 @@ const ApkHardening: React.FC = () => {
       wsRef.current.close();
     }
 
-    const ws = new WebSocket('ws://localhost:5179');
+    const wsUrl = getApiBaseUrl().replace(/^http/, 'ws').replace(':5178', ':5179');
+    const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -619,11 +621,12 @@ const ApkHardening: React.FC = () => {
       const headers = new Headers();
       headers.append('x-session-id', currentSessionId);
 
-      console.log('准备发送请求到:', 'http://localhost:5178/api/apk/harden');
+      const apiUrl = `${getApiBaseUrl()}/api/apk/harden`;
+      console.log('准备发送请求到:', apiUrl);
       console.log('请求头:', headers);
       console.log('文件对象:', file);
 
-      const response = await fetch('http://localhost:5178/api/apk/harden', {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: headers,
         body: formData,
@@ -662,7 +665,7 @@ const ApkHardening: React.FC = () => {
         
         // 检查是否是网络错误
         if (error.message.includes('Failed to fetch')) {
-          errorMessage = '无法连接到服务器，请检查服务器是否运行在 http://localhost:5178';
+          errorMessage = `无法连接到服务器，请检查服务器是否运行在 ${getApiBaseUrl()}`;
         } else if (error.message.includes('CORS')) {
           errorMessage = '跨域请求被阻止，请检查服务器CORS配置';
         } else if (error.message.includes('NetworkError')) {
@@ -830,7 +833,7 @@ const ApkHardening: React.FC = () => {
                     <Button
                       type="link"
                       icon={<DownloadOutlined />}
-                      href={`http://localhost:5178/api/apk/download/${record.fileName}`}
+                      href={`${getApiBaseUrl()}/api/apk/download/${record.fileName}`}
                     >
                       下载
                     </Button>
