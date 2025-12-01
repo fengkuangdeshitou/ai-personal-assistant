@@ -67,3 +67,21 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# APK files and uploads
+*.apk
+server/uploads/
+frontend/test.apk
+server/test.apk
+server/test_real.apk
+
+# Test files
+server/test_*.js
+frontend/test_*.js
+
+# Backup files
+*.backup
+.env.backup
+
+# Root level package.json (workspace specific)
+/package.json
