@@ -416,6 +416,57 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, port: PORT, projectsDir: DEFAULT_DIR });
 });
 
+// 获取系统状态
+app.get('/api/system-status', (_req, res) => {
+  const startTime = Date.now();
+  
+  // 检查 WebSocket 服务状态
+  const wsStatus = wss.clients.size >= 0 ? 'running' : 'stopped';
+  
+  // 获取系统信息
+  const systemInfo = {
+    platform: os.platform(),
+    arch: os.arch(),
+    nodeVersion: process.version,
+    uptime: process.uptime(),
+    memory: {
+      total: os.totalmem(),
+      free: os.freemem(),
+      used: os.totalmem() - os.freemem(),
+      usagePercent: ((os.totalmem() - os.freemem()) / os.totalmem() * 100).toFixed(2)
+    },
+    cpu: {
+      model: os.cpus()[0].model,
+      cores: os.cpus().length
+    }
+  };
+  
+  const responseTime = Date.now() - startTime;
+  
+  res.json({
+    success: true,
+    services: {
+      backend: {
+        status: 'running',
+        port: parseInt(PORT),
+        responseTime: `${responseTime}ms`,
+        uptime: `${Math.floor(process.uptime())}s`
+      },
+      websocket: {
+        status: wsStatus,
+        port: 5179,
+        clients: wss.clients.size
+      },
+      frontend: {
+        status: 'unknown', // 前端状态由前端自己判断
+        port: 4000
+      }
+    },
+    system: systemInfo,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // 创建阿里云认证方案
 app.post('/api/create-scheme', async (req, res) => {
   const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 'unknown';
