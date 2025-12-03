@@ -31,33 +31,23 @@ else
     done
 fi
 
-# 2. 检查前端构建文件是否存在
-if [ ! -d "$PROJECT_ROOT/frontend/build" ]; then
-    echo "📦 首次运行，正在构建前端..."
-    cd "$PROJECT_ROOT/frontend"
-    npm run build
-    if [ $? -ne 0 ]; then
-        echo "❌ 前端构建失败"
-        exit 1
-    fi
-    cd "$PROJECT_ROOT"
-fi
-
-# 3. 检查并启动前端静态服务（端口 4000）
-if pgrep -f "serve.*build" > /dev/null 2>&1; then
-    echo "✅ 前端服务已在运行"
+# 2. 检查并启动前端开发服务（端口 4000）
+if pgrep -f "react-scripts start" > /dev/null 2>&1 || lsof -i :4000 > /dev/null 2>&1; then
+    echo "✅ 前端开发服务已在运行"
 else
-    echo "🌐 启动前端服务..."
+    echo "🌐 启动前端开发服务（开发模式）..."
     cd "$PROJECT_ROOT/frontend"
-    npx serve -s build -l 4000 > /tmp/ai-assistant-frontend.log 2>&1 &
+    # 使用开发模式启动，自动支持热更新
+    nohup npm start > /tmp/ai-assistant-frontend.log 2>&1 &
     cd "$PROJECT_ROOT"
-    # 等待服务启动
-    for i in {1..10}; do
+    # 等待服务启动（开发服务器需要更长启动时间）
+    echo "⏳ 等待开发服务器启动（约15-30秒）..."
+    for i in {1..30}; do
         if curl -s http://localhost:4000 > /dev/null 2>&1; then
-            echo "✅ 前端服务已启动（端口 4000）"
+            echo "✅ 前端开发服务已启动（端口 4000）"
             break
         fi
-        if [ $i -eq 10 ]; then
+        if [ $i -eq 30 ]; then
             echo "❌ 前端服务启动超时，请查看日志: /tmp/ai-assistant-frontend.log"
             exit 1
         fi

@@ -68,6 +68,7 @@ open index.html
 - **🚀 快速开发工具**: 项目管理、环境检查、备份功能
 - **💬 智能 AI 对话**: 基于真实数据回答问题
 - **⚙️ 配置管理**: 个性化设置和 GitHub 集成
+- **🔒 APK加固系统**: v2.5-Enhanced，11个真实安全功能（8.3/10保护强度）
 
 ## 📋 命令行工具
 
@@ -81,12 +82,21 @@ open index.html
 
 ## 📖 详细文档
 
+### 主要功能文档
+- **[APK加固使用指南](APK_HARDENING_GUIDE.md)** - APK加固完整教程（v2.5-Enhanced）
+- [多渠道构建系统](README-CHANNELS.md)
+- [服务器端文档](server/README.md)
+
+### 安装部署文档
 - [安装指南](INSTALL.md)
 - [直接安装指南](DIRECT_INSTALL.md)
 - [Windows EXE 打包指南](WINDOWS_BUILD_GUIDE.md)
 - [团队部署指南](TEAM_DEPLOYMENT.md)
-- [多渠道构建系统](README-CHANNELS.md)
-- [服务器端文档](server/README.md)
+
+### 配置文档
+- [版本更新日志](CHANGELOG.md)
+- [网络访问配置](NETWORK-ACCESS-GUIDE.md)
+- [项目目录配置](PROJECT-DIRECTORY-CONFIG.md)
 
 ## 🔧 技术栈
 
