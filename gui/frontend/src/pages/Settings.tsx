@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Badge, Spin, message } from 'antd';
-import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import { Card, Badge, Spin, message, Button, Modal } from 'antd';
+import { CheckCircleOutlined, CloseCircleOutlined, SyncOutlined, QuestionCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { getApiBaseUrl } from '../utils/api';
 import './Settings.css';
 
@@ -45,6 +45,7 @@ const Settings: React.FC = () => {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [frontendStatus, setFrontendStatus] = useState<'running' | 'stopped'>('running');
+  const [restarting, setRestarting] = useState(false);
 
   const fetchSystemStatus = async () => {
     try {
@@ -64,6 +65,47 @@ const Settings: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleRestartServices = () => {
+    Modal.confirm({
+      title: '重启所有服务',
+      content: '确定要重启所有服务吗？这将中断当前连接，页面将在服务重启后自动刷新。',
+      okText: '确定重启',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          setRestarting(true);
+          message.loading('正在重启服务...', 0);
+          
+          const response = await fetch(`${getApiBaseUrl()}/api/restart-services`, {
+            method: 'POST'
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+              message.destroy();
+              message.success('服务重启中，页面将在15秒后刷新...');
+              
+              // 等待15秒后刷新页面
+              setTimeout(() => {
+                window.location.reload();
+              }, 15000);
+            }
+          }
+        } catch (error) {
+          console.error('重启服务错误:', error);
+          message.destroy();
+          message.info('服务正在重启中，页面将在15秒后刷新...');
+          
+          // 即使请求失败也刷新页面（因为服务可能已经在重启）
+          setTimeout(() => {
+            window.location.reload();
+          }, 15000);
+        }
+      }
+    });
   };
 
   useEffect(() => {
@@ -129,7 +171,7 @@ const Settings: React.FC = () => {
           </div>
           <div className="system-info-item">
             <span className="system-info-label">版本号：</span>
-            <span className="system-info-value">v1.6.87</span>
+            <span className="system-info-value">v1.6.88</span>
           </div>
           <div className="system-info-item">
             <span className="system-info-label">前端框架：</span>
@@ -150,9 +192,24 @@ const Settings: React.FC = () => {
         title="🔌 系统状态" 
         className="settings-card system-status-card"
         extra={
-          <span style={{ color: '#fff', fontSize: '12px', cursor: 'pointer' }} onClick={fetchSystemStatus}>
-            🔄 刷新
-          </span>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <span style={{ color: '#fff', fontSize: '12px', cursor: 'pointer' }} onClick={fetchSystemStatus}>
+              🔄 刷新
+            </span>
+            <Button 
+              size="small" 
+              icon={<ReloadOutlined />}
+              loading={restarting}
+              onClick={handleRestartServices}
+              style={{ 
+                backgroundColor: '#ff4d4f',
+                borderColor: '#ff4d4f',
+                color: '#fff'
+              }}
+            >
+              重启服务
+            </Button>
+          </div>
         }
       >
         {loading ? (

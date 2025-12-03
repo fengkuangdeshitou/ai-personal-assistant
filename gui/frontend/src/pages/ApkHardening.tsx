@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Button, Card, Progress, message, List, Table, Space, Modal, Steps, Alert } from 'antd';
-import { FileProtectOutlined, CheckCircleOutlined, ExclamationCircleOutlined, DownloadOutlined, InboxOutlined, LoadingOutlined, LockOutlined, SafetyOutlined, SecurityScanOutlined } from '@ant-design/icons';
+import { Upload, Button, Card, Progress, message, List, Table, Modal, Steps, Alert, Switch, Space, Tooltip, Tag } from 'antd';
+import { FileProtectOutlined, CheckCircleOutlined, ExclamationCircleOutlined, DownloadOutlined, InboxOutlined, LoadingOutlined, LockOutlined, SafetyOutlined, SecurityScanOutlined, FileTextOutlined, CloudServerOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { getApiBaseUrl } from '../utils/api';
 import './ApkHardening.css';
 
@@ -14,12 +14,15 @@ const ApkHardening: React.FC = () => {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showProgressModal, setShowProgressModal] = useState(false);
+  const [showLogModal, setShowLogModal] = useState(false);
+  const [currentLog, setCurrentLog] = useState<{ fileName: string; content: string } | null>(null);
+  const [loadingLog, setLoadingLog] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [hardeningSteps, setHardeningSteps] = useState<any[]>([]);
   const [sessionId, setSessionId] = useState<string>('');
   const wsRef = useRef<WebSocket | null>(null);
   const stepsContainerRef = useRef<HTMLDivElement>(null);
-
+  
   // 自动滚动到当前步骤
   const scrollToCurrentStep = (stepIndex: number) => {
     setTimeout(() => {
@@ -94,20 +97,33 @@ const ApkHardening: React.FC = () => {
     }
   };
 
-  // 处理进度更新
+
+  // 处理进度更新 - 完全匹配后端步骤顺序
   const handleProgressUpdate = (data: any) => {
     const { step, progress, overallProgress, message: stepMessage, status, error } = data;
 
-    // 更新整体进度 - 优先使用overallProgress
-    setHardeningProgress(overallProgress !== undefined ? overallProgress : (progress || 0));
+    console.log('[APK加固进度]', { step, progress, overallProgress, message: stepMessage, currentStepsCount: hardeningSteps.length });
+
+    // 更新整体进度 - 处理字符串和数字类型
+    if (overallProgress !== undefined && overallProgress !== null) {
+      const progressValue = typeof overallProgress === 'string' ? parseFloat(overallProgress) : overallProgress;
+      setHardeningProgress(Math.min(Math.round(progressValue), 100));
+    } else if (progress !== undefined && progress !== null) {
+      // 如果没有overallProgress，尝试使用progress
+      const progressValue = typeof progress === 'string' ? parseFloat(progress) : progress;
+      if (!isNaN(progressValue)) {
+        setHardeningProgress(Math.min(Math.round(progressValue), 100));
+      }
+    }
 
     if (step === 'start') {
-      setHardeningSteps([{
+      const startStep: any = {
         title: '准备开始',
         description: stepMessage || '正在初始化加固流程...',
-        status: 'process',
-        progress: progress || 0
-      }]);
+        status: 'process'
+      };
+      
+      setHardeningSteps([startStep]);
       setCurrentStep(0);
     } else if (step === 'decompile') {
       setHardeningSteps(prev => {
@@ -117,40 +133,54 @@ const ApkHardening: React.FC = () => {
           newSteps.push({
             title: '反编译APK',
             description: stepMessage || '正在反编译APK文件...',
-            status: 'process',
-            progress: progress || 0
+            status: 'process'
           });
         } else if (newSteps.length >= 2) {
           newSteps[1] = newSteps[1] || {};
+          newSteps[1].title = '反编译APK';
           newSteps[1].description = stepMessage || '正在反编译APK文件...';
           newSteps[1].status = 'process';
-          newSteps[1].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(1);
       scrollToCurrentStep(1);
     } else if (step === 'obfuscate') {
+      // Smali代码混淆步骤 - 持续更新描述
       setHardeningSteps(prev => {
         const newSteps = [...prev];
-        if (newSteps.length === 2) {
-          newSteps[1].status = 'finish';
+        
+        // 确保有初始步骤
+        if (newSteps.length === 0) {
           newSteps.push({
-            title: '代码混淆',
+            title: 'Smali代码混淆',
             description: stepMessage || '正在混淆代码...',
-            status: 'process',
-            progress: progress || 0
+            status: 'process'
           });
-        } else if (newSteps.length >= 3) {
-          newSteps[2] = newSteps[2] || {};
-          newSteps[2].description = stepMessage || '正在混淆代码...';
-          newSteps[2].status = 'process';
-          newSteps[2].progress = progress || 0;
+        } else {
+          // 更新当前步骤或添加新步骤
+          const lastStep = newSteps[newSteps.length - 1];
+          
+          if (lastStep.title === 'Smali代码混淆') {
+            // 更新现有混淆步骤的描述
+            lastStep.description = stepMessage || '正在混淆代码...';
+            lastStep.status = 'process';
+          } else {
+            // 标记上一步完成，添加混淆步骤
+            lastStep.status = 'finish';
+            newSteps.push({
+              title: 'Smali代码混淆',
+              description: stepMessage || '正在混淆代码...',
+              status: 'process'
+            });
+          }
         }
+        
         return newSteps;
       });
-      setCurrentStep(2);
-      scrollToCurrentStep(2);
+      const currentIdx = Math.max(0, hardeningSteps.length - 1);
+      setCurrentStep(currentIdx);
+      scrollToCurrentStep(currentIdx);
     } else if (step === 'encrypt') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
@@ -159,334 +189,298 @@ const ApkHardening: React.FC = () => {
           newSteps.push({
             title: '资源加密',
             description: stepMessage || '正在加密资源文件...',
-            status: 'process',
-            progress: progress || 0
+            status: 'process'
           });
         } else if (newSteps.length >= 4) {
           newSteps[3] = newSteps[3] || {};
+          newSteps[3].title = '资源加密';
           newSteps[3].description = stepMessage || '正在加密资源文件...';
           newSteps[3].status = 'process';
-          newSteps[3].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(3);
       scrollToCurrentStep(3);
-    } else if (step === 'protect') {
+    } else if (step === 'string-encryption') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 4) {
           newSteps[3].status = 'finish';
           newSteps.push({
-            title: '反调试保护',
-            description: stepMessage || '正在添加反调试保护...',
-            status: 'process',
-            progress: progress || 0
+            title: '字符串加密',
+            description: stepMessage || '正在进行字符串加密...',
+            status: 'process'
           });
         } else if (newSteps.length >= 5) {
           newSteps[4] = newSteps[4] || {};
-          newSteps[4].description = stepMessage || '正在添加反调试保护...';
+          newSteps[4].title = '字符串加密';
+          newSteps[4].description = stepMessage || '正在进行字符串加密...';
           newSteps[4].status = 'process';
-          newSteps[4].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(4);
       scrollToCurrentStep(4);
-    } else if (step === 'signature') {
+    } else if (step === 'protect') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 5) {
           newSteps[4].status = 'finish';
           newSteps.push({
-            title: '签名验证',
-            description: stepMessage || '正在添加签名验证...',
-            status: 'process',
-            progress: progress || 0
+            title: '反调试保护',
+            description: stepMessage || '正在添加反调试保护...',
+            status: 'process'
           });
         } else if (newSteps.length >= 6) {
           newSteps[5] = newSteps[5] || {};
-          newSteps[5].description = stepMessage || '正在添加签名验证...';
+          newSteps[5].title = '反调试保护';
+          newSteps[5].description = stepMessage || '正在添加反调试保护...';
           newSteps[5].status = 'process';
-          newSteps[5].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(5);
       scrollToCurrentStep(5);
-    } else if (step === 'anti-reverse') {
+    } else if (step === 'signature') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 6) {
           newSteps[5].status = 'finish';
           newSteps.push({
-            title: '反逆向工程',
-            description: stepMessage || '正在添加反逆向工程保护...',
-            status: 'process',
-            progress: progress || 0
+            title: '签名验证',
+            description: stepMessage || '正在添加签名验证...',
+            status: 'process'
           });
         } else if (newSteps.length >= 7) {
           newSteps[6] = newSteps[6] || {};
-          newSteps[6].description = stepMessage || '正在添加反逆向工程保护...';
+          newSteps[6].title = '签名验证';
+          newSteps[6].description = stepMessage || '正在添加签名验证...';
           newSteps[6].status = 'process';
-          newSteps[6].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(6);
       scrollToCurrentStep(6);
-    } else if (step === 'dex-encryption') {
+    } else if (step === 'integrity') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 7) {
           newSteps[6].status = 'finish';
           newSteps.push({
-            title: 'DEX加密',
-            description: stepMessage || '正在进行DEX加密保护...',
-            status: 'process',
-            progress: progress || 0
+            title: '完整性校验',
+            description: stepMessage || '正在添加完整性校验...',
+            status: 'process'
           });
         } else if (newSteps.length >= 8) {
           newSteps[7] = newSteps[7] || {};
-          newSteps[7].description = stepMessage || '正在进行DEX加密保护...';
+          newSteps[7].title = '完整性校验';
+          newSteps[7].description = stepMessage || '正在添加完整性校验...';
           newSteps[7].status = 'process';
-          newSteps[7].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(7);
       scrollToCurrentStep(7);
-    } else if (step === 'integrity') {
+    } else if (step === 'root-detection') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 8) {
           newSteps[7].status = 'finish';
           newSteps.push({
-            title: '完整性校验',
-            description: stepMessage || '正在添加完整性校验...',
-            status: 'process',
-            progress: progress || 0
+            title: 'Root检测',
+            description: stepMessage || '正在添加Root检测...',
+            status: 'process'
           });
         } else if (newSteps.length >= 9) {
           newSteps[8] = newSteps[8] || {};
-          newSteps[8].description = stepMessage || '正在添加完整性校验...';
+          newSteps[8].title = 'Root检测';
+          newSteps[8].description = stepMessage || '正在添加Root检测...';
           newSteps[8].status = 'process';
-          newSteps[8].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(8);
       scrollToCurrentStep(8);
-    } else if (step === 'root-detection') {
+    } else if (step === 'emulator-detection') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 9) {
           newSteps[8].status = 'finish';
           newSteps.push({
-            title: 'Root检测',
-            description: stepMessage || '正在添加Root检测...',
-            status: 'process',
-            progress: progress || 0
+            title: '模拟器检测',
+            description: stepMessage || '正在添加模拟器检测...',
+            status: 'process'
           });
         } else if (newSteps.length >= 10) {
           newSteps[9] = newSteps[9] || {};
-          newSteps[9].description = stepMessage || '正在添加Root检测...';
+          newSteps[9].title = '模拟器检测';
+          newSteps[9].description = stepMessage || '正在添加模拟器检测...';
           newSteps[9].status = 'process';
-          newSteps[9].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(9);
       scrollToCurrentStep(9);
-    } else if (step === 'so-protection') {
+    } else if (step === 'hook-detection') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 10) {
           newSteps[9].status = 'finish';
           newSteps.push({
-            title: 'SO库加固',
-            description: stepMessage || '正在加固SO库...',
-            status: 'process',
-            progress: progress || 0
+            title: 'HOOK检测',
+            description: stepMessage || '正在添加HOOK检测...',
+            status: 'process'
           });
         } else if (newSteps.length >= 11) {
           newSteps[10] = newSteps[10] || {};
-          newSteps[10].description = stepMessage || '正在加固SO库...';
+          newSteps[10].title = 'HOOK检测';
+          newSteps[10].description = stepMessage || '正在添加HOOK检测...';
           newSteps[10].status = 'process';
-          newSteps[10].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(10);
       scrollToCurrentStep(10);
-    } else if (step === 'resource-obfuscation') {
+    } else if (step === 'dex-shell') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 11) {
           newSteps[10].status = 'finish';
           newSteps.push({
-            title: '资源混淆',
-            description: stepMessage || '正在混淆资源文件...',
-            status: 'process',
-            progress: progress || 0
+            title: 'DEX加壳 🆕 v2.0',
+            description: stepMessage || 'v2.0新增: AES-256整体加密+GZIP压缩...',
+            status: 'process', version: 'v2.0'
           });
         } else if (newSteps.length >= 12) {
           newSteps[11] = newSteps[11] || {};
-          newSteps[11].description = stepMessage || '正在混淆资源文件...';
-          newSteps[11].status = 'process';
-          newSteps[11].progress = progress || 0;
+          newSteps[11].title = 'DEX加壳 🆕 v2.0';
+          newSteps[11].description = stepMessage || 'v2.0新增: AES-256整体加密+GZIP压缩...';
+          newSteps[11].status = 'process'; newSteps[11].version = 'v2.0';
         }
         return newSteps;
       });
       setCurrentStep(11);
       scrollToCurrentStep(11);
-    } else if (step === 'string-encryption') {
+    } else if (step === 'native-protect') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 12) {
           newSteps[11].status = 'finish';
           newSteps.push({
-            title: '字符串加密',
-            description: stepMessage || '正在加密字符串常量...',
-            status: 'process',
-            progress: progress || 0
+            title: 'Native保护',
+            description: stepMessage || '正在添加Native保护层...',
+            status: 'process'
           });
         } else if (newSteps.length >= 13) {
           newSteps[12] = newSteps[12] || {};
-          newSteps[12].description = stepMessage || '正在加密字符串常量...';
+          newSteps[12].title = 'Native保护';
+          newSteps[12].description = stepMessage || '正在添加Native保护层...';
           newSteps[12].status = 'process';
-          newSteps[12].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(12);
       scrollToCurrentStep(12);
-    } else if (step === 'repackage-detection') {
+    } else if (step === 'dex-vm') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 13) {
           newSteps[12].status = 'finish';
           newSteps.push({
-            title: '防二次打包',
-            description: stepMessage || '正在添加防二次打包保护...',
-            status: 'process',
-            progress: progress || 0
+            title: 'DEX虚拟化',
+            description: stepMessage || '正在进行DEX代码虚拟化...',
+            status: 'process'
           });
         } else if (newSteps.length >= 14) {
           newSteps[13] = newSteps[13] || {};
-          newSteps[13].description = stepMessage || '正在添加防二次打包保护...';
+          newSteps[13].title = 'DEX虚拟化';
+          newSteps[13].description = stepMessage || '正在进行DEX代码虚拟化...';
           newSteps[13].status = 'process';
-          newSteps[13].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(13);
       scrollToCurrentStep(13);
-    } else if (step === 'rebuild') {
+    } else if (step === 'string-encrypt') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 14) {
           newSteps[13].status = 'finish';
           newSteps.push({
-            title: '重新打包',
-            description: stepMessage || '正在重新打包APK...',
-            status: 'process',
-            progress: progress || 0
+            title: 'AES-128字符串加密 🆕 v2.0',
+            description: stepMessage || 'v2.0无长度限制全字符串加密...',
+            status: 'process', version: 'v2.0'
           });
         } else if (newSteps.length >= 15) {
           newSteps[14] = newSteps[14] || {};
-          newSteps[14].description = stepMessage || '正在重新打包APK...';
-          newSteps[14].status = 'process';
-          newSteps[14].progress = progress || 0;
+          newSteps[14].title = 'AES-128字符串加密 🆕 v2.0';
+          newSteps[14].description = stepMessage || 'v2.0无长度限制全字符串加密...';
+          newSteps[14].status = 'process'; newSteps[14].version = 'v2.0';
         }
         return newSteps;
       });
       setCurrentStep(14);
       scrollToCurrentStep(14);
-    } else if (step === 'hook-detection') {
+    } else if (step === 'method-virtualize') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 15) {
           newSteps[14].status = 'finish';
           newSteps.push({
-            title: 'HOOK检测',
-            description: stepMessage || '正在添加HOOK检测...',
-            status: 'process',
-            progress: progress || 0
+            title: '方法虚拟化 🆕 v2.0',
+            description: stepMessage || 'v2.0增强: 64操作码VM引擎...',
+            status: 'process', version: 'v2.0'
           });
         } else if (newSteps.length >= 16) {
           newSteps[15] = newSteps[15] || {};
-          newSteps[15].description = stepMessage || '正在添加HOOK检测...';
-          newSteps[15].status = 'process';
-          newSteps[15].progress = progress || 0;
+          newSteps[15].title = '方法虚拟化 🆕 v2.0';
+          newSteps[15].description = stepMessage || 'v2.0增强: 64操作码VM引擎...';
+          newSteps[15].status = 'process'; newSteps[15].version = 'v2.0';
         }
         return newSteps;
       });
       setCurrentStep(15);
       scrollToCurrentStep(15);
-    } else if (step === 'emulator-detection') {
+    } else if (step === 'native-compile') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 16) {
           newSteps[15].status = 'finish';
           newSteps.push({
-            title: '模拟器检测',
-            description: stepMessage || '正在添加模拟器检测...',
-            status: 'process',
-            progress: progress || 0
+            title: 'Native库编译',
+            description: stepMessage || '正在编译Native保护库...',
+            status: 'process'
           });
         } else if (newSteps.length >= 17) {
           newSteps[16] = newSteps[16] || {};
-          newSteps[16].description = stepMessage || '正在添加模拟器检测...';
+          newSteps[16].title = 'Native库编译';
+          newSteps[16].description = stepMessage || '正在编译Native保护库...';
           newSteps[16].status = 'process';
-          newSteps[16].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(16);
       scrollToCurrentStep(16);
-    } else if (step === 'proxy-detection') {
+    } else if (step === 'rebuild') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
         if (newSteps.length === 17) {
           newSteps[16].status = 'finish';
           newSteps.push({
-            title: '代理检测',
-            description: stepMessage || '正在添加代理检测...',
-            status: 'process',
-            progress: progress || 0
+            title: '重新打包',
+            description: stepMessage || '正在重新打包APK...',
+            status: 'process'
           });
         } else if (newSteps.length >= 18) {
           newSteps[17] = newSteps[17] || {};
-          newSteps[17].description = stepMessage || '正在添加代理检测...';
+          newSteps[17].title = '重新打包';
+          newSteps[17].description = stepMessage || '正在重新打包APK...';
           newSteps[17].status = 'process';
-          newSteps[17].progress = progress || 0;
         }
         return newSteps;
       });
       setCurrentStep(17);
       scrollToCurrentStep(17);
-    } else if (step === 'rebuild') {
-      setHardeningSteps(prev => {
-        const newSteps = [...prev];
-        if (newSteps.length === 18) {
-          newSteps[17].status = 'finish';
-          newSteps.push({
-            title: '重新打包',
-            description: stepMessage || '正在重新打包APK...',
-            status: 'process',
-            progress: progress || 0
-          });
-        } else if (newSteps.length >= 19) {
-          newSteps[18] = newSteps[18] || {};
-          newSteps[18].description = stepMessage || '正在重新打包APK...';
-          newSteps[18].status = 'process';
-          newSteps[18].progress = progress || 0;
-        }
-        return newSteps;
-      });
-      setCurrentStep(18);
-      scrollToCurrentStep(18);
     } else if (step === 'complete') {
       setHardeningSteps(prev => {
         const newSteps = [...prev];
@@ -526,6 +520,60 @@ const ApkHardening: React.FC = () => {
       setIsHardening(false);
       message.error(`加固失败: ${error || stepMessage || '未知错误'}`);
     }
+  };
+
+
+  // 查看日志
+  const viewLog = async (logFileName: string) => {
+    setLoadingLog(true);
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/api/apk/log/${logFileName}`);
+      const result = await response.json();
+      
+      if (result.success) {
+        setCurrentLog({
+          fileName: logFileName,
+          content: result.data.content
+        });
+        setShowLogModal(true);
+      } else {
+        message.error(result.message || '获取日志失败');
+      }
+    } catch (error) {
+      console.error('获取日志失败:', error);
+      message.error('获取日志失败');
+    } finally {
+      setLoadingLog(false);
+    }
+  };
+
+  // 清空历史记录
+  const clearHistory = async () => {
+    Modal.confirm({
+      title: '确认清空',
+      content: '确定要清空所有历史记录吗？此操作不可恢复。',
+      okText: '确认',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          const response = await fetch(`${getApiBaseUrl()}/api/apk/history`, {
+            method: 'DELETE',
+          });
+          const result = await response.json();
+          
+          if (result.success) {
+            message.success('历史记录已清空');
+            fetchHistory();
+          } else {
+            message.error(result.message || '清空失败');
+          }
+        } catch (error) {
+          console.error('清空历史记录失败:', error);
+          message.error('清空失败');
+        }
+      },
+    });
   };
 
   // 组件加载时获取历史记录
@@ -602,9 +650,12 @@ const ApkHardening: React.FC = () => {
     console.log('弹框状态更新: showConfirmModal=false, showProgressModal=true');
 
     // 初始化进度步骤
+    const initialStepTitle = '资源混淆准备';
+    const initialStepDesc = '正在初始化AndResGuard资源混淆流程...';
+      
     setHardeningSteps([{
-      title: '准备开始',
-      description: '正在初始化加固流程...',
+      title: initialStepTitle,
+      description: initialStepDesc,
       status: 'process'
     }]);
 
@@ -621,7 +672,9 @@ const ApkHardening: React.FC = () => {
       const headers = new Headers();
       headers.append('x-session-id', currentSessionId);
 
-      const apiUrl = `${getApiBaseUrl()}/api/apk/harden`;
+      // 默认使用 AndResGuard 加固
+      const endpoint = '/api/apk/harden';
+      const apiUrl = `${getApiBaseUrl()}${endpoint}`;
       console.log('准备发送请求到:', apiUrl);
       console.log('请求头:', headers);
       console.log('文件对象:', file);
@@ -646,9 +699,9 @@ const ApkHardening: React.FC = () => {
 
       if (result.success) {
         // 成功后WebSocket会处理完成消息
-        console.log('APK加固请求成功:', result);
+        console.log('APK处理请求成功:', result);
       } else {
-        throw new Error(result.message || '加固失败');
+        throw new Error(result.message || '处理失败');
       }
 
     } catch (error) {
@@ -682,92 +735,10 @@ const ApkHardening: React.FC = () => {
     }
   };
 
-  const hardeningFeatures = [
-    {
-      title: '代码混淆',
-      description: '混淆类名、方法名和变量名，增加逆向工程难度',
-      icon: <FileProtectOutlined />
-    },
-    {
-      title: '资源加密',
-      description: '加密APK中的资源文件，防止资源被直接提取',
-      icon: <FileProtectOutlined />
-    },
-    {
-      title: '反调试保护',
-      description: '检测并阻止调试器附加，防止动态分析',
-      icon: <ExclamationCircleOutlined />
-    },
-    {
-      title: '签名验证',
-      description: '验证APK签名完整性，防止重打包攻击',
-      icon: <CheckCircleOutlined />
-    },
-    {
-      title: '反逆向工程',
-      description: '多种技术手段防止APK被反编译和分析',
-      icon: <FileProtectOutlined />
-    },
-    {
-      title: 'DEX加密',
-      description: '对DEX文件进行AES-256加密，防止代码被直接读取',
-      icon: <LockOutlined />
-    },
-    {
-      title: '完整性校验',
-      description: 'SHA-256哈希校验，检测APK是否被篡改',
-      icon: <SafetyOutlined />
-    },
-    {
-      title: 'Root检测',
-      description: '检测设备Root状态，防止在不安全环境运行',
-      icon: <ExclamationCircleOutlined />
-    },
-    {
-      title: 'SO库加固',
-      description: '保护native代码库，防止SO文件被hook和分析',
-      icon: <FileProtectOutlined />
-    },
-    {
-      title: '资源混淆',
-      description: '混淆资源文件路径和名称，增加资源提取难度',
-      icon: <FileProtectOutlined />
-    },
-    {
-      title: '字符串加密',
-      description: '加密字符串常量，防止敏感信息泄露',
-      icon: <LockOutlined />
-    },
-    {
-      title: '防二次打包',
-      description: '签名指纹检测，防止APK被重新打包和分发',
-      icon: <SafetyOutlined />
-    },
-    {
-      title: 'HOOK检测',
-      description: '检测Xposed、Frida等hook框架，防止代码注入',
-      icon: <ExclamationCircleOutlined />
-    },
-    {
-      title: '模拟器检测',
-      description: '检测模拟器环境，防止自动化分析和调试',
-      icon: <SecurityScanOutlined />
-    },
-    {
-      title: '代理检测',
-      description: 'SSL Pinning证书校验，防止流量抓包分析',
-      icon: <SafetyOutlined />
-    },
-    {
-      title: '多层防护',
-      description: '16层安全保护，全方位保障APK安全',
-      icon: <SecurityScanOutlined />
-    }
-  ];
-
   return (
     <div className="apk-hardening-container">
       <div className="hardening-content">
+
         <Card className="upload-card">
           <Upload.Dragger {...uploadProps}>
             <p className="ant-upload-drag-icon">
@@ -780,23 +751,21 @@ const ApkHardening: React.FC = () => {
           </Upload.Dragger>
         </Card>
 
-        <Card title="加固功能" className="features-card">
-          <List
-            grid={{ gutter: 16, column: 4 }}
-            dataSource={hardeningFeatures}
-            renderItem={item => (
-              <List.Item>
-                <Card hoverable className="feature-card">
-                  <div className="feature-icon">{item.icon}</div>
-                  <h3>{item.title}</h3>
-                  <p>{item.description}</p>
-                </Card>
-              </List.Item>
-            )}
-          />
-        </Card>
 
-        <Card title="加固历史记录" className="history-card">
+
+        <Card 
+          title="加固历史记录" 
+          className="history-card"
+          extra={
+            <Button 
+              danger 
+              onClick={clearHistory}
+              disabled={historyList.length === 0}
+            >
+              清空历史记录
+            </Button>
+          }
+        >
           <Table
             dataSource={historyList}
             loading={loadingHistory}
@@ -825,19 +794,36 @@ const ApkHardening: React.FC = () => {
                 render: (date: string) => new Date(date).toLocaleString(),
               },
               {
+                title: '日志',
+                key: 'log',
+                align: 'center',
+                render: (_, record) => (
+                  record.hasLog ? (
+                    <Button
+                      type="link"
+                      icon={<FileTextOutlined />}
+                      onClick={() => viewLog(record.logFile)}
+                      loading={loadingLog}
+                    >
+                      查看日志
+                    </Button>
+                  ) : (
+                    <span style={{ color: '#999' }}>-</span>
+                  )
+                ),
+              },
+              {
                 title: '操作',
                 key: 'action',
                 align: 'center',
                 render: (_, record) => (
-                  <Space size="middle">
-                    <Button
-                      type="link"
-                      icon={<DownloadOutlined />}
-                      href={`${getApiBaseUrl()}/api/apk/download/${record.fileName}`}
-                    >
-                      下载
-                    </Button>
-                  </Space>
+                  <Button
+                    type="link"
+                    icon={<DownloadOutlined />}
+                    href={`${getApiBaseUrl()}/api/apk/download/${record.fileName}`}
+                  >
+                    下载
+                  </Button>
                 ),
               },
             ]}
@@ -872,79 +858,104 @@ const ApkHardening: React.FC = () => {
         </div>
       </Modal>
 
-      {/* 加固进度弹框 */}
+      {/* 加固进度弹框 - 简化版 */}
       <Modal
         title={
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            <LoadingOutlined style={{ marginRight: 8 }} />
-            APK加固进度
+            <LoadingOutlined style={{ marginRight: 8, color: '#1890ff' }} />
+            <span style={{ fontSize: 18, fontWeight: 600 }}>AndResGuard 资源混淆中...</span>
           </div>
         }
         open={showProgressModal}
         footer={null}
         closable={false}
-        width={700}
+        width={600}
         maskClosable={false}
-        afterOpenChange={(open) => {
-          console.log('进度弹框打开状态变化:', open);
-        }}
       >
-        <div className="hardening-progress-modal">
-          <div className="progress-bar-section">
+        <div className="hardening-progress-modal" style={{ padding: '24px 0' }}>
+          <div className="progress-bar-section" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
             <Progress
+              type="circle"
               percent={hardeningProgress}
               status={isHardening ? "active" : "success"}
               strokeColor={{
                 '0%': '#108ee9',
-                '100%': '#87d068',
+                '100%': '#52c41a',
               }}
+              width={150}
             />
-            <p style={{ textAlign: 'center', marginTop: 8 }}>
-              {isHardening ? '正在加固中，请稍候...' : '加固完成！'}
-            </p>
+            <div style={{ marginTop: 24, textAlign: 'center', width: '100%' }}>
+              <p style={{ fontSize: 16, fontWeight: 500, marginBottom: 8 }}>
+                {hardeningSteps.length > 0 
+                  ? hardeningSteps[hardeningSteps.length - 1].description 
+                  : '正在初始化...'}
+              </p>
+              <p style={{ color: '#8c8c8c', fontSize: 14 }}>
+                资源路径混淆 + 7zip压缩优化，预计1-2分钟
+              </p>
+            </div>
           </div>
 
-          <div className="steps-section" ref={stepsContainerRef}>
-            <Steps
-              direction="vertical"
-              current={currentStep}
-              size="small"
-            >
-              {hardeningSteps.map((step, index) => (
-                <Step
-                  key={index}
-                  title={step.title}
-                  description={
-                    <div>
-                      <p>{step.description}</p>
-                      {step.status === 'process' && step.progress !== undefined && (
-                        <Progress
-                          percent={step.progress}
-                          size="small"
-                          status={step.status === 'error' ? 'exception' : 'active'}
-                          strokeWidth={2}
-                          showInfo={false}
-                        />
-                      )}
-                    </div>
-                  }
-                  status={step.status}
-                  icon={step.status === 'process' ? <LoadingOutlined /> : undefined}
-                />
-              ))}
-            </Steps>
-          </div>
+          <Alert
+            message="AndResGuard 资源混淆"
+            description="资源文件路径混淆 + APK体积压缩（通常减少10-30%）"
+            type="info"
+            showIcon
+            icon={<SecurityScanOutlined />}
+            style={{ marginTop: 24 }}
+          />
 
           {hardeningSteps.some(step => step.status === 'error') && (
             <Alert
-              message="加固失败"
-              description="加固过程中发生错误，请检查APK文件是否有效或重试。"
+              message="混淆失败"
+              description="资源混淆过程中发生错误，请检查APK文件是否有效或查看日志详情。"
               type="error"
               showIcon
-              style={{ marginTop: 16 }}
+              style={{ marginTop: 24 }}
             />
           )}
         </div>
+      </Modal>
+
+      {/* 日志查看弹框 */}
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <FileTextOutlined style={{ marginRight: 8 }} />
+            加固日志
+          </div>
+        }
+        open={showLogModal}
+        onCancel={() => setShowLogModal(false)}
+        footer={[
+          <Button key="close" onClick={() => setShowLogModal(false)}>
+            关闭
+          </Button>,
+        ]}
+        width={900}
+      >
+        {currentLog && (
+          <div>
+            <p style={{ marginBottom: 16, color: '#666' }}>
+              文件名: <strong>{currentLog.fileName}</strong>
+            </p>
+            <pre
+              style={{
+                background: '#f5f5f5',
+                padding: '16px',
+                borderRadius: '4px',
+                maxHeight: '600px',
+                overflow: 'auto',
+                fontSize: '12px',
+                lineHeight: '1.6',
+                whiteSpace: 'pre-wrap',
+                wordWrap: 'break-word',
+              }}
+            >
+              {currentLog.content}
+            </pre>
+          </div>
+        )}
       </Modal>
     </div>
   );

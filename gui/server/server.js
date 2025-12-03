@@ -6,6 +6,7 @@ import os from 'os';
 import crypto from 'crypto';
 import https from 'https';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import { spawn } from 'child_process';
 import simpleGit from 'simple-git';
 import archiver from 'archiver';
@@ -29,6 +30,9 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
+
+// ✅ 注：Smali混淆器、AndResGuard和ProGuard管理器在使用时动态导入
 
 const app = express();
 const PORT = process.env.PORT || 5178;
@@ -93,8 +97,8 @@ function broadcastProgress(data) {
 // 初始化 Google Generative AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyAA7NuiKYcSX_27DjvLQUgVAjjmcSRxZOU');
 
-// 默认项目目录
-const DEFAULT_DIR = '/Users/maiyou001/Project';
+// 默认项目目录 - 使用环境变量或用户主目录
+const DEFAULT_DIR = process.env.PROJECTS_DIR || path.join(os.homedir(), 'Project');
 
 // 配置文件路径
 const CONFIG_PATH = path.join(__dirname, 'projects.json');
@@ -465,6 +469,51 @@ app.get('/api/system-status', (_req, res) => {
     system: systemInfo,
     timestamp: new Date().toISOString()
   });
+});
+
+// 重启所有服务
+app.post('/api/restart-services', (_req, res) => {
+  console.log('收到重启服务请求');
+  
+  res.json({
+    success: true,
+    message: '正在重启服务...'
+  });
+  
+  // 延迟执行重启，让响应先返回
+  setTimeout(() => {
+    console.log('开始执行重启流程...');
+    
+    // 重启脚本路径
+    const restartScript = path.join(__dirname, '../scripts/restart-services.sh');
+    
+    // 检查脚本是否存在
+    if (fs.existsSync(restartScript)) {
+      // 执行重启脚本
+      const restart = spawn('bash', [restartScript], {
+        detached: true,
+        stdio: 'ignore'
+      });
+      restart.unref();
+    } else {
+      // 如果脚本不存在，直接执行重启命令（使用开发模式）
+      const restart = spawn('bash', ['-c', `
+        cd ${path.join(__dirname, '..')} && \
+        pkill -f "node.*server.js" && \
+        pkill -f "react-scripts start" && \
+        sleep 2 && \
+        cd server && nohup node server.js > /tmp/ai-assistant-server.log 2>&1 & \
+        cd ../frontend && nohup npm start > /tmp/ai-assistant-frontend.log 2>&1 &
+      `], {
+        detached: true,
+        stdio: 'ignore'
+      });
+      restart.unref();
+    }
+    
+    // 退出当前进程
+    setTimeout(() => process.exit(0), 1000);
+  }, 500);
 });
 
 // 创建阿里云认证方案
@@ -2859,1375 +2908,9 @@ async function refreshCDNCache(projectName, channelId = null, res = null) {
 //
 
 // APK加固工具类 - 性能优化版本
-class ApkHardener {
-  constructor(progressCallback = null) {
-    this.tempDir = path.join(os.tmpdir(), 'apk-hardening-' + Date.now());
-    fs.mkdirSync(this.tempDir, { recursive: true });
-    this.progressCallback = progressCallback;
-    this.startTime = Date.now();
-  }
+// 导入精简版APK加固类
+const ApkHardener = require('./apk-hardener-simple.cjs');
 
-  // 进度报告
-  reportProgress(step, progress, message, details = {}) {
-    const elapsed = Date.now() - this.startTime;
-    
-    // 计算总进度：根据各个步骤的权重
-    const stepWeights = {
-      'start': { base: 0, weight: 0 },
-      'decompile': { base: 0, weight: 7 },
-      'obfuscate': { base: 7, weight: 8 },
-      'encrypt': { base: 15, weight: 6 },
-      'protect': { base: 21, weight: 6 },
-      'signature': { base: 27, weight: 5 },
-      'anti-reverse': { base: 32, weight: 5 },
-      'dex-encryption': { base: 37, weight: 5 },
-      'integrity': { base: 42, weight: 5 },
-      'root-detection': { base: 47, weight: 4 },
-      'so-protection': { base: 51, weight: 4 },
-      'resource-obfuscation': { base: 55, weight: 4 },
-      'string-encryption': { base: 59, weight: 4 },
-      'repackage-detection': { base: 63, weight: 4 },
-      'hook-detection': { base: 67, weight: 4 },
-      'emulator-detection': { base: 71, weight: 4 },
-      'proxy-detection': { base: 75, weight: 4 },
-      'rebuild': { base: 79, weight: 21 },
-      'complete': { base: 100, weight: 0 }
-    };
-    
-    let overallProgress = 0;
-    if (stepWeights[step]) {
-      overallProgress = stepWeights[step].base + (progress / 100) * stepWeights[step].weight;
-    }
-    
-    const progressData = {
-      step,
-      progress: Math.min(progress, 100),
-      overallProgress: Math.min(Math.round(overallProgress), 100),
-      message,
-      elapsed,
-      ...details
-    };
-
-    console.log(`[${step}] ${progress}% (总进度: ${progressData.overallProgress}%) - ${message}`);
-
-    if (this.progressCallback) {
-      this.progressCallback(progressData);
-    }
-  }
-
-  // 清理临时文件
-  cleanup() {
-    try {
-      if (fs.existsSync(this.tempDir)) {
-        fs.rmSync(this.tempDir, { recursive: true, force: true });
-      }
-    } catch (error) {
-      console.warn('清理临时文件失败:', error.message);
-    }
-  }
-
-  // 使用apktool反编译APK
-  async decompileApk(apkPath, outputDir) {
-    this.reportProgress('decompile', 0, '开始反编译APK...');
-    await new Promise(resolve => setTimeout(resolve, 200));
-
-    return new Promise((resolve, reject) => {
-      const apktool = spawn('apktool', ['d', '-f', '-o', outputDir, apkPath], {
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-
-      let stdout = '';
-      let stderr = '';
-      let currentProgress = 10;
-      let progressTimer;
-      let hasOutput = false;
-
-      // 启动进度模拟器
-      progressTimer = setInterval(() => {
-        if (currentProgress < 90) {
-          currentProgress += 2;
-          const messages = [
-            '正在解析APK结构...',
-            '正在反编译资源文件...',
-            '正在反编译代码文件...',
-            '正在提取资源...',
-            '正在处理manifest...'
-          ];
-          const msgIndex = Math.floor((currentProgress - 10) / 16) % messages.length;
-          this.reportProgress('decompile', currentProgress, messages[msgIndex]);
-        }
-      }, 200);
-
-      apktool.stdout.on('data', (data) => {
-        stdout += data.toString();
-        hasOutput = true;
-      });
-
-      apktool.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      apktool.on('close', (code) => {
-        clearInterval(progressTimer);
-        if (code === 0) {
-          this.reportProgress('decompile', 95, '正在完成反编译...');
-          setTimeout(() => {
-            this.reportProgress('decompile', 100, 'APK反编译完成');
-            resolve({ stdout, stderr });
-          }, 300);
-        } else {
-          reject(new Error(`APK反编译失败: ${stderr}`));
-        }
-      });
-
-      apktool.on('error', (error) => {
-        clearInterval(progressTimer);
-        reject(new Error(`APK反编译错误: ${error.message}`));
-      });
-    });
-  }
-
-  // 使用apktool重新编译APK
-  async compileApk(inputDir, outputApk) {
-    this.reportProgress('rebuild', 0, '开始重新编译APK...');
-    await new Promise(resolve => setTimeout(resolve, 200));
-
-    return new Promise((resolve, reject) => {
-      const apktool = spawn('apktool', ['b', '-f', '-o', outputApk, inputDir], {
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-
-      let stdout = '';
-      let stderr = '';
-      let currentProgress = 10;
-      let progressTimer;
-
-      // 启动进度模拟器，因为apktool没有详细进度输出
-      progressTimer = setInterval(() => {
-        if (currentProgress < 90) {
-          currentProgress += 2;
-          const messages = [
-            '正在编译smali文件...',
-            '正在处理资源文件...',
-            '正在生成dex文件...',
-            '正在打包APK...',
-            '正在优化APK...'
-          ];
-          const msgIndex = Math.floor((currentProgress - 10) / 16) % messages.length;
-          this.reportProgress('rebuild', currentProgress, messages[msgIndex]);
-        }
-      }, 200);
-
-      apktool.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-
-      apktool.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      apktool.on('close', (code) => {
-        clearInterval(progressTimer);
-        if (code === 0) {
-          this.reportProgress('rebuild', 95, '正在完成最后步骤...');
-          setTimeout(() => {
-            this.reportProgress('rebuild', 100, 'APK重新编译完成');
-            resolve({ stdout, stderr });
-          }, 300);
-        } else {
-          reject(new Error(`APK重新编译失败: ${stderr}`));
-        }
-      });
-
-      apktool.on('error', (error) => {
-        clearInterval(progressTimer);
-        reject(new Error(`APK重新编译错误: ${error.message}`));
-      });
-    });
-  }
-
-  // 并发处理文件
-  async processFilesConcurrently(filePaths, processor, concurrency = 4) {
-    const chunks = [];
-    for (let i = 0; i < filePaths.length; i += concurrency) {
-      chunks.push(filePaths.slice(i, i + concurrency));
-    }
-
-    let processed = 0;
-    for (const chunk of chunks) {
-      await Promise.all(chunk.map(async (filePath) => {
-        await processor(filePath);
-        processed++;
-        const progress = Math.round((processed / filePaths.length) * 100);
-        this.reportProgress('processing', progress, `处理文件 ${processed}/${filePaths.length}`, {
-          currentFile: path.basename(filePath)
-        });
-      }));
-    }
-  }
-
-  // 收集所有smali文件
-  collectSmaliFiles(dir) {
-    const files = [];
-
-    const processDirectory = (currentDir) => {
-      const entries = fs.readdirSync(currentDir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(currentDir, entry.name);
-        if (entry.isDirectory()) {
-          processDirectory(fullPath);
-        } else if (entry.name.endsWith('.smali')) {
-          files.push(fullPath);
-        }
-      }
-    };
-
-    if (fs.existsSync(dir)) {
-      processDirectory(dir);
-    }
-
-    return files;
-  }
-
-  // 代码混淆 - 修改smali文件（并发处理）
-  async obfuscateCode(decompiledDir) {
-    this.reportProgress('obfuscate', 0, '开始代码混淆...');
-
-    const smaliDir = path.join(decompiledDir, 'smali');
-    if (!fs.existsSync(smaliDir)) {
-      this.reportProgress('obfuscate', 100, '未找到smali目录，跳过代码混淆');
-      return;
-    }
-
-    const smaliFiles = this.collectSmaliFiles(smaliDir);
-    this.reportProgress('obfuscate', 10, `发现 ${smaliFiles.length} 个smali文件`);
-
-    const obfuscateSmaliFile = async (filePath) => {
-      try {
-        let content = fs.readFileSync(filePath, 'utf-8');
-
-        // 混淆类名和方法名（简单示例）
-        content = content.replace(/\.class\s+(public\s+)?L([^;]+);/g, (match, publicModifier, className) => {
-          const obfuscatedName = this.generateObfuscatedName(className);
-          return `.class ${publicModifier || ''}L${obfuscatedName};`;
-        });
-
-        fs.writeFileSync(filePath, content, 'utf-8');
-      } catch (error) {
-        console.warn(`混淆文件失败 ${filePath}:`, error.message);
-      }
-    };
-
-    await this.processFilesConcurrently(smaliFiles, obfuscateSmaliFile, 8);
-    this.reportProgress('obfuscate', 100, '代码混淆完成');
-  }
-
-  // 轻量级代码混淆 - 只混淆非关键类，避免破坏APK结构
-  async lightObfuscateCode(decompiledDir) {
-    const smaliDir = path.join(decompiledDir, 'smali');
-    if (!fs.existsSync(smaliDir)) return;
-
-    const files = this.getAllFiles(smaliDir, '.smali');
-    let processed = 0;
-
-    for (const file of files) {
-      try {
-        let content = fs.readFileSync(file, 'utf8');
-
-        // 只混淆非系统类和非关键类
-        if (!content.includes('Landroid/') &&
-            !content.includes('Ljava/') &&
-            !content.includes('MainActivity') &&
-            !content.includes('Application')) {
-
-          // 简单的类名混淆 - 只替换自定义类名
-          content = content.replace(/\.class\s+L[a-zA-Z0-9_/]+\/([A-Z][a-zA-Z0-9_]*);/g,
-            (match, className) => {
-              const obfuscated = 'O' + Math.random().toString(36).substr(2, 8);
-              return match.replace(className, obfuscated);
-            });
-
-          fs.writeFileSync(file, content);
-        }
-
-        processed++;
-        if (processed % 10 === 0) {
-          this.reportProgress('obfuscate', Math.floor((processed / files.length) * 100));
-        }
-      } catch (error) {
-        console.warn(`⚠️ 跳过文件 ${file}: ${error.message}`);
-      }
-    }
-  }
-
-  // 资源保护 - 只添加保护标记，不加密文件内容
-  async addResourceProtection(decompiledDir) {
-    const assetsDir = path.join(decompiledDir, 'assets');
-    const resDir = path.join(decompiledDir, 'res');
-
-    // 在assets目录创建保护标记文件
-    if (fs.existsSync(assetsDir)) {
-      const protectionFile = path.join(assetsDir, '.protected');
-      fs.writeFileSync(protectionFile, 'This APK has been protected by AI Assistant\n');
-    }
-
-    // 在res目录创建保护标记文件
-    if (fs.existsSync(resDir)) {
-      const protectionFile = path.join(resDir, '.protected');
-      fs.writeFileSync(protectionFile, 'This APK has been protected by AI Assistant\n');
-    }
-  }
-
-
-
-  // 添加签名验证
-  async addSignatureVerification(decompiledDir) {
-    this.reportProgress('signature', 0, '开始添加签名验证...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    const manifestFile = path.join(decompiledDir, 'AndroidManifest.xml');
-    if (!fs.existsSync(manifestFile)) {
-      this.reportProgress('signature', 100, '未找到AndroidManifest.xml，跳过签名验证');
-      return;
-    }
-
-    try {
-      this.reportProgress('signature', 30, '正在读取AndroidManifest.xml...');
-      await new Promise(resolve => setTimeout(resolve, 400));
-      let manifest = fs.readFileSync(manifestFile, 'utf-8');
-
-      // 添加签名验证权限
-      if (!manifest.includes('android.permission.GET_SIGNATURES')) {
-        this.reportProgress('signature', 60, '正在添加签名验证权限...');
-        await new Promise(resolve => setTimeout(resolve, 500));
-        manifest = manifest.replace(
-          /(<uses-permission android:name="android\.permission\.INTERNET"[^>]*>)/,
-          '$1\n    <uses-permission android:name="android.permission.GET_SIGNATURES"/>'
-        );
-        this.reportProgress('signature', 90, '正在保存修改...');
-        await new Promise(resolve => setTimeout(resolve, 400));
-      }
-
-      fs.writeFileSync(manifestFile, manifest, 'utf-8');
-      this.reportProgress('signature', 100, '签名验证权限添加完成');
-    } catch (error) {
-      console.warn('添加签名验证失败:', error.message);
-      this.reportProgress('signature', 100, '签名验证添加失败');
-    }
-  }
-
-  // 添加反逆向工程保护（综合保护措施）
-  async addAntiReverseEngineering(decompiledDir) {
-    this.reportProgress('anti-reverse', 0, '开始添加反逆向工程保护...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('anti-reverse', 20, '正在添加字符串混淆保护...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // 在assets目录添加反逆向工程标记
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (fs.existsSync(assetsDir)) {
-        const protectionFile = path.join(assetsDir, '.anti-reverse');
-        fs.writeFileSync(protectionFile, 'Anti-reverse engineering protection enabled\nProtection level: Enhanced\nTimestamp: ' + new Date().toISOString() + '\n');
-      }
-
-      this.reportProgress('anti-reverse', 40, '正在添加代码流程混淆...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      this.reportProgress('anti-reverse', 60, '正在添加反动态分析保护...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 在AndroidManifest中添加安全标记
-      const manifestPath = path.join(decompiledDir, 'AndroidManifest.xml');
-      if (fs.existsSync(manifestPath)) {
-        let manifest = fs.readFileSync(manifestPath, 'utf-8');
-        
-        // 添加安全注释标记
-        if (!manifest.includes('Anti-Reverse-Engineering')) {
-          this.reportProgress('anti-reverse', 80, '正在添加安全标记...');
-          await new Promise(resolve => setTimeout(resolve, 400));
-          manifest = manifest.replace(
-            /<application/,
-            '<!-- Anti-Reverse-Engineering Protection Applied -->\n    <application'
-          );
-          fs.writeFileSync(manifestPath, manifest, 'utf-8');
-        }
-      }
-
-      console.log('✅ 反逆向工程保护添加完成');
-      this.reportProgress('anti-reverse', 100, '反逆向工程保护添加完成');
-    } catch (error) {
-      console.warn('添加反逆向工程保护失败:', error.message);
-      this.reportProgress('anti-reverse', 100, '反逆向工程保护添加失败');
-    }
-  }
-
-  // 添加DEX加密保护
-  async addDexEncryption(decompiledDir) {
-    this.reportProgress('dex-encryption', 0, '开始DEX加密保护...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('dex-encryption', 20, '正在分析DEX文件结构...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 在assets目录添加DEX加密标记
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      const dexProtectionFile = path.join(assetsDir, '.dex-encrypted');
-      fs.writeFileSync(dexProtectionFile, 
-        'DEX Encryption Enabled\n' +
-        'Encryption Algorithm: AES-256\n' +
-        'Encryption Time: ' + new Date().toISOString() + '\n' +
-        'Protected Classes: All\n'
-      );
-
-      this.reportProgress('dex-encryption', 40, '正在加密DEX文件...');
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      this.reportProgress('dex-encryption', 60, '正在生成解密密钥...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      this.reportProgress('dex-encryption', 80, '正在添加运行时解密代码...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 在AndroidManifest添加DEX保护标记
-      const manifestPath = path.join(decompiledDir, 'AndroidManifest.xml');
-      if (fs.existsSync(manifestPath)) {
-        let manifest = fs.readFileSync(manifestPath, 'utf-8');
-        if (!manifest.includes('DEX-Encryption-Protected')) {
-          manifest = manifest.replace(
-            /<application/,
-            '<!-- DEX-Encryption-Protected -->\n    <application'
-          );
-          fs.writeFileSync(manifestPath, manifest, 'utf-8');
-        }
-      }
-
-      console.log('✅ DEX加密保护添加完成');
-      this.reportProgress('dex-encryption', 100, 'DEX加密保护添加完成');
-    } catch (error) {
-      console.warn('添加DEX加密保护失败:', error.message);
-      this.reportProgress('dex-encryption', 100, 'DEX加密保护添加失败');
-    }
-  }
-
-  // 添加完整性校验
-  async addIntegrityCheck(decompiledDir) {
-    this.reportProgress('integrity', 0, '开始添加完整性校验...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('integrity', 20, '正在计算文件哈希值...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 在assets目录添加完整性校验配置
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      const integrityFile = path.join(assetsDir, '.integrity');
-      fs.writeFileSync(integrityFile,
-        'Integrity Check Enabled\n' +
-        'Hash Algorithm: SHA-256\n' +
-        'Check Time: ' + new Date().toISOString() + '\n' +
-        'Protected Files: All DEX and SO files\n'
-      );
-
-      this.reportProgress('integrity', 40, '正在生成校验码...');
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      this.reportProgress('integrity', 60, '正在注入校验代码...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 查找主Activity并添加完整性检查代码
-      const smaliDir = path.join(decompiledDir, 'smali');
-      const mainActivitySmali = await this.findMainActivitySmali(smaliDir);
-      
-      if (mainActivitySmali) {
-        this.reportProgress('integrity', 80, '正在添加运行时校验...');
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        let smaliContent = fs.readFileSync(mainActivitySmali, 'utf-8');
-        
-        // 添加完整性检查注释
-        if (!smaliContent.includes('# Integrity Check')) {
-          smaliContent = smaliContent.replace(
-            /(\.class.*)/,
-            '$1\n# Integrity Check: Runtime verification enabled'
-          );
-          fs.writeFileSync(mainActivitySmali, smaliContent, 'utf-8');
-        }
-      }
-
-      console.log('✅ 完整性校验添加完成');
-      this.reportProgress('integrity', 100, '完整性校验添加完成');
-    } catch (error) {
-      console.warn('添加完整性校验失败:', error.message);
-      this.reportProgress('integrity', 100, '完整性校验添加失败');
-    }
-  }
-
-  // 添加Root检测
-  async addRootDetection(decompiledDir) {
-    this.reportProgress('root-detection', 0, '开始添加Root检测...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('root-detection', 20, '正在配置Root检测规则...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 在assets目录添加Root检测配置
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      const rootDetectionFile = path.join(assetsDir, '.root-detection');
-      fs.writeFileSync(rootDetectionFile,
-        'Root Detection Enabled\n' +
-        'Detection Methods: su binary, Magisk, Xposed\n' +
-        'Action: Block app launch on rooted devices\n' +
-        'Config Time: ' + new Date().toISOString() + '\n'
-      );
-
-      this.reportProgress('root-detection', 40, '正在添加Root检测代码...');
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      // 查找主Activity并添加Root检测
-      const smaliDir = path.join(decompiledDir, 'smali');
-      const mainActivitySmali = await this.findMainActivitySmali(smaliDir);
-      
-      if (mainActivitySmali) {
-        this.reportProgress('root-detection', 60, '正在注入检测逻辑...');
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        let smaliContent = fs.readFileSync(mainActivitySmali, 'utf-8');
-        
-        // 添加Root检测代码注释
-        const rootCheckCode = `
-    .line 1
-    # Root Detection Check
-    # Check for su binary and root management apps
-    
-    :cond_root_check_start
-    .line 2
-`;
-
-        if (smaliContent.includes('.method public onCreate(Landroid/os/Bundle;)V')) {
-          const onCreatePattern = /(\.method public onCreate\(Landroid\/os\/Bundle;\)V[\s\S]*?\.locals \d+)/;
-          smaliContent = smaliContent.replace(onCreatePattern, `$1${rootCheckCode}`);
-          
-          this.reportProgress('root-detection', 80, '正在保存检测配置...');
-          await new Promise(resolve => setTimeout(resolve, 400));
-          
-          fs.writeFileSync(mainActivitySmali, smaliContent, 'utf-8');
-        }
-      }
-
-      // 添加权限检测
-      const manifestPath = path.join(decompiledDir, 'AndroidManifest.xml');
-      if (fs.existsSync(manifestPath)) {
-        let manifest = fs.readFileSync(manifestPath, 'utf-8');
-        if (!manifest.includes('Root-Detection-Enabled')) {
-          manifest = manifest.replace(
-            /<application/,
-            '<!-- Root-Detection-Enabled -->\n    <application'
-          );
-          fs.writeFileSync(manifestPath, manifest, 'utf-8');
-        }
-      }
-
-      console.log('✅ Root检测添加完成');
-      this.reportProgress('root-detection', 100, 'Root检测添加完成');
-    } catch (error) {
-      console.warn('添加Root检测失败:', error.message);
-      this.reportProgress('root-detection', 100, 'Root检测添加失败');
-    }
-  }
-
-  // 添加SO库加固
-  async addSoProtection(decompiledDir) {
-    this.reportProgress('so-protection', 0, '开始SO库加固...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('so-protection', 20, '正在扫描SO库文件...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      const libDirs = ['lib', 'libs'];
-      let soCount = 0;
-
-      for (const libDirName of libDirs) {
-        const libDir = path.join(decompiledDir, libDirName);
-        if (fs.existsSync(libDir)) {
-          const archDirs = fs.readdirSync(libDir);
-          for (const arch of archDirs) {
-            const archPath = path.join(libDir, arch);
-            if (fs.statSync(archPath).isDirectory()) {
-              const soFiles = fs.readdirSync(archPath).filter(f => f.endsWith('.so'));
-              soCount += soFiles.length;
-            }
-          }
-        }
-      }
-
-      this.reportProgress('so-protection', 40, `发现${soCount}个SO库文件...`);
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      // 创建SO保护配置
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      this.reportProgress('so-protection', 60, '正在添加SO库保护...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      const soProtectionFile = path.join(assetsDir, '.so-protected');
-      fs.writeFileSync(soProtectionFile,
-        'SO Library Protection Enabled\n' +
-        'Protected Libraries: ' + soCount + '\n' +
-        'Protection Level: Enhanced\n' +
-        'Anti-Hook: Enabled\n' +
-        'Protection Time: ' + new Date().toISOString() + '\n'
-      );
-
-      this.reportProgress('so-protection', 80, '正在加固native代码...');
-      await new Promise(resolve => setTimeout(resolve, 400));
-
-      console.log(`✅ SO库加固完成: ${soCount}个库文件`);
-      this.reportProgress('so-protection', 100, 'SO库加固完成');
-    } catch (error) {
-      console.warn('添加SO库加固失败:', error.message);
-      this.reportProgress('so-protection', 100, 'SO库加固失败');
-    }
-  }
-
-  // 添加资源混淆
-  async addResourceObfuscation(decompiledDir) {
-    this.reportProgress('resource-obfuscation', 0, '开始资源混淆...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('resource-obfuscation', 20, '正在分析资源文件...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      const resDir = path.join(decompiledDir, 'res');
-      let resourceCount = 0;
-
-      if (fs.existsSync(resDir)) {
-        const resDirs = fs.readdirSync(resDir).filter(d => {
-          const fullPath = path.join(resDir, d);
-          return fs.statSync(fullPath).isDirectory();
-        });
-        resourceCount = resDirs.length;
-      }
-
-      this.reportProgress('resource-obfuscation', 40, `发现${resourceCount}个资源目录...`);
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      this.reportProgress('resource-obfuscation', 60, '正在混淆资源路径...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 创建资源混淆配置
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      const resObfuscationFile = path.join(assetsDir, '.res-obfuscated');
-      fs.writeFileSync(resObfuscationFile,
-        'Resource Obfuscation Enabled\n' +
-        'Obfuscated Resources: ' + resourceCount + ' directories\n' +
-        'Obfuscation Method: Path randomization\n' +
-        'Protection Time: ' + new Date().toISOString() + '\n'
-      );
-
-      this.reportProgress('resource-obfuscation', 80, '正在更新资源映射...');
-      await new Promise(resolve => setTimeout(resolve, 400));
-
-      console.log(`✅ 资源混淆完成: ${resourceCount}个目录`);
-      this.reportProgress('resource-obfuscation', 100, '资源混淆完成');
-    } catch (error) {
-      console.warn('添加资源混淆失败:', error.message);
-      this.reportProgress('resource-obfuscation', 100, '资源混淆失败');
-    }
-  }
-
-  // 添加字符串加密
-  async addStringEncryption(decompiledDir) {
-    this.reportProgress('string-encryption', 0, '开始字符串加密...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('string-encryption', 20, '正在扫描字符串常量...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      const smaliDir = path.join(decompiledDir, 'smali');
-      let stringCount = 0;
-
-      if (fs.existsSync(smaliDir)) {
-        const smaliFiles = this.findClassesToObfuscate(smaliDir);
-        stringCount = smaliFiles.length * 5; // 估算字符串数量
-      }
-
-      this.reportProgress('string-encryption', 40, `发现约${stringCount}个字符串常量...`);
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      this.reportProgress('string-encryption', 60, '正在加密敏感字符串...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 创建字符串加密配置
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      const stringEncFile = path.join(assetsDir, '.strings-encrypted');
-      fs.writeFileSync(stringEncFile,
-        'String Encryption Enabled\n' +
-        'Encrypted Strings: Estimated ' + stringCount + '\n' +
-        'Encryption Method: AES-128\n' +
-        'Runtime Decryption: Enabled\n' +
-        'Protection Time: ' + new Date().toISOString() + '\n'
-      );
-
-      this.reportProgress('string-encryption', 80, '正在添加解密函数...');
-      await new Promise(resolve => setTimeout(resolve, 400));
-
-      console.log(`✅ 字符串加密完成: 约${stringCount}个字符串`);
-      this.reportProgress('string-encryption', 100, '字符串加密完成');
-    } catch (error) {
-      console.warn('添加字符串加密失败:', error.message);
-      this.reportProgress('string-encryption', 100, '字符串加密失败');
-    }
-  }
-
-  // 添加防二次打包
-  async addRepackageDetection(decompiledDir) {
-    this.reportProgress('repackage-detection', 0, '开始添加防二次打包...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('repackage-detection', 20, '正在生成原始签名指纹...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      const manifestPath = path.join(decompiledDir, 'AndroidManifest.xml');
-      let manifest = fs.readFileSync(manifestPath, 'utf-8');
-
-      // 提取包名
-      const packageMatch = manifest.match(/package="([^"]+)"/);
-      const packageName = packageMatch ? packageMatch[1] : 'unknown';
-
-      this.reportProgress('repackage-detection', 40, '正在配置签名校验...');
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      // 创建防二次打包配置
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      const repackageFile = path.join(assetsDir, '.repackage-protection');
-      fs.writeFileSync(repackageFile,
-        'Repackage Detection Enabled\n' +
-        'Original Package: ' + packageName + '\n' +
-        'Signature Check: Enabled\n' +
-        'Certificate Pinning: Enabled\n' +
-        'Protection Time: ' + new Date().toISOString() + '\n'
-      );
-
-      this.reportProgress('repackage-detection', 60, '正在添加签名校验代码...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 在AndroidManifest添加标记
-      if (!manifest.includes('Repackage-Protection')) {
-        this.reportProgress('repackage-detection', 80, '正在保存配置...');
-        await new Promise(resolve => setTimeout(resolve, 400));
-        
-        manifest = manifest.replace(
-          /<application/,
-          '<!-- Repackage-Protection-Enabled -->\n    <application'
-        );
-        fs.writeFileSync(manifestPath, manifest, 'utf-8');
-      }
-
-      console.log('✅ 防二次打包保护添加完成');
-      this.reportProgress('repackage-detection', 100, '防二次打包保护添加完成');
-    } catch (error) {
-      console.warn('添加防二次打包保护失败:', error.message);
-      this.reportProgress('repackage-detection', 100, '防二次打包保护添加失败');
-    }
-  }
-
-  // 添加HOOK检测
-  async addHookDetection(decompiledDir) {
-    this.reportProgress('hook-detection', 0, '开始添加HOOK检测...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('hook-detection', 20, '正在检测Xposed框架...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 创建HOOK检测配置
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      this.reportProgress('hook-detection', 40, '正在检测Frida框架...');
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      const hookDetectionFile = path.join(assetsDir, '.hook-detection');
-      fs.writeFileSync(hookDetectionFile,
-        'Hook Detection Enabled\n' +
-        'Xposed Detection: Enabled\n' +
-        'Frida Detection: Enabled\n' +
-        'Substrate Detection: Enabled\n' +
-        'Native Hook Detection: Enabled\n' +
-        'Protection Time: ' + new Date().toISOString() + '\n'
-      );
-
-      this.reportProgress('hook-detection', 60, '正在添加hook检测代码...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 在AndroidManifest添加标记
-      const manifestPath = path.join(decompiledDir, 'AndroidManifest.xml');
-      if (fs.existsSync(manifestPath)) {
-        let manifest = fs.readFileSync(manifestPath, 'utf-8');
-        if (!manifest.includes('Hook-Detection')) {
-          this.reportProgress('hook-detection', 80, '正在保存配置...');
-          await new Promise(resolve => setTimeout(resolve, 400));
-          
-          manifest = manifest.replace(
-            /<application/,
-            '<!-- Hook-Detection-Enabled: Xposed,Frida,Substrate -->\n    <application'
-          );
-          fs.writeFileSync(manifestPath, manifest, 'utf-8');
-        }
-      }
-
-      console.log('✅ HOOK检测添加完成');
-      this.reportProgress('hook-detection', 100, 'HOOK检测添加完成');
-    } catch (error) {
-      console.warn('添加HOOK检测失败:', error.message);
-      this.reportProgress('hook-detection', 100, 'HOOK检测添加失败');
-    }
-  }
-
-  // 添加模拟器检测
-  async addEmulatorDetection(decompiledDir) {
-    this.reportProgress('emulator-detection', 0, '开始添加模拟器检测...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('emulator-detection', 20, '正在检测模拟器特征...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 创建模拟器检测配置
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      this.reportProgress('emulator-detection', 40, '正在分析设备特征...');
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      const emulatorDetectionFile = path.join(assetsDir, '.emulator-detection');
-      fs.writeFileSync(emulatorDetectionFile,
-        'Emulator Detection Enabled\n' +
-        'Check Methods:\n' +
-        '- Build Properties (ro.kernel.qemu, ro.hardware)\n' +
-        '- IMEI Pattern (000000000000000, 123456789ABCDEF)\n' +
-        '- Sensor Availability\n' +
-        '- CPU Features (VirtualBox, QEMU)\n' +
-        '- File System (/system/lib/libc_malloc_debug_qemu.so)\n' +
-        '- Network Interfaces (eth0, eth1)\n' +
-        'Protection Time: ' + new Date().toISOString() + '\n'
-      );
-
-      this.reportProgress('emulator-detection', 60, '正在添加检测代码...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 在AndroidManifest添加标记
-      const manifestPath = path.join(decompiledDir, 'AndroidManifest.xml');
-      if (fs.existsSync(manifestPath)) {
-        let manifest = fs.readFileSync(manifestPath, 'utf-8');
-        if (!manifest.includes('Emulator-Detection')) {
-          this.reportProgress('emulator-detection', 80, '正在保存配置...');
-          await new Promise(resolve => setTimeout(resolve, 400));
-          
-          manifest = manifest.replace(
-            /<application/,
-            '<!-- Emulator-Detection-Enabled: Multi-Method-Check -->\n    <application'
-          );
-          fs.writeFileSync(manifestPath, manifest, 'utf-8');
-        }
-      }
-
-      console.log('✅ 模拟器检测添加完成');
-      this.reportProgress('emulator-detection', 100, '模拟器检测添加完成');
-    } catch (error) {
-      console.warn('添加模拟器检测失败:', error.message);
-      this.reportProgress('emulator-detection', 100, '模拟器检测添加失败');
-    }
-  }
-
-  // 添加代理检测
-  async addProxyDetection(decompiledDir) {
-    this.reportProgress('proxy-detection', 0, '开始添加代理检测...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      this.reportProgress('proxy-detection', 20, '正在检测网络代理...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 创建代理检测配置
-      const assetsDir = path.join(decompiledDir, 'assets');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      this.reportProgress('proxy-detection', 40, '正在配置SSL Pinning...');
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      const proxyDetectionFile = path.join(assetsDir, '.proxy-detection');
-      fs.writeFileSync(proxyDetectionFile,
-        'Proxy Detection Enabled\n' +
-        'Detection Methods:\n' +
-        '- System Proxy Settings Check\n' +
-        '- VPN Connection Detection\n' +
-        '- HTTP/HTTPS Proxy Detection\n' +
-        '- SSL Certificate Validation\n' +
-        '- Certificate Pinning: Enabled\n' +
-        '- Blocked Tools: Charles, Fiddler, Burp Suite, mitmproxy\n' +
-        'Protection Time: ' + new Date().toISOString() + '\n'
-      );
-
-      this.reportProgress('proxy-detection', 60, '正在添加证书校验...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 在AndroidManifest添加标记和网络安全配置
-      const manifestPath = path.join(decompiledDir, 'AndroidManifest.xml');
-      if (fs.existsSync(manifestPath)) {
-        let manifest = fs.readFileSync(manifestPath, 'utf-8');
-        if (!manifest.includes('Proxy-Detection')) {
-          this.reportProgress('proxy-detection', 80, '正在保存配置...');
-          await new Promise(resolve => setTimeout(resolve, 400));
-          
-          manifest = manifest.replace(
-            /<application/,
-            '<!-- Proxy-Detection-Enabled: SSL-Pinning,Certificate-Validation -->\n    <application'
-          );
-          fs.writeFileSync(manifestPath, manifest, 'utf-8');
-        }
-      }
-
-      console.log('✅ 代理检测添加完成');
-      this.reportProgress('proxy-detection', 100, '代理检测添加完成');
-    } catch (error) {
-      console.warn('添加代理检测失败:', error.message);
-      this.reportProgress('proxy-detection', 100, '代理检测添加失败');
-    }
-  }
-
-  // 查找可以混淆的类文件
-  findClassesToObfuscate(smaliDir) {
-    const classes = [];
-    const maxClasses = 10;
-
-    try {
-      const walkDir = (dir, depth = 0) => {
-        if (depth > 5 || classes.length >= maxClasses) return; // 限制深度和数量
-        
-        const files = fs.readdirSync(dir);
-        for (const file of files) {
-          if (classes.length >= maxClasses) break;
-          
-          const fullPath = path.join(dir, file);
-          const stat = fs.statSync(fullPath);
-
-          if (stat.isDirectory()) {
-            walkDir(fullPath, depth + 1);
-          } else if (file.endsWith('.smali') && 
-                     !file.includes('MainActivity') && 
-                     !file.includes('Application') &&
-                     !file.includes('BuildConfig')) {
-            classes.push(fullPath);
-          }
-        }
-      };
-
-      walkDir(smaliDir);
-      console.log(`找到 ${classes.length} 个可混淆的类文件`);
-    } catch (error) {
-      console.warn('查找类文件失败:', error.message);
-    }
-
-    return classes;
-  }
-
-  // 添加代码混淆（轻量级实现）
-  async addCodeObfuscation(decompiledDir) {
-    this.reportProgress('obfuscate', 0, '开始代码混淆...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      const smaliDir = path.join(decompiledDir, 'smali');
-      if (!fs.existsSync(smaliDir)) {
-        this.reportProgress('obfuscate', 100, '未找到smali目录，跳过代码混淆');
-        return;
-      }
-
-      this.reportProgress('obfuscate', 10, '正在扫描smali文件...');
-      await new Promise(resolve => setTimeout(resolve, 400));
-      
-      // 查找可以混淆的类文件
-      const obfuscatedClasses = this.findClassesToObfuscate(smaliDir);
-      
-      if (obfuscatedClasses.length === 0) {
-        this.reportProgress('obfuscate', 100, '未找到可混淆的类文件');
-        return;
-      }
-
-      this.reportProgress('obfuscate', 30, `找到${obfuscatedClasses.length}个类文件，开始混淆...`);
-      await new Promise(resolve => setTimeout(resolve, 400));
-      
-      let processedCount = 0;
-      const totalCount = Math.min(obfuscatedClasses.length, 10);
-      
-      for (const classFile of obfuscatedClasses.slice(0, totalCount)) {
-        try {
-          let content = fs.readFileSync(classFile, 'utf-8');
-
-          // 添加混淆标记注释
-          if (!content.includes('# Obfuscated by AI Assistant')) {
-            content = content.replace(
-              /(\.class.*)/,
-              '$1\n# Obfuscated by AI Assistant'
-            );
-            fs.writeFileSync(classFile, content, 'utf-8');
-            processedCount++;
-            
-            // 更新进度
-            const progress = 30 + Math.floor((processedCount / totalCount) * 60);
-            this.reportProgress('obfuscate', progress, `已混淆 ${processedCount}/${totalCount} 个类文件...`);
-            
-            // 添加延迟使进度可见
-            await new Promise(resolve => setTimeout(resolve, 300));
-          }
-        } catch (error) {
-          console.warn(`混淆类文件失败 ${path.basename(classFile)}:`, error.message);
-        }
-      }
-
-      console.log(`✅ 代码混淆完成: 处理了 ${processedCount} 个类文件`);
-      this.reportProgress('obfuscate', 100, `代码混淆完成，共处理${processedCount}个类文件`);
-    } catch (error) {
-      console.warn('代码混淆失败:', error.message);
-      this.reportProgress('obfuscate', 100, '代码混淆失败');
-    }
-  }
-
-  // 添加资源加密（轻量级实现）
-  async addResourceEncryption(decompiledDir) {
-    this.reportProgress('encrypt', 0, '开始资源加密...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      const assetsDir = path.join(decompiledDir, 'assets');
-      const resDir = path.join(decompiledDir, 'res');
-      let encryptedCount = 0;
-
-      this.reportProgress('encrypt', 10, '正在扫描assets目录...');
-      await new Promise(resolve => setTimeout(resolve, 400));
-      
-      // 在assets目录添加加密标记
-      if (fs.existsSync(assetsDir)) {
-        const encryptedMarker = path.join(assetsDir, '.encrypted');
-        fs.writeFileSync(encryptedMarker, 'Resources encrypted by AI Assistant\nTimestamp: ' + new Date().toISOString() + '\n');
-        
-        this.reportProgress('encrypt', 30, '正在加密assets资源文件...');
-        
-        // 简单地重命名一些资源文件作为演示
-        const files = fs.readdirSync(assetsDir).filter(f => !f.startsWith('.') && !f.startsWith('enc_'));
-        const filesToEncrypt = files.slice(0, Math.min(5, files.length));
-        
-        for (let i = 0; i < filesToEncrypt.length; i++) {
-          const file = filesToEncrypt[i];
-          const oldPath = path.join(assetsDir, file);
-          const newPath = path.join(assetsDir, 'enc_' + file);
-          try {
-            if (!fs.existsSync(newPath)) {
-              fs.renameSync(oldPath, newPath);
-              encryptedCount++;
-              
-              const progress = 30 + Math.floor((i / filesToEncrypt.length) * 40);
-              this.reportProgress('encrypt', progress, `已加密 ${i + 1}/${filesToEncrypt.length} 个assets文件...`);
-              
-              // 添加延迟使进度可见
-              await new Promise(resolve => setTimeout(resolve, 350));
-            }
-          } catch (error) {
-            console.warn(`重命名资源文件失败 ${file}:`, error.message);
-          }
-        }
-        
-        console.log(`✅ Assets加密完成: 处理了 ${encryptedCount} 个文件`);
-      }
-
-      this.reportProgress('encrypt', 70, '正在处理res目录...');
-      await new Promise(resolve => setTimeout(resolve, 400));
-      
-      // 在res目录添加加密标记
-      if (fs.existsSync(resDir)) {
-        const encryptedMarker = path.join(resDir, '.encrypted');
-        fs.writeFileSync(encryptedMarker, 'Resources encrypted by AI Assistant\nTimestamp: ' + new Date().toISOString() + '\n');
-      }
-
-      this.reportProgress('encrypt', 100, `资源加密完成，共处理${encryptedCount}个文件`);
-      console.log(`✅ 资源加密完成: 总共加密了 ${encryptedCount} 个文件`);
-    } catch (error) {
-      console.warn('资源加密失败:', error.message);
-      this.reportProgress('encrypt', 100, '资源加密失败');
-    }
-  }
-
-  // 添加反调试保护（轻量级实现）
-  async addAntiDebugProtection(decompiledDir) {
-    this.reportProgress('protect', 0, '开始添加反调试保护...');
-    await new Promise(resolve => setTimeout(resolve, 300));
-
-    try {
-      // 在主Activity中添加简单的反调试检查
-      const smaliDir = path.join(decompiledDir, 'smali');
-      if (!fs.existsSync(smaliDir)) {
-        console.warn('未找到smali目录');
-        this.reportProgress('protect', 100, '未找到smali目录，跳过反调试保护');
-        return;
-      }
-
-      // 查找主Activity的smali文件
-      const mainActivitySmali = await this.findMainActivitySmali(smaliDir);
-      if (!mainActivitySmali) {
-        console.warn('未找到主Activity');
-        this.reportProgress('protect', 100, '未找到主Activity，跳过反调试保护');
-        return;
-      }
-
-      this.reportProgress('protect', 30, '正在读取Activity文件...');
-      await new Promise(resolve => setTimeout(resolve, 400));
-      let smaliContent = fs.readFileSync(mainActivitySmali, 'utf-8');
-
-      this.reportProgress('protect', 50, '正在插入反调试代码...');
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 添加简单的反调试检查（检查是否连接了调试器）
-      const debugCheckCode = `
-    .line 1
-    invoke-static {}, Landroid/os/Debug;->isDebuggerConnected()Z
-
-    move-result v0
-
-    if-eqz v0, :cond_debug_not_connected
-
-    .line 2
-    const-string v0, "Debugger detected"
-
-    invoke-static {v0}, Ljava/lang/System;->exit(I)V
-
-    :cond_debug_not_connected
-    .line 3
-`;
-
-      // 在onCreate方法开始处插入反调试检查
-      if (smaliContent.includes('.method public onCreate(Landroid/os/Bundle;)V')) {
-        const onCreatePattern = /(\.method public onCreate\(Landroid\/os\/Bundle;\)V[\s\S]*?\.locals \d+)/;
-        smaliContent = smaliContent.replace(onCreatePattern, `$1${debugCheckCode}`);
-        
-        this.reportProgress('protect', 80, '正在保存修改...');
-        await new Promise(resolve => setTimeout(resolve, 400));
-        fs.writeFileSync(mainActivitySmali, smaliContent, 'utf-8');
-        
-        console.log(`✅ 反调试保护添加完成: ${mainActivitySmali}`);
-        this.reportProgress('protect', 100, '反调试保护添加完成');
-      } else {
-        console.warn('未找到onCreate方法');
-        this.reportProgress('protect', 100, '未找到onCreate方法，跳过反调试保护');
-      }
-    } catch (error) {
-      console.warn('添加反调试保护失败:', error.message);
-      this.reportProgress('protect', 100, '反调试保护添加失败');
-    }
-  }
-
-  // 查找主Activity的smali文件
-  async findMainActivitySmali(smaliDir) {
-    try {
-      // 读取AndroidManifest.xml来找到主Activity
-      const manifestFile = path.join(smaliDir, '..', 'AndroidManifest.xml');
-      if (!fs.existsSync(manifestFile)) {
-        console.warn('AndroidManifest.xml 不存在');
-        return null;
-      }
-
-      const manifest = fs.readFileSync(manifestFile, 'utf-8');
-
-      // 查找MAIN activity，改进正则匹配
-      const activityRegex = /<activity[^>]*android:name="([^"]+)"[^>]*>[\s\S]*?<action[^>]*android:name="android\.intent\.action\.MAIN"[^>]*\/>/;
-      const match = manifest.match(activityRegex);
-      
-      if (!match) {
-        console.warn('未找到MAIN Activity');
-        return null;
-      }
-
-      let activityName = match[1];
-      console.log(`找到主Activity: ${activityName}`);
-
-      // 处理相对类名（以.开头）
-      if (activityName.startsWith('.')) {
-        const packageMatch = manifest.match(/package="([^"]+)"/);
-        if (packageMatch) {
-          activityName = packageMatch[1] + activityName;
-          console.log(`转换为完整类名: ${activityName}`);
-        }
-      }
-
-      // 转换为smali文件路径，去掉前导L（如果有）
-      const smaliPath = activityName.replace(/^L/, '').replace(/\./g, '/') + '.smali';
-      
-      // 搜索所有可能的smali目录
-      const decompiledDir = path.join(smaliDir, '..');
-      const smaliDirs = ['smali', 'smali_classes2', 'smali_classes3', 'smali_classes4', 'smali_classes5'];
-
-      for (const smaliDirName of smaliDirs) {
-        const fullPath = path.join(decompiledDir, smaliDirName, smaliPath);
-        console.log(`正在检查: ${fullPath}`);
-        
-        if (fs.existsSync(fullPath)) {
-          console.log(`✅ 找到主Activity的smali文件: ${fullPath}`);
-          return fullPath;
-        }
-      }
-
-      console.warn(`未找到主Activity的smali文件: ${smaliPath}`);
-      return null;
-    } catch (error) {
-      console.warn('查找主Activity失败:', error.message);
-      return null;
-    }
-  }
-
-  // 执行完整加固流程（包含所有5个功能）
-  async hardenApk(inputApkPath, outputApkPath) {
-    const decompiledDir = path.join(this.tempDir, 'decompiled');
-
-    try {
-      this.reportProgress('start', 0, '开始APK加固流程...');
-
-      // 1. 反编译APK (0-20%)
-      this.reportProgress('decompile', 0, '开始反编译APK...');
-      await this.decompileApk(inputApkPath, decompiledDir);
-      this.reportProgress('decompile', 100, 'APK反编译完成');
-
-      // 2. 代码混淆 (20-40%)
-      this.reportProgress('obfuscate', 0, '开始代码混淆...');
-      await this.addCodeObfuscation(decompiledDir);
-      this.reportProgress('obfuscate', 100, '代码混淆完成');
-
-      // 3. 资源加密 (40-60%)
-      this.reportProgress('encrypt', 0, '开始资源加密...');
-      await this.addResourceEncryption(decompiledDir);
-      this.reportProgress('encrypt', 100, '资源加密完成');
-
-      // 4. 反调试保护 (60-70%)
-      this.reportProgress('protect', 0, '开始添加反调试保护...');
-      await this.addAntiDebugProtection(decompiledDir);
-      this.reportProgress('protect', 100, '反调试保护添加完成');
-
-      // 5. 签名验证 (52-60%)
-      this.reportProgress('signature', 0, '开始添加签名验证...');
-      await this.addSignatureVerification(decompiledDir);
-      this.reportProgress('signature', 100, '签名验证添加完成');
-
-      // 6. 反逆向工程保护 (50-58%)
-      this.reportProgress('anti-reverse', 0, '开始添加反逆向工程保护...');
-      await this.addAntiReverseEngineering(decompiledDir);
-      this.reportProgress('anti-reverse', 100, '反逆向工程保护添加完成');
-
-      // 7. DEX加密 (58-68%)
-      this.reportProgress('dex-encryption', 0, '开始DEX加密保护...');
-      await this.addDexEncryption(decompiledDir);
-      this.reportProgress('dex-encryption', 100, 'DEX加密保护添加完成');
-
-      // 8. 完整性校验 (68-76%)
-      this.reportProgress('integrity', 0, '开始添加完整性校验...');
-      await this.addIntegrityCheck(decompiledDir);
-      this.reportProgress('integrity', 100, '完整性校验添加完成');
-
-      // 9. Root检测 (76-82%)
-      this.reportProgress('root-detection', 0, '开始添加Root检测...');
-      await this.addRootDetection(decompiledDir);
-      this.reportProgress('root-detection', 100, 'Root检测添加完成');
-
-      // 10. SO库加固 (62-66%)
-      this.reportProgress('so-protection', 0, '开始SO库加固...');
-      await this.addSoProtection(decompiledDir);
-      this.reportProgress('so-protection', 100, 'SO库加固完成');
-
-      // 11. 资源混淆 (66-70%)
-      this.reportProgress('resource-obfuscation', 0, '开始资源混淆...');
-      await this.addResourceObfuscation(decompiledDir);
-      this.reportProgress('resource-obfuscation', 100, '资源混淆完成');
-
-      // 12. 字符串加密 (70-74%)
-      this.reportProgress('string-encryption', 0, '开始字符串加密...');
-      await this.addStringEncryption(decompiledDir);
-      this.reportProgress('string-encryption', 100, '字符串加密完成');
-
-      // 13. 防二次打包 (74-78%)
-      this.reportProgress('repackage-detection', 0, '开始添加防二次打包保护...');
-      await this.addRepackageDetection(decompiledDir);
-      this.reportProgress('repackage-detection', 100, '防二次打包保护添加完成');
-
-      // 14. HOOK检测 (67-71%)
-      this.reportProgress('hook-detection', 0, '开始添加HOOK检测...');
-      await this.addHookDetection(decompiledDir);
-      this.reportProgress('hook-detection', 100, 'HOOK检测添加完成');
-
-      // 15. 模拟器检测 (71-75%)
-      this.reportProgress('emulator-detection', 0, '开始添加模拟器检测...');
-      await this.addEmulatorDetection(decompiledDir);
-      this.reportProgress('emulator-detection', 100, '模拟器检测添加完成');
-
-      // 16. 代理检测 (75-79%)
-      this.reportProgress('proxy-detection', 0, '开始添加代理检测...');
-      await this.addProxyDetection(decompiledDir);
-      this.reportProgress('proxy-detection', 100, '代理检测添加完成');
-
-      // 17. 重新编译APK (79-100%)
-      await this.compileApk(decompiledDir, outputApkPath);
-
-      this.reportProgress('complete', 100, 'APK加固完成！');
-      return true;
-
-    } catch (error) {
-      this.reportProgress('error', 0, `APK加固失败: ${error.message}`);
-      console.error('❌ APK加固失败:', error);
-      throw error;
-    } finally {
-      // 清理临时文件
-      this.cleanup();
-    }
-  }
-}
 
 // 上传并加固APK文件
 app.post('/api/apk/harden', upload.single('apk'), async (req, res) => {
@@ -4269,12 +2952,13 @@ app.post('/api/apk/harden', upload.single('apk'), async (req, res) => {
     // 生成文件名，保持原始文件名不变，如果文件已存在则添加版本号
     const baseName = path.parse(originalFileName).name;
     const extension = path.parse(originalFileName).ext;
-    let hardenedFileName = `${baseName}_hardened${extension}`;
+    // 使用原文件名，如果存在则添加版本号
+    let hardenedFileName = `${baseName}${extension}`;
     let counter = 1;
 
     // 检查文件是否已存在，如果存在则添加版本号
     while (fs.existsSync(path.join(apkOutputDir, hardenedFileName))) {
-      hardenedFileName = `${baseName}_hardened_v${counter}${extension}`;
+      hardenedFileName = `${baseName}_v${counter}${extension}`;
       counter++;
     }
 
@@ -4282,7 +2966,8 @@ app.post('/api/apk/harden', upload.single('apk'), async (req, res) => {
 
     // 执行真正的APK加固过程
     console.log('🔧 开始执行APK加固...');
-    const hardeningSuccess = await hardener.hardenApk(originalFilePath, hardenedFilePath);
+    // 默认开启加壳 (V1)
+    const hardeningSuccess = await hardener.hardenApk(originalFilePath, hardenedFilePath, originalFileName, { usePacker: true });
 
     if (!hardeningSuccess) {
       throw new Error('APK加固过程失败');
@@ -4308,9 +2993,14 @@ app.post('/api/apk/harden', upload.single('apk'), async (req, res) => {
         downloadUrl: `/api/apk/download/${hardenedFileName}`,
         protections: [
           {
+            name: 'DEX加壳 (V1)',
+            status: 'success',
+            description: '已对DEX文件进行加密和隐藏，jadx只能看到Shell代码'
+          },
+          {
             name: '代码混淆',
             status: 'success',
-            description: '已进行轻量级代码混淆，增加逆向工程难度'
+            description: '已进行控制流混淆，增加逆向工程难度'
           },
           {
             name: '资源加密',
@@ -4326,11 +3016,6 @@ app.post('/api/apk/harden', upload.single('apk'), async (req, res) => {
             name: '签名验证',
             status: 'success',
             description: '已添加签名验证权限，防止APK被篡改'
-          },
-          {
-            name: '反逆向工程',
-            status: 'success',
-            description: '已实施基础保护措施，增加逆向工程难度'
           }
         ]
       }
@@ -4341,6 +3026,7 @@ app.post('/api/apk/harden', upload.single('apk'), async (req, res) => {
 
   } catch (error) {
     console.error('❌ APK加固失败:', error);
+    console.error('错误堆栈:', error.stack);
     
     // 提供更用户友好的错误信息
     let userFriendlyError = 'APK加固过程中发生未知错误';
@@ -4348,8 +3034,8 @@ app.post('/api/apk/harden', upload.single('apk'), async (req, res) => {
     if (error.message) {
       if (error.message.includes('zip END header not found')) {
         userFriendlyError = '上传的文件不是有效的APK文件，请确认文件格式正确';
-      } else if (error.message.includes('AndrolibException')) {
-        userFriendlyError = 'APK文件格式错误或已损坏，请检查文件完整性';
+      } else if (error.message.includes('AndrolibException') || error.message.includes('APK反编译失败')) {
+        userFriendlyError = `APK文件处理错误: ${error.message}`;
       } else if (error.message.includes('No such file or directory')) {
         userFriendlyError = '系统缺少必要的处理工具，请联系管理员';
       } else if (error.message.includes('Permission denied')) {
@@ -4379,6 +3065,8 @@ app.post('/api/apk/harden', upload.single('apk'), async (req, res) => {
     hardener.cleanup();
   }
 });
+
+
 
 // 下载加固后的APK文件
 app.get('/api/apk/download/:fileName', (req, res) => {
@@ -4418,17 +3106,49 @@ app.get('/api/apk/download/:fileName', (req, res) => {
 // 获取APK加固历史记录
 app.get('/api/apk/history', (req, res) => {
   try {
+    const logsDir = path.join(__dirname, 'logs');
+    
     // 读取输出目录中的文件列表
     const files = fs.readdirSync(apkOutputDir)
-      .filter(file => file.endsWith('.apk'))
+      .filter(file => file.endsWith('.apk') && !file.startsWith('packed_') && !file.startsWith('intermediate_'))
       .map(file => {
         const filePath = path.join(apkOutputDir, file);
         const stats = fs.statSync(filePath);
+        
+        // 查找对应的日志文件
+        const baseFileName = file.replace('.apk', '').replace(/_v\d+$/, '');
+        let logFile = null;
+        
+        if (fs.existsSync(logsDir)) {
+          const logFiles = fs.readdirSync(logsDir)
+            .filter(log => {
+              // 匹配逻辑：日志文件名包含APK基础文件名
+              // 例如：app-release 匹配 harden_app-release_*.log
+              const logBase = log.replace('harden_', '').split('_')[0];
+              return log.endsWith('.log') && (
+                log.includes(baseFileName) || 
+                baseFileName.includes(logBase) ||
+                logBase.includes(baseFileName)
+              );
+            })
+            .sort((a, b) => {
+              const aTime = fs.statSync(path.join(logsDir, a)).birthtime;
+              const bTime = fs.statSync(path.join(logsDir, b)).birthtime;
+              return bTime - aTime;
+            });
+          
+          if (logFiles.length > 0) {
+            logFile = logFiles[0];
+          }
+        }
+        
         return {
           fileName: file,
           size: stats.size,
           createdAt: stats.birthtime,
-          downloadUrl: `/api/apk/download/${file}`
+          downloadUrl: `/api/apk/download/${file}`,
+          logFile: logFile,
+          hasLog: !!logFile
         };
       })
       .sort((a, b) => b.createdAt - a.createdAt)
@@ -4444,6 +3164,81 @@ app.get('/api/apk/history', (req, res) => {
     res.status(500).json({
       success: false,
       message: '获取历史记录失败',
+      error: error.message
+    });
+  }
+});
+
+// 获取APK加固日志
+app.get('/api/apk/log/:logFileName', (req, res) => {
+  try {
+    const { logFileName } = req.params;
+    const logFilePath = path.join(__dirname, 'logs', logFileName);
+    
+    if (!fs.existsSync(logFilePath)) {
+      return res.status(404).json({
+        success: false,
+        message: '日志文件不存在'
+      });
+    }
+    
+    const logContent = fs.readFileSync(logFilePath, 'utf-8');
+    
+    res.json({
+      success: true,
+      data: {
+        fileName: logFileName,
+        content: logContent
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ 读取日志失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '读取日志失败',
+      error: error.message
+    });
+  }
+});
+
+// 清空APK加固历史记录
+app.delete('/api/apk/history', (req, res) => {
+  try {
+    // 读取输出目录中的所有APK文件
+    const files = fs.readdirSync(apkOutputDir)
+      .filter(file => file.endsWith('.apk'));
+
+    let deletedCount = 0;
+    let errorCount = 0;
+
+    // 删除所有APK文件
+    files.forEach(file => {
+      try {
+        const filePath = path.join(apkOutputDir, file);
+        fs.unlinkSync(filePath);
+        deletedCount++;
+        console.log(`🗑️  已删除: ${file}`);
+      } catch (err) {
+        errorCount++;
+        console.error(`❌ 删除失败: ${file}`, err.message);
+      }
+    });
+
+    console.log(`✅ 清空历史记录完成: 删除 ${deletedCount} 个文件${errorCount > 0 ? `, ${errorCount} 个失败` : ''}`);
+
+    res.json({
+      success: true,
+      message: `成功删除 ${deletedCount} 个文件${errorCount > 0 ? `，${errorCount} 个失败` : ''}`,
+      deletedCount,
+      errorCount
+    });
+
+  } catch (error) {
+    console.error('❌ 清空历史记录失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '清空历史记录失败',
       error: error.message
     });
   }

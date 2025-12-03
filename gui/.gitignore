@@ -85,3 +85,6 @@ frontend/test_*.js
 
 # Root level package.json (workspace specific)
 /package.json
+
+# Packer temporary files
+server/packer_temp/

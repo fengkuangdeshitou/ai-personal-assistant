@@ -9,6 +9,7 @@ import {
   UnorderedListOutlined,
   MenuOutlined,
   FileProtectOutlined,
+  CloudServerOutlined,
 } from '@ant-design/icons';
 import './Sidebar.css';
 
@@ -95,7 +96,7 @@ const Sidebar: React.FC<SidebarProps> = () => {
         >
           <div className="mobile-drawer-header">
             <h2>🤖 AI 助理</h2>
-            <p className="version">v1.6.87</p>
+            <p className="version">v1.6.88</p>
           </div>
 
           <Menu
@@ -123,7 +124,7 @@ const Sidebar: React.FC<SidebarProps> = () => {
     <Sider className="sidebar" width={240}>
       <div className="sidebar-header">
         <h2>🤖 AI 助理</h2>
-        <p className="version">v1.6.87</p>
+        <p className="version">v1.6.88</p>
       </div>
 
       <Menu
