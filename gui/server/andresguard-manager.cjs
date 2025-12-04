@@ -68,10 +68,20 @@ class AndResGuardManager {
       if (!this.apktoolJar) return reject(new Error('Apktool not found'));
       
       const tempDir = path.join(path.dirname(apkPath), 'temp_manifest_' + Date.now());
-      // 只解码Manifest
-      const args = ['-jar', this.apktoolJar, 'd', '-f', '-s', apkPath, '-o', tempDir];
+      
+      // Fix: Ensure temp dir exists for JVM
+      if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+      }
+
+      // Fix: Add -Djava.io.tmpdir to isolate JVM temp files
+      const args = ['-Djava.io.tmpdir=' + tempDir, '-jar', this.apktoolJar, 'd', '-f', '-s', apkPath, '-o', tempDir];
       
       const child = spawn('java', args);
+
+      // Fix: Drain buffers to prevent hanging
+      child.stdout.on('data', () => {});
+      child.stderr.on('data', () => {});
       
       child.on('close', code => {
           if (code === 0) {
@@ -232,7 +242,9 @@ class AndResGuardManager {
       };
 
       // 创建配置文件
-      const configFile = path.join(outputDir, 'andresguard-config.xml');
+      const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      // Use a unique config file name to avoid race conditions in batch processing
+      const configFile = path.join(outputDir, `andresguard-config-${uniqueId}.xml`);
       this.generateConfigFile(configFile, finalConfig);
 
       // 创建输出目录
@@ -243,7 +255,9 @@ class AndResGuardManager {
       progressCallback && progressCallback(20, '开始资源混淆...');
 
       // 构建AndResGuard命令
+      // Fix: Add -Djava.io.tmpdir to isolate JVM temp files
       const args = [
+        '-Djava.io.tmpdir=' + outputDir,
         '-jar', this.andResGuardJar,
         inputApk,
         '-config', configFile,
@@ -342,6 +356,13 @@ class AndResGuardManager {
         if (progressTimer) {
           clearInterval(progressTimer);
         }
+
+        // Cleanup config file
+        try {
+            if (fs.existsSync(configFile)) fs.unlinkSync(configFile);
+        } catch (e) {
+            console.warn('Failed to cleanup config file:', e.message);
+        }
         
         if (code === 0) {
           progressCallback && progressCallback(95, '资源混淆完成，准备签名...');
@@ -397,7 +418,10 @@ class AndResGuardManager {
           return;
       }
 
-      const args = ['-jar', signerPath, '--apks', inputApk, '--overwrite', '--allowResign'];
+      const cwd = path.dirname(inputApk);
+
+      // Fix: Add -Djava.io.tmpdir to isolate JVM temp files
+      const args = ['-Djava.io.tmpdir=' + cwd, '-jar', signerPath, '--apks', inputApk, '--overwrite', '--allowResign', '--verbose'];
 
       // 检查是否存在正式签名文件
       const keystorePath = path.join(__dirname, 'release.keystore');
@@ -405,14 +429,25 @@ class AndResGuardManager {
         args.push('--ks', keystorePath);
         args.push('--ksAlias', 'my-release-key');
         args.push('--ksPass', '123456');
-        args.push('--keyPass', '123456');
+        // args.push('--keyPass', '123456');
         console.log('🔐 使用正式证书签名 (Release Keystore)');
       } else {
         console.log('⚠️ 使用调试证书签名 (Debug Keystore)');
       }
 
-      const child = spawn('java', args);
+      // Fix: Set CWD to work dir to avoid race conditions
+      // Fix: Set TMPDIR env var for native tools like zipalign
+      const env = { ...process.env, TMPDIR: cwd };
+      const child = spawn('java', args, { cwd, env });
       
+      // Fix: Write password to stdin in case it prompts
+      child.stdin.write('123456\n');
+      child.stdin.end();
+
+      // Fix: Consume stdout/stderr to prevent pipe buffer from filling up and hanging the process
+      child.stdout.on('data', (data) => console.log(`[AndResGuard Signer] ${data}`));
+      child.stderr.on('data', (data) => console.error(`[AndResGuard Signer Error] ${data}`));
+
       child.on('close', code => {
         if (code === 0) {
           const signed = inputApk.replace('.apk', '-aligned-signed.apk');

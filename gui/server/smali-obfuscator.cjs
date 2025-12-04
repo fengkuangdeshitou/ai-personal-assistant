@@ -63,7 +63,8 @@ class SmaliObfuscator {
         fs.mkdirSync(outputDir, { recursive: true });
       }
 
-      const args = ['-jar', this.apktoolJar, 'd', apkPath, '-o', outputDir, '-f'];
+      // Fix: Use unique temp dir for Java process
+      const args = [`-Djava.io.tmpdir=${outputDir}`, '-jar', this.apktoolJar, 'd', apkPath, '-o', outputDir, '-f'];
       console.log('Apktool decompile command:', 'java', args.join(' '));
 
       const apktool = spawn('java', args);
@@ -111,6 +112,11 @@ class SmaliObfuscator {
     const startTime = Date.now();
     
     for (let i = 0; i < allSmaliFiles.length; i++) {
+      // Yield event loop every 10 files to allow concurrent processing
+      if (i % 10 === 0) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
+
       const filePath = allSmaliFiles[i];
       try {
         // 1. 字符串加密
@@ -421,7 +427,8 @@ class SmaliObfuscator {
   async recompileApk(decompiledDir, outputApk, progressCallback = null) {
     return new Promise((resolve, reject) => {
       progressCallback && progressCallback(85, '重新打包APK...');
-      const args = ['-jar', this.apktoolJar, 'b', decompiledDir, '-o', outputApk];
+      // Fix: Use unique temp dir for Java process
+      const args = [`-Djava.io.tmpdir=${decompiledDir}`, '-jar', this.apktoolJar, 'b', decompiledDir, '-o', outputApk];
       const apktool = spawn('java', args);
       
       let stderr = '';
@@ -447,7 +454,9 @@ class SmaliObfuscator {
       const uberSignerPath = path.join(__dirname, 'tools/uber-apk-signer/uber-apk-signer.jar');
       if (!fs.existsSync(uberSignerPath)) return reject(new Error('uber-apk-signer not found'));
 
-      const args = ['-jar', uberSignerPath, '--apks', unsignedApk, '--overwrite', '--allowResign'];
+      // Fix: Use unique temp dir for Java process
+      const cwd = path.dirname(unsignedApk);
+      const args = [`-Djava.io.tmpdir=${cwd}`, '-jar', uberSignerPath, '--apks', unsignedApk, '--overwrite', '--allowResign', '--verbose'];
 
       // 检查是否存在正式签名文件
       const keystorePath = path.join(__dirname, 'release.keystore');
@@ -455,13 +464,25 @@ class SmaliObfuscator {
         args.push('--ks', keystorePath);
         args.push('--ksAlias', 'my-release-key');
         args.push('--ksPass', '123456');
-        args.push('--keyPass', '123456');
+        // args.push('--keyPass', '123456'); // Remove keyPass to avoid potential prompt issues
         console.log('🔐 使用正式证书签名 (Release Keystore)');
       } else {
         console.log('⚠️ 使用调试证书签名 (Debug Keystore)');
       }
 
-      const signer = spawn('java', args);
+      // Fix: Set CWD to work dir to avoid race conditions
+      // Fix: Set TMPDIR env var for native tools like zipalign
+      const env = { ...process.env, TMPDIR: cwd };
+      const signer = spawn('java', args, { cwd, env });
+      
+      // Fix: Write password to stdin in case it prompts
+      signer.stdin.write('123456\n');
+      signer.stdin.end();
+      
+      // Fix: Consume stdout/stderr to prevent pipe buffer from filling up and hanging the process
+      signer.stdout.on('data', (data) => console.log(`[Smali Signer] ${data}`)); 
+      signer.stderr.on('data', (data) => console.error(`[Smali Signer Error] ${data}`));
+
       signer.on('close', (code) => {
         if (code === 0) {
           progressCallback && progressCallback(100, '签名完成');
@@ -486,7 +507,9 @@ class SmaliObfuscator {
   }
 
   async obfuscate(inputApk, outputApk, options = {}, progressCallback = null) {
-    const workDir = path.join(path.dirname(inputApk), 'obfuscate_work');
+    // Fix: Use unique work directory to avoid race conditions in batch processing
+    const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const workDir = path.join(path.dirname(inputApk), `obfuscate_work_${uniqueId}`);
     const decompiledDir = path.join(workDir, 'decompiled');
     const unsignedApk = path.join(workDir, 'unsigned.apk');
 

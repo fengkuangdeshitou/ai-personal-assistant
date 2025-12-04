@@ -5,7 +5,9 @@ const path = require('path');
 class ApkHardenerSimple {
   constructor(progressCallback = null) {
     this.progressCallback = progressCallback;
-    this.tempDir = path.join(__dirname, 'temp');
+    // Fix: Use unique temp directory for each instance to support concurrent processing
+    const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    this.tempDir = path.join(__dirname, 'temp', uniqueId);
     this.startTime = Date.now();
   }
 
@@ -63,7 +65,8 @@ class ApkHardenerSimple {
     const baseNameForLog = originalFileName 
       ? path.basename(originalFileName, '.apk')
       : path.basename(outputApkPath, '.apk');
-    const logFileName = `harden_${baseNameForLog}_${Date.now()}.log`;
+    const uniqueLogId = Math.random().toString(36).substr(2, 5);
+    const logFileName = `harden_${baseNameForLog}_${Date.now()}_${uniqueLogId}.log`;
     const logFilePath = path.join(__dirname, 'logs', logFileName);
     const logsDir = path.join(__dirname, 'logs');
     if (!fs.existsSync(logsDir)) {
@@ -143,7 +146,9 @@ class ApkHardenerSimple {
         log('\n[Step 2/3] DEX 加壳 (隐藏源码)...');
         
         const DexPacker = require('./dex-packer.cjs');
-        const packer = new DexPacker();
+        // Pass a unique temp dir for packer inside our main temp dir
+        const packerTempDir = path.join(this.tempDir, 'packer_work');
+        const packer = new DexPacker(packerTempDir);
         
         // 检查apktool
         if (!packer.findApktoolJar()) {
@@ -184,11 +189,17 @@ class ApkHardenerSimple {
         
         this.reportProgress('andresguard', 20, '开始资源混淆和压缩...');
         
-        const outputDir = path.dirname(outputApkPath);
+        // Fix: Use a unique temp directory for AndResGuard output to avoid race conditions
+        // The final output will be copied to outputApkPath later
+        const andResGuardTempDir = path.join(this.tempDir, 'andresguard_out');
+        if (!fs.existsSync(andResGuardTempDir)) {
+            fs.mkdirSync(andResGuardTempDir, { recursive: true });
+        }
+
         // 使用上一步的输出作为输入
         const result = await andresguard.obfuscate(
           nextInputApk,
-          outputDir,
+          andResGuardTempDir,
           {
             use7zip: true,
             keepRoot: false,

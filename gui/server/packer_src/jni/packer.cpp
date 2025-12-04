@@ -2,10 +2,10 @@
 #include <string>
 
 // Key for decryption (0xAA)
-const jbyte KEY = (jbyte)0xAA;
+const jbyte KEY = (jbyte)0x48;
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_wrapper_ProxyApplication_decrypt(JNIEnv *env, jobject thiz, jbyteArray encryptedData) {
+Java_com_evghx_uferwo_Applgsi_decrypt(JNIEnv *env, jobject thiz, jbyteArray encryptedData) {
     if (encryptedData == NULL) {
         return NULL;
     }

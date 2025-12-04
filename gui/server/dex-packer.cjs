@@ -4,9 +4,14 @@ const { spawn, execSync } = require('child_process');
 const os = require('os');
 
 class DexPacker {
-  constructor() {
+  constructor(tempDir = null) {
     this.apktoolJar = this.findApktoolJar();
-    this.tempDir = path.join(__dirname, 'packer_temp');
+    if (tempDir) {
+      this.tempDir = tempDir;
+    } else {
+      const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      this.tempDir = path.join(__dirname, 'packer_temp', uniqueId);
+    }
   }
 
   findApktoolJar() {
@@ -66,7 +71,15 @@ class DexPacker {
       // 直接解压 inputApk 获取 .dex 文件
       // 使用 unzip 命令，只解压 *.dex
       try {
-        execSync(`unzip -q -o "${inputApk}" "*.dex" -d "${unzipDir}"`);
+        // Fix: Use spawn instead of execSync to avoid blocking the event loop
+        await new Promise((resolve, reject) => {
+            const unzip = spawn('unzip', ['-q', '-o', inputApk, '*.dex', '-d', unzipDir]);
+            unzip.on('close', code => {
+                if (code === 0) resolve();
+                else reject(new Error(`Unzip failed with code ${code}`));
+            });
+            unzip.on('error', reject);
+        });
       } catch (e) {
         this.log('Unzip failed or no dex files found: ' + e.message);
         // Fallback or rethrow?
@@ -232,20 +245,19 @@ class DexPacker {
 
   runApktool(args) {
     return new Promise((resolve, reject) => {
-      const child = spawn('java', ['-jar', this.apktoolJar, ...args]);
-      let stdout = '';
-      let stderr = '';
+      // Fix: Use unique temp dir for Java process to avoid collisions
+      const javaArgs = [`-Djava.io.tmpdir=${this.tempDir}`, '-jar', this.apktoolJar, ...args];
+      const child = spawn('java', javaArgs);
       
-      child.stdout.on('data', data => stdout += data.toString());
-      child.stderr.on('data', data => stderr += data.toString());
+      // Fix: Consume stdout/stderr to prevent pipe buffer from filling up
+      child.stdout.on('data', () => {});
+      child.stderr.on('data', () => {});
 
       child.on('close', code => {
         if (code === 0) {
             resolve();
         } else {
-            console.error('Apktool Stdout:', stdout);
-            console.error('Apktool Stderr:', stderr);
-            reject(new Error(`Apktool exited with ${code}\nStderr: ${stderr}`));
+            reject(new Error(`Apktool exited with ${code}`));
         }
       });
     });
@@ -269,7 +281,8 @@ class DexPacker {
       }
 
       this.log(`Signing APK: ${input}`);
-      const args = ['-jar', signerPath, '--apks', input, '--overwrite', '--allowResign'];
+      // Fix: Use unique temp dir for Java process
+      const args = [`-Djava.io.tmpdir=${this.tempDir}`, '-jar', signerPath, '--apks', input, '--overwrite', '--allowResign', '--verbose'];
 
       // 检查是否存在正式签名文件
       const keystorePath = path.join(__dirname, 'release.keystore');
@@ -277,18 +290,24 @@ class DexPacker {
         args.push('--ks', keystorePath);
         args.push('--ksAlias', 'my-release-key');
         args.push('--ksPass', '123456');
-        args.push('--keyPass', '123456');
+        // args.push('--keyPass', '123456');
         this.log('🔐 使用正式证书签名 (Release Keystore)');
       } else {
         this.log('⚠️ 使用调试证书签名 (Debug Keystore)');
       }
 
-      const child = spawn('java', args);
+      // Fix: Set CWD to temp dir to avoid race conditions with temporary files
+      // Fix: Set TMPDIR env var for native tools like zipalign
+      const env = { ...process.env, TMPDIR: this.tempDir };
+      const child = spawn('java', args, { cwd: this.tempDir, env });
       
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', d => stdout += d.toString());
-      child.stderr.on('data', d => stderr += d.toString());
+      // Fix: Write password to stdin in case it prompts
+      child.stdin.write('123456\n');
+      child.stdin.end();
+
+      // Fix: Consume stdout/stderr to prevent pipe buffer from filling up and hanging the process
+      child.stdout.on('data', (data) => { this.log(`[Signer] ${data}`); });
+      child.stderr.on('data', (data) => { this.log(`[Signer Error] ${data}`); });
 
       child.on('close', code => {
         if (code === 0) {
@@ -299,14 +318,11 @@ class DexPacker {
             resolve();
           } else {
             this.log(`⚠️ Signed file not found: ${signed}. Falling back to unsigned.`);
-            this.log('Signer Output:\n' + stdout);
             fs.copyFileSync(input, output);
             resolve();
           }
         } else {
             this.log('❌ Signing failed with code ' + code);
-            this.log('Stdout: ' + stdout);
-            this.log('Stderr: ' + stderr);
             reject(new Error('Signing failed'));
         }
       });
