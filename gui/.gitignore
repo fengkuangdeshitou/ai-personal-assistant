@@ -88,3 +88,6 @@ frontend/test_*.js
 
 # Packer temporary files
 server/packer_temp/
+
+# NDK prebuilt binaries
+server/tools/ndk/
