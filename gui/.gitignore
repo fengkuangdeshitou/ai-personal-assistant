@@ -89,5 +89,5 @@ frontend/test_*.js
 # Packer temporary files
 server/packer_temp/
 
-# NDK prebuilt binaries
-server/tools/ndk/
+# Large files (>100MB)
+frontend/node_modules/.cache/default-development/14.pack
