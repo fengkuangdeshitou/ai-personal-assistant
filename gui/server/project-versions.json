@@ -12,9 +12,9 @@
     "timestamp": 1764073847390
   },
   "hg-bookmark": {
-    "lastDeployed": "2025-12-09T02:33:16.977Z",
-    "zipFile": "2025-12-09.zip",
+    "lastDeployed": "2025-11-25T12:35:53.491Z",
+    "zipFile": "2025-11-25.zip",
     "environment": "prod",
-    "timestamp": 1765247596977
+    "timestamp": 1764074153492
   }
 }

@@ -11,7 +11,7 @@ import simpleGit from 'simple-git';
 import archiver from 'archiver';
 import OSS from 'ali-oss';
 import less from 'less'; // 🚨 新增 Less 库导入
-
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import dotenv from 'dotenv';
 import { createVerifyScheme } from './aliyun-dypns-sdk.js';
 import { querySchemeSecret } from './query-scheme-secret.js';
@@ -29,7 +29,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5178;
 
-
+// 初始化 Google Generative AI
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'AIzaSyAA7NuiKYcSX_27DjvLQUgVAjjmcSRxZOU');
 
 // 默认项目目录
 const DEFAULT_DIR = '/Users/maiyou001/Project';
@@ -1166,7 +1167,7 @@ app.post('/api/build-channel', async (req, res) => {
     
     // 如果指定了渠道，先切换配置
     if (channel) {
-      const switchResponse = await fetch(`http://127.0.0.1:${PORT}/api/switch-channel`, {
+      const switchResponse = await fetch(`http://localhost:${PORT}/api/switch-channel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectName, channel })
@@ -1252,7 +1253,7 @@ app.get('/api/build-stream', async (req, res) => {
       res.write(`data: ${JSON.stringify({ type: 'log', message: `切换到渠道: ${channel}` })}\n\n`);
       
       try {
-        const switchResponse = await fetch(`http://127.0.0.1:${PORT}/api/switch-channel`, {
+        const switchResponse = await fetch(`http://localhost:${PORT}/api/switch-channel`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ projectName, channel })
@@ -2593,7 +2594,27 @@ async function cleanupOldVersions(projectName) {
   }
 }
 
-
+app.post('/api/gemini', async (req, res) => {
+  console.log('Received Gemini request:', req.body);
+  try {
+    const { message } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+    
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+    console.log('Calling Gemini Text API...');
+    const result = await model.generateContent(message);
+    const response = await result.response;
+    const text = response.text();
+    console.log('Text response:', text);
+    
+    res.json({ response: text });
+  } catch (error) {
+    console.error('Gemini API error:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
 
 // CDN缓存刷新函数
 async function refreshCDNCache(projectName, channelId = null, res = null) {
