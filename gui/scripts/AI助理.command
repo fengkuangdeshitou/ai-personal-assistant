@@ -31,6 +31,11 @@ if ! pgrep -f "react-scripts" > /dev/null 2>&1; then
         osascript -e "tell application \"Safari\" to open location \"http://localhost:4000\"" 2>/dev/null || \
         open http://localhost:4000
         echo "📱 如果浏览器没有自动打开，请手动访问: http://localhost:4000"
+        # 获取本机IP并显示局域网访问地址
+        LOCAL_IP=$(ifconfig | grep "inet " | grep -v 127.0.0.1 | head -1 | awk '{print $2}')
+        if [ -n "$LOCAL_IP" ]; then
+            echo "🌍 局域网内其他设备可访问: http://$LOCAL_IP:4000"
+        fi
     else
         echo "❌ React服务器启动失败"
     fi
@@ -54,5 +59,10 @@ else
         " 2>/dev/null || \
         open http://localhost:4000
         echo "📱 如果浏览器没有自动打开，请手动访问: http://localhost:4000"
+        # 获取本机IP并显示局域网访问地址
+        LOCAL_IP=$(ifconfig | grep "inet " | grep -v 127.0.0.1 | head -1 | awk '{print $2}')
+        if [ -n "$LOCAL_IP" ]; then
+            echo "🌍 局域网内其他设备可访问: http://$LOCAL_IP:4000"
+        fi
     fi
 fi
