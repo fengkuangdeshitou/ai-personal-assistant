@@ -55,25 +55,29 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
   const onFinish = async (values: any) => {
     setLoading(true);
     try {
-      // 过滤应用名称和包名字段的前后空格和回车
-      const filteredValues = {
-        ...values,
+      // 显式构建要发送的数据，确保数据纯净且结构正确
+      const filteredValues: { [key: string]: any } = {
+        SchemeName: values.SchemeName,
         AppName: values.AppName?.trim().replace(/[\r\n]+/g, ''),
-        PackName: values.PackName?.trim().replace(/[\r\n]+/g, ''),
-        Url: values.Url?.trim().replace(/[\r\n]+/g, ''),
-        Origin: values.Origin?.trim().replace(/[\r\n]+/g, ''),
-        // 确保OsType字段被传递
+        AccessEnd: values.AccessEnd,
         OsType: values.OsType || accessEnd,
       };
+
+      if (values.AccessEnd === 'iOS') {
+        filteredValues.PackName = values.PackName?.trim().replace(/[\r\n]+/g, '');
+      } else if (values.AccessEnd === 'Web') {
+        filteredValues.Url = values.Url?.trim().replace(/[\r\n]+/g, '');
+        filteredValues.Origin = values.Origin?.trim().replace(/[\r\n]+/g, '');
+      }
 
       console.log('创建方案 - 原始values:', values);
       console.log('创建方案 - 过滤后values:', filteredValues);
 
-      // 获取bundle_id用于检查
+      // 获取bundleId用于检查
       const bundleId = filteredValues.AccessEnd === 'iOS' ? filteredValues.PackName : filteredValues.Url;
 
       if (!bundleId) {
-        messageApi.error('缺少必要的bundle_id信息');
+        messageApi.error('缺少必要的Bundle ID / 页面地址信息');
         setLoading(false);
         return;
       }
@@ -86,7 +90,7 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
         return;
       }
 
-      // 先调用上传接口检查bundle_id是否已存在
+      // 1. 先调用上传接口检查bundle_id是否已存在
       console.log('检查bundle_id是否存在:', bundleId);
       try {
         const checkResponse = await fetch('https://api.mlgamebox.my16api.com/sdkIosOneLoginConfig', {
@@ -101,45 +105,59 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
           const checkResult = await checkResponse.json();
           console.log('bundle_id检查结果:', checkResult);
 
-          // 判断bundle_id是否已存在：succeed=1且data是对象表示已存在
-          if (checkResult && checkResult.status && checkResult.status.succeed === 1 && checkResult.data && typeof checkResult.data === 'object') {
-            console.log('bundle_id已存在，创建已存在状态的方案对象');
+          // 检查业务逻辑
+          if (checkResult && checkResult.status && checkResult.status.succeed === 1) {
+            // succeed: 1 表示 bundle_id 已存在
+            if (checkResult.data && typeof checkResult.data === 'object') {
+              // data 存在，可以构建已存在的方案对象
+              console.log('bundle_id已存在，创建已存在状态的方案对象');
 
-            // 创建已存在的方案对象
-            const existingScheme: AuthScheme = {
-              id: `existing_${bundleId}_${Date.now()}`,
-              schemeName: checkResult.data.name || filteredValues.SchemeName,
-              appName: checkResult.data.appname || filteredValues.AppName,
-              osType: filteredValues.AccessEnd,
-              schemeCode: checkResult.data.code || '已存在',
-              secretKey: checkResult.data.secret_key,
-              createdAt: new Date().toISOString(),
-              uploadStatus: 'success',
-              status: 'exists', // 标记为已存在
-              // 保存额外参数
-              bundleId: bundleId,
-              url: filteredValues.AccessEnd === 'Web' ? filteredValues.Url : undefined,
-              origin: filteredValues.AccessEnd === 'Web' ? filteredValues.Origin : undefined,
-            };
+              const existingScheme: AuthScheme = {
+                id: `existing_${bundleId}_${Date.now()}`,
+                schemeName: checkResult.data.name || filteredValues.SchemeName,
+                appName: checkResult.data.appname || filteredValues.AppName,
+                osType: filteredValues.AccessEnd,
+                schemeCode: checkResult.data.code || '已存在',
+                secretKey: checkResult.data.secret_key,
+                createdAt: new Date().toISOString(),
+                uploadStatus: 'success',
+                status: 'exists', // 标记为已存在
+                bundleId: bundleId,
+                url: filteredValues.AccessEnd === 'Web' ? filteredValues.Url : undefined,
+                origin: filteredValues.AccessEnd === 'Web' ? filteredValues.Origin : undefined,
+              };
 
-            messageApi.info('该bundle_id对应的方案已存在，已添加到列表');
-            form.resetFields();
-            setLoading(false);
+              messageApi.info('该方案已存在，已为您添加到列表中。');
+              form.resetFields();
+              setLoading(false);
 
-            // 调用成功回调
-            if (onSuccess) {
-              onSuccess(existingScheme);
+              if (onSuccess) {
+                onSuccess(existingScheme);
+              }
+              return; // 终止后续操作
+            } else {
+              // succeed: 1 但 data 为空，这是一种不明确的状态，为安全起见，终止操作
+              messageApi.error('检查接口返回状态异常（succeed:1 但 data 为空），已终止创建。');
+              setLoading(false);
+              return;
             }
-            return;
           }
+          // succeed: 0 表示 bundle_id 不存在，可以继续创建，不做任何事
+          console.log('bundle_id不存在，继续创建新方案。');
         } else {
-          console.log('bundle_id检查失败，继续创建流程');
+          // HTTP请求本身失败，终止操作
+          messageApi.error(`检查Bundle ID失败，HTTP状态: ${checkResponse.status}`);
+          setLoading(false);
+          return;
         }
       } catch (checkError) {
-        console.warn('bundle_id检查出错，继续创建流程:', checkError);
+        console.error('bundle_id检查请求出错:', checkError);
+        messageApi.error('检查Bundle ID时发生网络错误，已终止操作。');
+        setLoading(false);
+        return;
       }
 
-      // 调用后端API创建阿里云认证方案
+      // 2. 调用后端API创建阿里云认证方案
       const apiBaseUrl = process.env.REACT_APP_API_URL || `${window.location.protocol}//${window.location.hostname}:5178`;
       const response = await fetch(`${apiBaseUrl}/api/create-scheme`, {
         method: 'POST',
@@ -154,7 +172,7 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
         const schemeCode = result.data?.schemeCode;
 
         if (schemeCode) {
-          // 获取秘钥 - 添加延迟和重试机制
+          // 3. 获取秘钥
           console.log('获取秘钥:', schemeCode);
           
           // 等待云服务处理创建的方案
@@ -192,11 +210,9 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
                 const errorData = await secretResponse.json();
                 console.log(`获取秘钥失败 (${secretResponse.status}):`, errorData.error);
                 
-                // 如果是方案不存在的错误，继续重试
                 if (errorData.error && errorData.error.includes('FC220000012490068')) {
                   console.log('方案可能还未完全创建，稍后重试...');
                 } else {
-                  // 其他错误直接跳出
                   break;
                 }
               }
@@ -216,9 +232,8 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
             }
           }
 
-          // 根据是否获取到秘钥显示不同消息
+          // 4. 根据是否获取到秘钥，创建方案对象并上传
           if (secretKey) {
-            // 创建方案对象
             const newScheme: AuthScheme = {
               id: schemeCode,
               schemeName: filteredValues.SchemeName,
@@ -227,10 +242,9 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
               schemeCode: schemeCode,
               secretKey: secretKey,
               createdAt: new Date().toISOString(),
-              uploadStatus: 'success',
-              status: 'new', // 标记为新创建
-              // 保存额外参数
-              bundleId: filteredValues.AccessEnd === 'iOS' ? filteredValues.PackName : filteredValues.Url,
+              uploadStatus: 'pending', // 初始设为pending，上传后更新
+              status: 'new',
+              bundleId: bundleId,
               url: filteredValues.AccessEnd === 'Web' ? filteredValues.Url : undefined,
               origin: filteredValues.AccessEnd === 'Web' ? filteredValues.Origin : undefined,
             };
@@ -242,56 +256,53 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
                 name: filteredValues.SchemeName,
                 code: schemeCode,
                 appname: filteredValues.AppName,
-                type: filteredValues.AccessEnd === 'iOS' ? 'ios' : 'h5',  // 转换为小写格式
+                type: filteredValues.AccessEnd === 'iOS' ? 'ios' : 'h5',
                 secret_key: secretKey
               };
 
-              // 根据类型添加特定参数
               if (filteredValues.AccessEnd === 'iOS') {
                 uploadData.bundle_id = filteredValues.PackName;
               } else if (filteredValues.AccessEnd === 'Web') {
-                uploadData.bundle_id = filteredValues.Url;  // Web类型使用URL作为bundle_id
+                uploadData.bundle_id = filteredValues.Url;
                 uploadData.url = filteredValues.Url;
                 uploadData.origin = filteredValues.Origin;
               }
 
               const uploadResponse = await fetch('https://api.mlgamebox.my16api.com/sdkIosOneLoginConfig', {
                 method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(uploadData),
               });
 
               if (uploadResponse.ok) {
                 console.log('参数上传成功');
+                newScheme.uploadStatus = 'success';
               } else {
-                console.log('参数上传失败:', uploadResponse.status);
                 console.warn('参数上传失败:', uploadResponse.status);
+                newScheme.uploadStatus = 'failed';
               }
             } catch (uploadError) {
               console.warn('参数上传出错:', uploadError);
+              newScheme.uploadStatus = 'failed';
             }
 
             messageApi.success('认证方案创建成功，秘钥已获取！');
             form.resetFields();
-
-            // 调用成功回调
             if (onSuccess) {
               onSuccess(newScheme);
             }
           } else {
             messageApi.warning('方案创建成功，但获取秘钥失败，请稍后手动刷新获取');
-            // 仍然创建方案对象，但没有秘钥
             const newScheme: AuthScheme = {
-              id: Date.now().toString(),
+              id: schemeCode, // 使用 schemeCode 作为 ID
               schemeName: filteredValues.SchemeName,
               appName: filteredValues.AppName,
               osType: filteredValues.AccessEnd,
               schemeCode: schemeCode,
               createdAt: new Date().toISOString(),
-              // 保存额外参数
-              bundleId: filteredValues.AccessEnd === 'iOS' ? filteredValues.PackName : filteredValues.Url,
+              uploadStatus: 'failed', // 因为没有秘钥，所以上传失败
+              status: 'new',
+              bundleId: bundleId,
               url: filteredValues.AccessEnd === 'Web' ? filteredValues.Url : undefined,
               origin: filteredValues.AccessEnd === 'Web' ? filteredValues.Origin : undefined,
             };
@@ -304,8 +315,6 @@ const CreateScheme: React.FC<CreateSchemeProps> = ({ onSuccess, onCancel }) => {
         }
       } else {
         const errorData = await response.json();
-        
-        // 特殊处理阿里云访问密钥未配置的错误
         if (errorData.error && errorData.error.includes('阿里云访问密钥未配置')) {
           messageApi.error({
             content: '阿里云访问密钥未配置，请先在服务器环境变量中配置 ALICLOUD_ACCESS_KEY_ID 和 ALICLOUD_ACCESS_KEY_SECRET',

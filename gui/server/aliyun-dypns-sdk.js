@@ -46,7 +46,6 @@ export async function createVerifyScheme(accessKeyId, accessKeySecret, schemeDat
 
     // 创建请求对象
     let request = new $Dypnsapi.CreateVerifySchemeRequest({});
-
     // 设置基本参数（所有类型都必须）
     request.schemeName = schemeData.schemeName;
     request.appName = schemeData.appName;
@@ -54,21 +53,14 @@ export async function createVerifyScheme(accessKeyId, accessKeySecret, schemeDat
 
     // 根据类型设置特定参数
     if (schemeData.osType === 'iOS') {
-      request.bundleId = schemeData.bundleId; // iOS必传BundleId
+      if (schemeData.bundleId) request.bundleId = schemeData.bundleId; // iOS必传BundleId
     } else if (schemeData.osType === 'Web') {
-      request.origin = schemeData.origin; // Web必传Origin
-      request.url = schemeData.url; // Web必传Url
+      if (schemeData.origin) request.origin = schemeData.origin; // Web必传Origin
+      if (schemeData.url) request.url = schemeData.url; // Web必传Url
     }
 
     console.log('正在调用阿里云CreateVerifyScheme API...');
-    console.log('请求参数:', {
-      schemeName: request.schemeName,
-      osType: request.osType,
-      appName: request.appName,
-      bundleId: request.bundleId,
-      origin: request.origin,
-      url: request.url
-    });
+    console.log('请求参数:', request);
 
     // 调用API
     let response = await client.createVerifyScheme(request);

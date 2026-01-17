@@ -19,11 +19,18 @@ import * as $Dypnsapi from '@alicloud/dypnsapi20170525';
 import OpenApi, * as $OpenApi from '@alicloud/openapi-client';
 import Util from '@alicloud/tea-util';
 
-// 加载环境变量
-dotenv.config();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// 加载环境变量，并明确指定 .env 文件路径
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+
+// 验证环境变量是否加载成功
+if (process.env.ALICLOUD_ACCESS_KEY_ID) {
+  console.log(`✅ Access Key ID Loaded: ${process.env.ALICLOUD_ACCESS_KEY_ID.substring(0, 8)}...`);
+} else {
+  console.error('❌ ALICLOUD_ACCESS_KEY_ID not found. Please check your .env file in the server directory.');
+}
 
 const app = express();
 const PORT = process.env.PORT || 5178;
@@ -311,13 +318,6 @@ async function getTodayCommits(repoPath) {
 }
 
 // 阿里云RFC3986编码函数
-// 创建阿里云Dypnsapi客户端
-function createAliCloudClient(accessKeyId, accessKeySecret) {
-  let config = new $OpenApi.Config({});
-  config.accessKeyId = accessKeyId;
-  config.accessKeySecret = accessKeySecret;
-  return new Client(config);
-}
 
 // 创建阿里云认证方案的函数
 // 已移至 aliyun-dypns-sdk.js
@@ -345,7 +345,7 @@ app.post('/api/create-scheme', async (req, res) => {
       });
     }
 
-    // 准备API参数
+    // 准备API参数 (注意：aliyun-dypns-sdk.js 期望 camelCase 属性名)
     const apiData = {
       schemeName: schemeData.SchemeName,
       appName: schemeData.AppName,
@@ -354,11 +354,15 @@ app.post('/api/create-scheme', async (req, res) => {
 
     // 根据类型添加特定参数
     if (schemeData.AccessEnd === 'iOS') {
-      apiData.bundleId = schemeData.PackName;
+      // 兼容前端可能传递的 PackName
+      apiData.bundleId = schemeData.PackName || schemeData.BundleId;
     } else if (schemeData.AccessEnd === 'Web') {
       apiData.origin = schemeData.Origin;
       apiData.url = schemeData.Url;
     }
+
+    console.log('调用阿里云API - 入参:', apiData); // 新增的日志打印
+    // return res.json({ success: true, message: '直接返回成功', data: {} });
 
     // 调用阿里云API创建方案
     const result = await createVerifyScheme(accessKeyId, accessKeySecret, apiData);
