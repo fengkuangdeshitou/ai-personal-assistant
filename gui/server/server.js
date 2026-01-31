@@ -1188,7 +1188,7 @@ app.post('/api/build-channel', async (req, res) => {
     
     // 如果指定了渠道，先切换配置
     if (channel) {
-      const switchResponse = await fetch(`http://localhost:${PORT}/api/switch-channel`, {
+      const switchResponse = await fetch(`http://127.0.0.1:${PORT}/api/switch-channel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectName, channel })
@@ -1274,7 +1274,7 @@ app.get('/api/build-stream', async (req, res) => {
       res.write(`data: ${JSON.stringify({ type: 'log', message: `切换到渠道: ${channel}` })}\n\n`);
       
       try {
-        const switchResponse = await fetch(`http://localhost:${PORT}/api/switch-channel`, {
+        const switchResponse = await fetch(`http://127.0.0.1:${PORT}/api/switch-channel`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ projectName, channel })
