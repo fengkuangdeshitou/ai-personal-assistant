@@ -98,7 +98,18 @@ function getBucketConfig(ossConfigs, projectName, channelId = null, env = 'dev')
           enabled: true
         };
       } else if (Array.isArray(bucketInfo)) {
-        return bucketInfo;
+        return bucketInfo.map(b => {
+          if (typeof b === 'string') {
+            return {
+              name: b,
+              region: ossConfigs.connection.region,
+              prefix: '',
+              url: `https://${b}.oss-cn-hangzhou.aliyuncs.com`,
+              enabled: true
+            };
+          }
+          return b;
+        });
       } else {
         return {
           name: bucketInfo.name,
@@ -117,7 +128,17 @@ function getBucketConfig(ossConfigs, projectName, channelId = null, env = 'dev')
       
       // 处理数组（多个生产环境）
       if (Array.isArray(bucketInfo)) {
-        return bucketInfo;
+        return bucketInfo.map(b => {
+          if (typeof b === 'string') {
+            return {
+              name: b,
+              region: ossConfigs.connection.region,
+              prefix: '',
+              url: `https://${b}.oss-cn-hangzhou.aliyuncs.com`
+            };
+          }
+          return b;
+        });
       } else if (typeof bucketInfo === 'string') {
         return {
           name: bucketInfo,
