@@ -34,6 +34,11 @@
                 {
                   "action": "comment",
                   "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)(?!\\s*-->)"
+                },
+                {
+                  "action": "replace-match",
+                  "pattern": "(<link id=\"appleTouchIcon\" rel=\"apple-touch-icon-precomposed\" href=\")resources/icon[^\"]*\\.png(\"/>)",
+                  "replacement": "$1resources/icon-hg.png$2"
                 }
               ]
             },
@@ -146,6 +151,11 @@
                 {
                   "action": "comment",
                   "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)(?!\\s*-->)"
+                },
+                {
+                  "action": "replace-match",
+                  "pattern": "(<link id=\"appleTouchIcon\" rel=\"apple-touch-icon-precomposed\" href=\")resources/icon[^\"]*\\.png(\"/>)",
+                  "replacement": "$1resources/icon-0.05.png$2"
                 }
               ]
             },
@@ -258,6 +268,11 @@
                 {
                   "action": "comment",
                   "pattern": "(?<!<!--\\s*)(<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>)(?!\\s*-->)"
+                },
+                {
+                  "action": "replace-match",
+                  "pattern": "(<link id=\"appleTouchIcon\" rel=\"apple-touch-icon-precomposed\" href=\")resources/icon[^\"]*\\.png(\"/>)",
+                  "replacement": "$1resources/icon-0.01.png$2"
                 }
               ]
             },
@@ -370,6 +385,11 @@
                 {
                   "action": "uncomment",
                   "pattern": "<!-- (<meta name=\"apple-mobile-web-app-title\" content=\"惠爪游戏\">\\s*<title>惠爪游戏</title>) -->"
+                },
+                {
+                  "action": "replace-match",
+                  "pattern": "(<link id=\"appleTouchIcon\" rel=\"apple-touch-icon-precomposed\" href=\")resources/icon[^\"]*\\.png(\"/>)",
+                  "replacement": "$1resources/icon-hz.png$2"
                 }
               ]
             },

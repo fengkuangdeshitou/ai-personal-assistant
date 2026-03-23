@@ -1074,6 +1074,19 @@ app.post('/api/switch-channel', async (req, res) => {
           continue; // 跳过其他处理
         }
         
+        if (rule.action === 'replace-match') {
+          // 正则匹配并替换指定内容（不替换整个文件）
+          if (rule.pattern !== undefined && rule.replacement !== undefined) {
+            const regex = new RegExp(rule.pattern, 'gm');
+            const newContent = content.replace(regex, rule.replacement);
+            if (newContent !== content) {
+              modified = true;
+              content = newContent;
+            }
+          }
+          continue;
+        }
+        
         const regex = new RegExp(rule.pattern, 'gm');
         
         if (rule.action === 'comment') {
