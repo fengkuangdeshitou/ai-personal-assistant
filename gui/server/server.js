@@ -1443,7 +1443,8 @@ app.get('/api/upload-stream', async (req, res) => {
         region: bucket.region || ossConfig.region,
         accessKeyId: ossConfig.accessKeyId,
         accessKeySecret: ossConfig.accessKeySecret,
-        bucket: bucket.name
+        bucket: bucket.name,
+        timeout: 60000 // 60秒超时
       });
       
       // 递归收集所有文件
@@ -1659,7 +1660,8 @@ app.get('/api/upload-zip-stream', async (req, res) => {
             region: bucket.region || ossConfig.region,
             accessKeyId: ossConfig.accessKeyId,
             accessKeySecret: ossConfig.accessKeySecret,
-            bucket: bucket.name
+            bucket: bucket.name,
+            timeout: 600000 // 10分钟超时
           });
           
           // 上传压缩包 - 备份文件放在"以往版本"目录下
@@ -1811,7 +1813,8 @@ app.post('/api/oss/upload-channel', async (req, res) => {
         region: bucket.region || ossConfig.region,
         accessKeyId: ossConfig.accessKeyId,
         accessKeySecret: ossConfig.accessKeySecret,
-        bucket: bucket.name
+        bucket: bucket.name,
+        timeout: 600000 // 10分钟超时
       });
       
       // 上传文件
@@ -1926,7 +1929,8 @@ app.post('/api/oss/upload-simple', async (req, res) => {
       region: ossConfig.region,
       accessKeyId: ossConfig.accessKeyId,
       accessKeySecret: ossConfig.accessKeySecret,
-      bucket: bucketConfig.name
+      bucket: bucketConfig.name,
+      timeout: 600000 // 10分钟超时
     });
     
     // 上传文件
@@ -2085,7 +2089,8 @@ app.post('/api/oss/upload-stream', async (req, res) => {
       region: ossConfig.region,
       accessKeyId: ossConfig.accessKeyId,
       accessKeySecret: ossConfig.accessKeySecret,
-      bucket: bucketConfig.name
+      bucket: bucketConfig.name,
+      timeout: 600000 // 10分钟超时
     });
     
     let successCount = 0;
@@ -2352,7 +2357,8 @@ app.post('/api/backup-build', async (req, res) => {
       region: ossConfigs.connection.region,
       accessKeyId: ossConfigs.connection.accessKeyId,
       accessKeySecret: ossConfigs.connection.accessKeySecret,
-      bucket: bucketName
+      bucket: bucketName,
+      timeout: 600000 // 10分钟超时
     });
     
     // 上传到 OSS 的"以往版本"目录

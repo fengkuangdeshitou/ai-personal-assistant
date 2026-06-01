@@ -1,20 +1,20 @@
 {
   "react-agent-website": {
-    "lastDeployed": "2026-03-19T09:56:59.210Z",
-    "zipFile": "2026-03-19.zip",
+    "lastDeployed": "2026-05-29T03:51:59.168Z",
+    "zipFile": "2026-05-29.zip",
     "environment": "prod",
-    "timestamp": 1773914219210
+    "timestamp": 1780026719168
   },
   "games-52-play-web": {
-    "lastDeployed": "2026-03-16T04:23:19.488Z",
-    "zipFile": "2026-03-16.zip",
+    "lastDeployed": "2026-05-29T03:05:32.372Z",
+    "zipFile": "2026-05-29.zip",
     "environment": "prod",
-    "timestamp": 1773634999488
+    "timestamp": 1780023932372
   },
   "hg-bookmark": {
-    "lastDeployed": "2026-03-23T06:29:48.857Z",
-    "zipFile": "2026-03-23.zip",
+    "lastDeployed": "2026-05-29T03:40:37.695Z",
+    "zipFile": "2026-05-29.zip",
     "environment": "prod",
-    "timestamp": 1774247388857
+    "timestamp": 1780026037695
   }
 }
