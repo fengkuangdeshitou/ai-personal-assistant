@@ -8,6 +8,7 @@ import {
   SettingOutlined,
   UnorderedListOutlined,
   MenuOutlined,
+  UnlockOutlined,
 } from '@ant-design/icons';
 import './Sidebar.css';
 
@@ -41,6 +42,11 @@ const Sidebar: React.FC<SidebarProps> = () => {
       key: '/projects',
       icon: <ProjectOutlined />,
       label: '项目管理',
+    },
+    {
+      key: '/data-decrypt',
+      icon: <UnlockOutlined />,
+      label: '数据解密',
     },
     {
       key: '/timeline',
