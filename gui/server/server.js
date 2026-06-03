@@ -2735,6 +2735,78 @@ async function refreshCDNCache(projectName, channelId = null, res = null) {
   }
 }
 
+// ─── Seafile 管理 API ──────────────────────────────────────────────
+const SEAFILE_DIR = '/Users/maiyou001/seafile';
+
+async function runDockerCompose(args) {
+  const { execSync } = await import('child_process');
+  return execSync(`docker compose ${args}`, {
+    cwd: SEAFILE_DIR,
+    env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' },
+    encoding: 'utf8',
+  });
+}
+
+app.get('/api/seafile/status', async (_req, res) => {
+  try {
+    const { execSync } = await import('child_process');
+    const output = execSync(
+      'docker ps -a --filter "name=seafile" --format "{{.Names}}|{{.Status}}|{{.Image}}"',
+      { env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' }, encoding: 'utf8' }
+    );
+    const containers = output.trim().split('\n').filter(Boolean).map(line => {
+      const [name, status, image] = line.split('|');
+      return { name, status, image, running: status?.startsWith('Up') };
+    });
+    const allRunning = containers.length > 0 && containers.every(c => c.running);
+
+    // 获取局域网 IP
+    const nets = os.networkInterfaces();
+    let localIp = '';
+    for (const iface of Object.values(nets)) {
+      for (const addr of (iface || [])) {
+        if (addr.family === 'IPv4' && !addr.internal) {
+          localIp = addr.address;
+          break;
+        }
+      }
+      if (localIp) break;
+    }
+
+    res.json({ success: true, running: allRunning, containers, localIp });
+  } catch (e) {
+    res.json({ success: false, running: false, containers: [], error: e.message });
+  }
+});
+
+app.post('/api/seafile/start', async (_req, res) => {
+  try {
+    await runDockerCompose('up -d');
+    res.json({ success: true, message: 'Seafile 已启动' });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/seafile/stop', async (_req, res) => {
+  try {
+    await runDockerCompose('down --timeout 10');
+    res.json({ success: true, message: 'Seafile 已停止' });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/seafile/restart', async (_req, res) => {
+  try {
+    await runDockerCompose('restart');
+    res.json({ success: true, message: 'Seafile 已重启' });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+// ───────────────────────────────────────────────────────────────────
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Backend server listening on http://0.0.0.0:${PORT}`);
   console.log('Projects dir:', DEFAULT_DIR);

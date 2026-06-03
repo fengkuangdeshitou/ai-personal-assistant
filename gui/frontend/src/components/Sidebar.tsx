@@ -9,6 +9,7 @@ import {
   UnorderedListOutlined,
   MenuOutlined,
   UnlockOutlined,
+  CloudServerOutlined,
 } from '@ant-design/icons';
 import './Sidebar.css';
 
@@ -47,6 +48,11 @@ const Sidebar: React.FC<SidebarProps> = () => {
       key: '/data-decrypt',
       icon: <UnlockOutlined />,
       label: '数据解密',
+    },
+    {
+      key: '/seafile',
+      icon: <CloudServerOutlined />,
+      label: 'Seafile管理',
     },
     {
       key: '/timeline',

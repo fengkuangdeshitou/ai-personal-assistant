@@ -10,6 +10,7 @@ import Settings from './pages/Settings';
 import CreateScheme from './pages/CreateScheme';
 import AuthSchemes from './pages/AuthSchemes';
 import DataDecrypt from './pages/DataDecrypt';
+import SeafileManager from './pages/SeafileManager';
 import './App.css';
 
 const { Content } = Layout;
@@ -31,6 +32,7 @@ function App() {
                   <Route path="/auth-schemes" element={<AuthSchemes />} />
                   <Route path="/create-scheme" element={<CreateScheme />} />
                   <Route path="/data-decrypt" element={<DataDecrypt />} />
+                  <Route path="/seafile" element={<SeafileManager />} />
                   <Route path="/settings" element={<Settings />} />
                 </Routes>
               </Content>
