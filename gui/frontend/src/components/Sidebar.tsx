@@ -10,6 +10,8 @@ import {
   MenuOutlined,
   UnlockOutlined,
   CloudServerOutlined,
+  MobileOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 import './Sidebar.css';
 
@@ -53,6 +55,16 @@ const Sidebar: React.FC<SidebarProps> = () => {
       key: '/seafile',
       icon: <CloudServerOutlined />,
       label: 'Seafile管理',
+    },
+    {
+      key: '/ipa-viewer',
+      icon: <MobileOutlined />,
+      label: 'IPA信息',
+    },
+    {
+      key: '/sdk-replacer',
+      icon: <SwapOutlined />,
+      label: 'SDK替换',
     },
     {
       key: '/timeline',
@@ -101,7 +113,7 @@ const Sidebar: React.FC<SidebarProps> = () => {
         >
           <div className="mobile-drawer-header">
             <h2>🤖 AI 助理</h2>
-            <p className="version">v1.6.78</p>
+            <p className="version">v1.6.92</p>
           </div>
 
           <Menu
@@ -129,7 +141,7 @@ const Sidebar: React.FC<SidebarProps> = () => {
     <Sider className="sidebar" width={240}>
       <div className="sidebar-header">
         <h2>🤖 AI 助理</h2>
-        <p className="version">v1.6.78</p>
+        <p className="version">v1.6.92</p>
       </div>
 
       <Menu

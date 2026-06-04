@@ -11,6 +11,8 @@ import CreateScheme from './pages/CreateScheme';
 import AuthSchemes from './pages/AuthSchemes';
 import DataDecrypt from './pages/DataDecrypt';
 import SeafileManager from './pages/SeafileManager';
+import IpaViewer from './pages/IpaViewer';
+import SdkReplacer from './pages/SdkReplacer';
 import './App.css';
 
 const { Content } = Layout;
@@ -33,6 +35,8 @@ function App() {
                   <Route path="/create-scheme" element={<CreateScheme />} />
                   <Route path="/data-decrypt" element={<DataDecrypt />} />
                   <Route path="/seafile" element={<SeafileManager />} />
+                  <Route path="/ipa-viewer" element={<IpaViewer />} />
+                  <Route path="/sdk-replacer" element={<SdkReplacer />} />
                   <Route path="/settings" element={<Settings />} />
                 </Routes>
               </Content>

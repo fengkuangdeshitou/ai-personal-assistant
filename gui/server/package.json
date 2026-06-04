@@ -10,12 +10,15 @@
   "dependencies": {
     "@alicloud/dypnsapi20170525": "^2.0.0",
     "@alicloud/openapi-client": "^0.4.15",
+    "adm-zip": "^0.5.17",
     "ali-oss": "^6.23.0",
     "archiver": "^7.0.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.19.2",
     "less": "^4.4.2",
+    "multer": "^2.1.1",
+    "plist": "^5.0.0",
     "simple-git": "^3.24.0"
   }
 }

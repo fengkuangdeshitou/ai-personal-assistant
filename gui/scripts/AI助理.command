@@ -7,11 +7,17 @@
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# 静默检查并启动后端服务
+# 静默检查并启动后端服务（优先用 pm2 托管，退出后自动重启）
 if ! lsof -i :5178 > /dev/null 2>&1; then
-    cd server
-    node server.js > /tmp/ai-assistant-server.log 2>&1 &
-    cd ..
+    if command -v pm2 > /dev/null 2>&1; then
+        pm2 describe ai-assistant-server > /dev/null 2>&1 && \
+            pm2 restart ai-assistant-server > /dev/null 2>&1 || \
+            pm2 start "$PROJECT_ROOT/server/server.js" --name ai-assistant-server > /dev/null 2>&1
+    else
+        cd server
+        node server.js > /tmp/ai-assistant-server.log 2>&1 &
+        cd ..
+    fi
     sleep 2
 fi
 

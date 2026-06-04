@@ -4,9 +4,12 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import crypto from 'crypto';
+import http from 'http';
 import https from 'https';
 import { fileURLToPath } from 'url';
-import { spawn } from 'child_process';
+import { spawn, execSync, exec } from 'child_process';
+import multer from 'multer';
+import AdmZip from 'adm-zip';
 import simpleGit from 'simple-git';
 import archiver from 'archiver';
 import OSS from 'ali-oss';
@@ -43,13 +46,75 @@ const CONFIG_PATH = path.join(__dirname, 'projects.json');
 const OSS_CONFIG_PATH = path.join(__dirname, 'oss-connection-config.json');
 const CHANNEL_CONFIG_PATH = path.join(__dirname, 'channel-config.json');
 
+// 内存存储（用于小文件，如 IPA 解析时直接读取）
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 500 * 1024 * 1024 },
+});
+
+// 磁盘存储（用于大文件，如 SDK 替换资源 zip）
+const MULTER_TMP_DIR = path.join(os.tmpdir(), 'multer-fw-uploads');
+if (!fs.existsSync(MULTER_TMP_DIR)) fs.mkdirSync(MULTER_TMP_DIR, { recursive: true });
+const uploadToDisk = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, MULTER_TMP_DIR),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${file.originalname}`),
+  }),
+  limits: { fileSize: 500 * 1024 * 1024 },
+});
+
 // 初始化AI服务
 // AI服务已移除
-app.use(cors());
+// PNA 必须在 cors() 之前设置，否则 cors() 拦截 OPTIONS 后不会调用 next()
+app.use((req, res, next) => {
+  if (req.headers['access-control-request-private-network']) {
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  }
+  next();
+});
+// Chrome Private Network Access (PNA)：localhost:4000 → localhost:5178 的跨域请求需要此配置
+app.use(cors({ origin: true }));
 app.use(express.json());
+
+// 全请求日志（调试用）
+app.use((req, _res, next) => {
+  if (req.path.startsWith('/api/ipa')) {
+    console.log(`[req] ${req.method} ${req.path} origin=${req.headers.origin || '-'} ct=${(req.headers['content-type'] || '').split(';')[0]}`);
+  }
+  next();
+});
+
+// IPA 替换等耗时操作：延长超时（30 分钟）
+app.use('/api/ipa', (req, res, next) => {
+  req.setTimeout(30 * 60 * 1000);
+  res.setTimeout(30 * 60 * 1000);
+  next();
+});
 
 // 提供静态文件服务 - 从上级gui目录提供HTML文件
 app.use(express.static(path.join(__dirname, '..')));
+
+// IPA 会话临时目录
+const SESSIONS_DIR = path.join(os.tmpdir(), 'ipa-sessions');
+if (!fs.existsSync(SESSIONS_DIR)) fs.mkdirSync(SESSIONS_DIR);
+
+function cleanupExpiredSessions() {
+  const now = Date.now();
+  const maxAge = 30 * 60 * 1000;
+  fs.readdir(SESSIONS_DIR, (err, files) => {
+    if (err) return;
+    files.forEach(file => {
+      const sessionPath = path.join(SESSIONS_DIR, file);
+      fs.stat(sessionPath, (statErr, stats) => {
+        if (statErr) return;
+        if (now - stats.mtime.getTime() > maxAge) {
+          fs.rm(sessionPath, { recursive: true, force: true }, () => {});
+        }
+      });
+    });
+  });
+}
+setInterval(cleanupExpiredSessions, 10 * 60 * 1000);
 
 // Less 编译相关常量
 const LESS_INPUT_PATH = 'src/css/css.less';
@@ -2805,6 +2870,626 @@ app.post('/api/seafile/restart', async (_req, res) => {
     res.status(500).json({ success: false, error: e.message });
   }
 });
+// ─────────────────────── IPA 工具 API ───────────────────────────────
+
+/** 从 URL 下载文件（支持 http/https 及重定向） */
+function downloadFile(url) {
+  return new Promise((resolve, reject) => {
+    function doRequest(targetUrl) {
+      const lib = targetUrl.startsWith('https') ? https : http;
+      lib.get(targetUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return doRequest(res.headers.location);
+        }
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          return reject(new Error(`下载失败，HTTP 状态码: ${res.statusCode}`));
+        }
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+      }).on('error', reject);
+    }
+    doRequest(url);
+  });
+}
+
+/** 扫描 IPA 包内所有 Framework / Bundle / Dylib */
+/**
+ * 用 unzip -Z1 列出 IPA 内所有条目名，不将文件加载进内存。
+ * 对超大 IPA（2GB+）完全安全，扫描速度快（通常 < 1s）。
+ */
+async function scanFrameworksFromDisk(ipaPath) {
+  const output = await runCmd(`unzip -Z1 "${ipaPath}"`);
+  const entryNames = output.split('\n').map(l => l.trim()).filter(Boolean)
+    .filter(name => !name.startsWith('__MACOSX/'));
+  const entries = entryNames.map(name => ({ entryName: name, header: { size: 0 } }));
+  const frameworks = scanFrameworksFromEntries(entries);
+
+  // 并行提取每个 framework/bundle 的 Info.plist 版本号
+  const plist = await import('plist');
+  await Promise.all(frameworks.map(async (fw) => {
+    try {
+      const plistPath = fw.path.replace(/\/$/, '') + '/Info.plist';
+      const plistContent = await runCmd(`unzip -p "${ipaPath}" "${plistPath}"`);
+      const data = plist.parse(plistContent);
+      fw.version = data.CFBundleShortVersionString || data.CFBundleVersion || '';
+      fw.bundleVersion = data.CFBundleVersion || '';
+    } catch (_) {
+      fw.version = '';
+      fw.bundleVersion = '';
+    }
+  }));
+
+  return frameworks;
+}
+
+function scanFrameworksFromEntries(entries) {
+  const sdkMap = new Map();
+  entries.forEach(e => {
+    const name = e.entryName;
+    let type = null;
+    let sdkPath = null;
+
+    if (name.endsWith('.framework/') || name.includes('.framework/')) {
+      const match = name.match(/(.*\.framework)\//);
+      if (match) { sdkPath = match[1] + '/'; type = 'framework'; }
+    } else if (name.endsWith('.bundle/') || name.includes('.bundle/')) {
+      const match = name.match(/(.*\.bundle)\//);
+      if (match) { sdkPath = match[1] + '/'; type = 'bundle'; }
+    } else if (name.endsWith('.dylib')) {
+      sdkPath = name; type = 'dylib';
+    }
+
+    if (sdkPath && type && !sdkMap.has(sdkPath)) {
+      const sdkName = path.basename(sdkPath.replace(/\/$/, ''));
+      // 计算 SDK 总大小
+      const size = entries
+        .filter(en => en.entryName.startsWith(sdkPath))
+        .reduce((sum, en) => sum + (en.header?.size || 0), 0);
+      sdkMap.set(sdkPath, { name: sdkName, path: sdkPath, size, type });
+    }
+  });
+  return Array.from(sdkMap.values());
+}
+
+/** 解析 IPA 信息（用于 IPA 信息查看页） */
+async function parseIpaInfo(ipaBuffer) {
+  const plist = await import('plist');
+  const zip = new AdmZip(ipaBuffer);
+  const entries = zip.getEntries();
+
+  const infoPlistEntry = entries.find(e =>
+    /^Payload\/[^/]+\.app\/Info\.plist$/.test(e.entryName)
+  );
+  if (!infoPlistEntry) throw new Error('未找到 Info.plist');
+
+  const plistData = plist.parse(infoPlistEntry.getData().toString('utf-8'));
+
+  // 构建文件树（FileNode 格式）
+  const buildFileTree = (ents) => {
+    const root = {};
+    ents.forEach(e => {
+      const parts = e.entryName.split('/').filter(Boolean);
+      let node = root;
+      parts.forEach((part, i) => {
+        if (!node[part]) {
+          node[part] = {
+            _isDir: i < parts.length - 1 || e.entryName.endsWith('/'),
+            _entryName: e.entryName,
+            _size: e.header?.size || 0,
+            _compressedSize: e.header?.compressedSize || 0,
+            _time: e.header?.time instanceof Date ? e.header.time.toISOString() : null,
+            _crc: e.header?.crc || 0,
+            _children: {},
+          };
+        }
+        node = node[part]._children;
+      });
+    });
+    const toTree = (obj, parentPath) => Object.entries(obj).map(([name, val]) => {
+      const entPath = val._isDir
+        ? (val._entryName.endsWith('/') ? val._entryName : val._entryName + '/')
+        : val._entryName;
+      return {
+        name,
+        path: entPath || (parentPath + name + (val._isDir ? '/' : '')),
+        isDir: val._isDir,
+        size: val._size,
+        compressedSize: val._compressedSize,
+        time: val._time,
+        crc: val._crc,
+        children: val._isDir ? toTree(val._children, entPath) : undefined,
+      };
+    });
+    return toTree(root, '');
+  };
+
+  // 收集 plist 内容
+  const collectPlists = (ents) => {
+    const result = {};
+    ents.filter(e => e.entryName.endsWith('.plist') && !e.isDirectory).forEach(e => {
+      try {
+        result[e.entryName] = plist.parse(e.getData().toString('utf-8'));
+      } catch (_) {}
+    });
+    return result;
+  };
+
+  // 权限列表（key 去掉 NS 前缀和 UsageDescription 后缀作为 label）
+  const permissions = Object.entries(plistData)
+    .filter(([k]) => k.endsWith('UsageDescription'))
+    .map(([k, v]) => ({
+      key: k,
+      label: k.replace(/^NS/, '').replace(/UsageDescription$/, '').replace(/([A-Z])/g, ' $1').trim(),
+      description: String(v),
+    }));
+
+  // URL Scheme 列表
+  const urlSchemes = (plistData.CFBundleURLTypes || []).flatMap(t =>
+    (t.CFBundleURLSchemes || []).map(s => ({ scheme: s, name: t.CFBundleURLName || '' }))
+  );
+
+  return {
+    info: {
+      name: plistData.CFBundleDisplayName || plistData.CFBundleName || '',
+      bundleId: plistData.CFBundleIdentifier || '',
+      version: plistData.CFBundleShortVersionString || '',
+      build: plistData.CFBundleVersion || '',
+      minOS: plistData.MinimumOSVersion || '',
+      platform: plistData.DTPlatformName || plistData.CFBundleSupportedPlatforms?.[0] || '',
+      sdkVersion: plistData.DTSDKName || '',
+      executable: plistData.CFBundleExecutable || '',
+    },
+    permissions,
+    urlSchemes,
+    fileTree: buildFileTree(entries),
+    plists: collectPlists(entries),
+  };
+}
+
+/** 创建 IPA 处理会话（用于 SDK 替换） */
+async function createIpaSession(ipaBuffer, originalName) {
+  const sessionId = crypto.randomBytes(16).toString('hex');
+  const sessionDir = path.join(SESSIONS_DIR, sessionId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const ipaPath = path.join(sessionDir, 'original.ipa');
+  fs.writeFileSync(ipaPath, ipaBuffer);
+  const frameworks = await scanFrameworksFromDisk(ipaPath);
+  return { sessionId, ipaName: originalName, frameworks };
+}
+
+/**
+ * 磁盘模式 IPA 替换（始终使用，避免内存溢出）
+ * @param {string} ipaPath    原始 IPA 文件路径
+ * @param {string[]} fwFilePaths  替换资源 zip 文件的磁盘路径数组
+ * @param {string[]} fwTargetPaths  IPA 内对应的 SDK 路径数组
+ * @returns {Buffer} 替换后的 IPA buffer
+ */
+/**
+ * 磁盘模式 IPA 替换，返回输出文件路径（调用方负责清理工作目录）
+ * @returns {{ outputIpa: string, workDir: string }}
+ */
+// 用 Promise 包装 exec，避免 execSync 阻塞事件循环
+function runCmd(cmd) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { maxBuffer: 500 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) reject(Object.assign(err, { stdout, stderr }));
+      else resolve(stdout);
+    });
+  });
+}
+
+/**
+ * 在 searchDir 目录树中递归查找所有名称等于 name 的文件/目录。
+ * 找到后不再向其内部继续递归，避免匹配自身内部的同名子项。
+ */
+function findItemByName(searchDir, name) {
+  const results = [];
+  function walk(dir) {
+    let entries;
+    try { entries = fs.readdirSync(dir); } catch (_) { return; }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry);
+      if (entry === name) {
+        results.push(fullPath);
+        continue; // 不递归进已匹配的目录
+      }
+      try {
+        if (fs.statSync(fullPath).isDirectory()) walk(fullPath);
+      } catch (_) {}
+    }
+  }
+  walk(searchDir);
+  return results;
+}
+
+/**
+ * 按文件名匹配替换 IPA 内的 SDK：
+ * 1. 解压 IPA
+ * 2. 对每个替换资源 zip，解压后取顶层文件/目录，在 IPA 树中查找同名项并替换
+ * 3. 重新打包为 IPA
+ */
+async function replaceFrameworksOnDisk(ipaPath, fwFilePaths, ipaBaseName) {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipa-replace-'));
+  if (!ipaBaseName) ipaBaseName = path.basename(ipaPath, '.ipa');
+
+  // Step 1: IPA 本质是 zip，复制并重命名为 .zip，再解压
+  const zipPath = path.join(workDir, `${ipaBaseName}.zip`);
+  fs.copyFileSync(ipaPath, zipPath);
+  const extractDir = path.join(workDir, 'extracted');
+  fs.mkdirSync(extractDir);
+  await runCmd(`unzip -q "${zipPath}" -d "${extractDir}"`);
+  fs.unlinkSync(zipPath); // 解压完成后删除临时 zip，释放空间
+
+  // Step 2: 依次处理每个替换资源
+  for (let i = 0; i < fwFilePaths.length; i++) {
+    const fwFilePath = fwFilePaths[i];
+    const fwExtractDir = path.join(workDir, `fw_${i}`);
+    fs.mkdirSync(fwExtractDir);
+
+    const stat = fs.statSync(fwFilePath);
+    if (stat.isDirectory()) {
+      // .framework / .bundle 目录：直接复制进临时目录
+      const itemName = path.basename(fwFilePath.replace(/\/$/, ''));
+      await runCmd(`cp -R "${fwFilePath}" "${fwExtractDir}/${itemName}"`);
+    } else {
+      // zip 压缩包：解压
+      await runCmd(`unzip -q "${fwFilePath}" -d "${fwExtractDir}"`);
+    }
+
+    // 取顶层条目（过滤 macOS 产生的 __MACOSX / .DS_Store 等元数据）
+    const topItems = fs.readdirSync(fwExtractDir)
+      .filter(n => n !== '__MACOSX' && !n.startsWith('.'));
+
+    for (const itemName of topItems) {
+      const srcPath = path.join(fwExtractDir, itemName);
+
+      // 在 IPA 解压目录中查找同名文件或目录
+      const matches = findItemByName(extractDir, itemName);
+
+      if (matches.length === 0) {
+        console.log(`[replace] 未找到同名 "${itemName}"，跳过`);
+        continue;
+      }
+
+      for (const matchPath of matches) {
+        console.log(`[replace] 替换: ${matchPath.replace(extractDir, '')}`);
+        fs.rmSync(matchPath, { recursive: true, force: true });
+        await runCmd(`cp -R "${srcPath}" "${path.dirname(matchPath)}/"`);
+      }
+    }
+  }
+
+  // Step 3: 将 Payload 文件夹压缩为 Payload.zip，再改名为 ****.ipa
+  const payloadZip = path.join(workDir, 'Payload.zip');
+  await runCmd(`cd "${extractDir}" && zip -qr "${payloadZip}" Payload`);
+  fs.rmSync(extractDir, { recursive: true, force: true });
+
+  // Payload.zip 改名为 原始文件名.ipa
+  const outputIpa = path.join(workDir, `${ipaBaseName}.ipa`);
+  fs.renameSync(payloadZip, outputIpa);
+
+  return { outputIpa, workDir, outputName: `${ipaBaseName}.ipa` };
+}
+
+// ── IPA 信息查看 ─────────────────────────────────────────────────────
+
+app.post('/api/ipa/parse', upload.single('ipa'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, error: '未上传文件' });
+  try {
+    const info = await parseIpaInfo(req.file.buffer);
+    res.json({ success: true, ...info });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/ipa/parse-from-url', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ success: false, error: '缺少 URL' });
+  try {
+    const buf = await downloadFile(url);
+    const info = await parseIpaInfo(buf);
+    res.json({ success: true, ...info });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── IPA SDK 替换 ──────────────────────────────────────────────────────
+
+app.post('/api/ipa/init-session', uploadToDisk.single('ipa'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, error: '未上传 IPA 文件' });
+  try {
+    // 直接用磁盘上的临时文件，不读入内存
+    const sessionId = crypto.randomBytes(16).toString('hex');
+    const sessionDir = path.join(SESSIONS_DIR, sessionId);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const ipaPath = path.join(sessionDir, 'original.ipa');
+    fs.renameSync(req.file.path, ipaPath); // 移动到会话目录，避免复制
+    const frameworks = await scanFrameworksFromDisk(ipaPath);
+    res.json({ success: true, sessionId, ipaName: req.file.originalname, frameworks });
+  } catch (e) {
+    // 失败时清理临时文件
+    try { if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch (_) {}
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/ipa/fetch-url-for-sdk', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ success: false, error: '缺少 URL' });
+  try {
+    const buf = await downloadFile(url);
+    const ipaName = decodeURIComponent(path.basename(new URL(url).pathname)) || 'downloaded.ipa';
+    const result = await createIpaSession(buf, ipaName);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/ipa/replace-framework-by-session', (req, res, next) => {
+  console.log('[replace] multer 开始处理上传...');
+  uploadToDisk.fields([{ name: 'framework' }])(req, res, (err) => {
+    if (err) {
+      console.error('[replace] multer 错误:', err.code, err.message);
+      return res.status(400).json({ success: false, error: `上传失败: ${err.message} (${err.code || ''})` });
+    }
+    replaceHandler(req, res, next);
+  });
+});
+
+async function replaceHandler(req, res, _next) {
+  console.log('[replace] 请求已到达，body keys:', Object.keys(req.body || {}), 'files:', Object.keys(req.files || {}));
+  const { sessionId } = req.body;
+  const frameworkFiles = (req.files && req.files['framework']) || [];
+
+  console.log('[replace] sessionId:', sessionId, 'frameworks:', frameworkFiles.length);
+
+  if (!sessionId || frameworkFiles.length === 0) {
+    return res.status(400).json({ success: false, error: '参数无效' });
+  }
+
+  const sessionDir = path.join(SESSIONS_DIR, sessionId);
+  const originalIpaPath = path.join(sessionDir, 'original.ipa');
+  if (!fs.existsSync(originalIpaPath)) {
+    return res.status(404).json({ success: false, error: '会话不存在或已过期' });
+  }
+
+  const uploadedFilePaths = frameworkFiles.map(f => f.path);
+
+  try {
+    const { outputIpa, workDir } = await replaceFrameworksOnDisk(originalIpaPath, uploadedFilePaths);
+
+    uploadedFilePaths.forEach(p => { try { fs.unlinkSync(p); } catch (_) {} });
+
+    // 将替换后的 IPA 移入会话目录，供后续 GET 下载
+    const destIpa = path.join(sessionDir, 'replaced.ipa');
+    fs.renameSync(outputIpa, destIpa);
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (_) {}
+
+    // 返回 JSON，前端通过独立的 GET 请求下载文件（避免跨域 blob 流问题）
+    res.json({ success: true, sessionId });
+
+  } catch (e) {
+    console.error('SDK 替换失败:', e);
+    uploadedFilePaths.forEach(p => { try { fs.unlinkSync(p); } catch (_) {} });
+    res.status(500).json({ success: false, error: `替换失败: ${e.message}` });
+  }
+}
+
+app.get('/api/ipa/download-session/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const ipaPath = path.join(SESSIONS_DIR, sessionId, 'original.ipa');
+  if (!fs.existsSync(ipaPath)) {
+    return res.status(404).json({ success: false, error: '会话不存在或已过期' });
+  }
+  res.setHeader('Content-Disposition', 'attachment; filename="session.ipa"');
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.sendFile(ipaPath);
+});
+
+// 下载替换后的 IPA（浏览器原生 GET 下载，绕过 fetch blob 限制）
+app.get('/api/ipa/download-replaced/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const ipaPath = path.join(SESSIONS_DIR, sessionId, 'replaced.ipa');
+  if (!fs.existsSync(ipaPath)) {
+    return res.status(404).json({ success: false, error: '替换文件不存在或已过期' });
+  }
+  const filename = req.query.filename
+    ? String(req.query.filename).replace(/[^\w.\-()[\]]/g, '_')
+    : 'replaced.ipa';
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.sendFile(ipaPath);
+});
+
+// ── IPA SDK 磁盘路径模式 ──────────────────────────────────────────────
+
+// 通用：写临时 .applescript 文件执行，比 heredoc 在 pm2 环境更可靠
+async function runAppleScript(script) {
+  const tmpFile = path.join(os.tmpdir(), `ai_pick_${Date.now()}.applescript`);
+  try {
+    fs.writeFileSync(tmpFile, script, 'utf8');
+    const output = await runCmd(`osascript "${tmpFile}"`);
+    return output;
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch (_) {}
+  }
+}
+
+// 选择 .framework（在 Finder 中表现为文件夹，必须用 choose folder）
+app.get('/api/ipa/pick-sdk-frameworks', async (_req, res) => {
+  try {
+    const output = await runAppleScript(
+      'set folderList to choose folder with prompt "选择 .framework 目录（可多选）" with multiple selections allowed\n' +
+      'set pathList to {}\n' +
+      'repeat with aFolder in folderList\n' +
+      '  set end of pathList to POSIX path of aFolder\n' +
+      'end repeat\n' +
+      'return pathList'
+    );
+    const paths = output.trim().split(', ').map(p => p.trim()).filter(Boolean);
+    res.json({ success: true, paths });
+  } catch (e) {
+    res.json({ success: false, cancelled: true });
+  }
+});
+
+// 选择 .bundle（在 Finder 中表现为文件包，必须用 choose file）
+app.get('/api/ipa/pick-sdk-bundles', async (_req, res) => {
+  try {
+    const output = await runAppleScript(
+      'set fileList to choose file with prompt "选择 .bundle 文件（可多选）" with multiple selections allowed\n' +
+      'set pathList to {}\n' +
+      'repeat with aFile in fileList\n' +
+      '  set end of pathList to POSIX path of aFile\n' +
+      'end repeat\n' +
+      'return pathList'
+    );
+    const paths = output.trim().split(', ').map(p => p.trim()).filter(Boolean);
+    res.json({ success: true, paths });
+  } catch (e) {
+    res.json({ success: false, cancelled: true });
+  }
+});
+
+// 调起 macOS 原生文件选择对话框，返回用户选中的 IPA 路径
+app.get('/api/ipa/pick-file', async (_req, res) => {
+  try {
+    const output = await runAppleScript(
+      'set f to choose file with prompt "选择 IPA 文件" of type {"ipa"}\n' +
+      'return POSIX path of f'
+    );
+    res.json({ success: true, path: output.trim() });
+  } catch (e) {
+    res.json({ success: false, cancelled: true });
+  }
+});
+
+// 列出目录下的文件（供前端磁盘模式浏览使用）
+app.get('/api/ipa/list-dir', (req, res) => {
+  const { path: dirPath } = req.query;
+  if (!dirPath) return res.status(400).json({ success: false, error: '缺少 path 参数' });
+
+  try {
+    const fullPath = path.resolve(String(dirPath).replace(/^~/, os.homedir()));
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ success: false, error: `目录不存在: ${fullPath}` });
+    }
+    const stat = fs.statSync(fullPath);
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ success: false, error: '路径不是目录' });
+    }
+
+    const files = fs.readdirSync(fullPath)
+      .map(name => {
+        const filePath = path.join(fullPath, name);
+        try {
+          const s = fs.statSync(filePath);
+          return { name, path: filePath, size: s.size, isDir: s.isDirectory(), ext: path.extname(name).toLowerCase() };
+        } catch { return null; }
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({ success: true, files, dirPath: fullPath });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 从本机磁盘路径创建 IPA 会话（不上传，直接读本地文件）
+app.post('/api/ipa/init-session-from-path', async (req, res) => {
+  const { ipaPath } = req.body;
+  if (!ipaPath) return res.status(400).json({ success: false, error: '缺少 ipaPath' });
+
+  try {
+    const fullPath = path.resolve(String(ipaPath).replace(/^~/, os.homedir()));
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ success: false, error: `文件不存在: ${fullPath}` });
+    }
+
+    const sessionId = crypto.randomBytes(16).toString('hex');
+    const sessionDir = path.join(SESSIONS_DIR, sessionId);
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const destPath = path.join(sessionDir, 'original.ipa');
+
+    // 用 cp 复制避免加载进内存（原文件保持不变）
+    await runCmd(`cp "${fullPath}" "${destPath}"`);
+
+    const ipaName = path.basename(fullPath);
+    const frameworks = await scanFrameworksFromDisk(destPath);
+
+    // 从 Payload/*.app/Info.plist 读取手机显示名称
+    let appName = '';
+    try {
+      const plist = await import('plist');
+      const infoPlistContent = await runCmd(`unzip -p "${destPath}" "Payload/*.app/Info.plist"`);
+      const infoPlist = plist.parse(infoPlistContent);
+      appName = infoPlist.CFBundleDisplayName || infoPlist.CFBundleName || '';
+    } catch (_) {}
+
+    // 将原始文件名写入会话元数据，供替换时使用
+    fs.writeFileSync(path.join(sessionDir, 'meta.json'), JSON.stringify({ ipaName }), 'utf8');
+
+    res.json({ success: true, sessionId, ipaName, appName, frameworks });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 使用本机磁盘上的 SDK zip 文件执行替换（无需上传）
+app.post('/api/ipa/replace-by-path', async (req, res) => {
+  const { sessionId, sdkPaths } = req.body;
+  if (!sessionId || !Array.isArray(sdkPaths) || sdkPaths.length === 0) {
+    return res.status(400).json({ success: false, error: '参数无效：需要 sessionId 和 sdkPaths 数组' });
+  }
+
+  const sessionDir = path.join(SESSIONS_DIR, sessionId);
+  const originalIpaPath = path.join(sessionDir, 'original.ipa');
+  if (!fs.existsSync(originalIpaPath)) {
+    return res.status(404).json({ success: false, error: '会话不存在或已过期' });
+  }
+
+  // 验证所有 SDK 文件存在
+  for (const p of sdkPaths) {
+    const resolved = path.resolve(String(p).replace(/^~/, os.homedir()));
+    if (!fs.existsSync(resolved)) {
+      return res.status(400).json({ success: false, error: `文件不存在: ${resolved}` });
+    }
+  }
+
+  try {
+    // 读取会话元数据，获取原始文件名
+    let originalIpaName = 'replaced';
+    try {
+      const meta = JSON.parse(fs.readFileSync(path.join(sessionDir, 'meta.json'), 'utf8'));
+      if (meta.ipaName) originalIpaName = path.basename(meta.ipaName, '.ipa');
+    } catch (_) {}
+
+    const resolvedPaths = sdkPaths.map(p => path.resolve(String(p).replace(/^~/, os.homedir())));
+    const { outputIpa, workDir, outputName } = await replaceFrameworksOnDisk(originalIpaPath, resolvedPaths, originalIpaName);
+
+    const destIpa = path.join(sessionDir, 'replaced.ipa');
+    fs.renameSync(outputIpa, destIpa);
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (_) {}
+
+    res.json({ success: true, sessionId, outputName });
+  } catch (e) {
+    console.error('[replace-by-path] 替换失败:', e);
+    res.status(500).json({ success: false, error: `替换失败: ${e.message}` });
+  }
+});
+
+// ── 后端管理 ────────────────────────────────────────────────────────
+
+app.post('/api/server/restart', (_req, res) => {
+  res.json({ success: true, message: '后端即将重启' });
+  setTimeout(() => process.exit(0), 300);
+});
+
 // ───────────────────────────────────────────────────────────────────
 
 app.listen(PORT, '0.0.0.0', () => {
