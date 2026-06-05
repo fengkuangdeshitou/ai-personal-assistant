@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Button, Badge, Space, Typography, Table, message, Spin } from 'antd';
+import { Card, Button, Badge, Space, Typography, Table, message, Spin, Switch, Tooltip } from 'antd';
 import {
   PlayCircleOutlined,
   PauseCircleOutlined,
   ReloadOutlined,
   SyncOutlined,
   LinkOutlined,
+  CloudServerOutlined,
+  HddOutlined,
 } from '@ant-design/icons';
 import api from '../api/client';
 
@@ -16,18 +18,29 @@ interface Container {
   status: string;
   image: string;
   running: boolean;
+  imageSize?: string;
+  diskUsage?: string;
 }
 
 interface SeafileStatus {
   running: boolean;
   containers: Container[];
   localIp?: string;
+  imagesSize?: string;
+}
+
+interface SeafDavStatus {
+  enabled: boolean;
+  port: string;
+  shareName: string;
 }
 
 const SeafileManager: React.FC = () => {
   const [status, setStatus] = useState<SeafileStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [seafdav, setSeafdav] = useState<SeafDavStatus | null>(null);
+  const [seafdavToggling, setSeafdavToggling] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     setLoading(true);
@@ -41,9 +54,35 @@ const SeafileManager: React.FC = () => {
     }
   }, []);
 
+  const fetchSeafdav = useCallback(async () => {
+    try {
+      const res = await api.get('/api/seafile/seafdav/status');
+      if (res.data.success) setSeafdav(res.data);
+    } catch {}
+  }, []);
+
+  const handleSeafdavToggle = async (enable: boolean) => {
+    setSeafdavToggling(true);
+    try {
+      const res = await api.post('/api/seafile/seafdav/toggle', { enable }, { timeout: 60000 });
+      if (res.data.success) {
+        message.success(res.data.message);
+        setSeafdav(prev => prev ? { ...prev, enabled: enable } : prev);
+        setTimeout(fetchStatus, 2000);
+      } else {
+        message.error(res.data.error || '操作失败');
+      }
+    } catch (err: any) {
+      message.error(`操作失败：${err?.response?.data?.error || err?.message || '未知错误'}`);
+    } finally {
+      setSeafdavToggling(false);
+    }
+  };
+
   useEffect(() => {
     fetchStatus();
-  }, [fetchStatus]);
+    fetchSeafdav();
+  }, [fetchStatus, fetchSeafdav]);
 
   const handleAction = async (action: 'start' | 'stop' | 'restart') => {
     const labels: Record<string, string> = { start: '启动', stop: '停止', restart: '重启' };
@@ -53,6 +92,7 @@ const SeafileManager: React.FC = () => {
       if (res.data.success) {
         message.success(res.data.message || `${labels[action]}成功`);
         setTimeout(fetchStatus, 1500);
+        if (action === 'start' || action === 'stop') setTimeout(fetchSeafdav, 1500);
       } else {
         message.error(res.data.error || `${labels[action]}失败`);
       }
@@ -93,6 +133,24 @@ const SeafileManager: React.FC = () => {
       key: 'image',
       render: (img: string) => <Text type="secondary" style={{ fontSize: 12 }}>{img}</Text>,
     },
+    {
+      title: '镜像大小',
+      dataIndex: 'imageSize',
+      key: 'imageSize',
+      width: 110,
+      render: (v: string) => v
+        ? <Text style={{ color: '#fa8c16' }}>{v}</Text>
+        : <Text type="secondary">—</Text>,
+    },
+    {
+      title: '数据占用',
+      dataIndex: 'diskUsage',
+      key: 'diskUsage',
+      width: 100,
+      render: (v: string) => v
+        ? <Text strong style={{ color: '#1677ff' }}>{v}</Text>
+        : <Text type="secondary">—</Text>,
+    },
   ];
 
   const isRunning = status?.running ?? false;
@@ -115,8 +173,8 @@ const SeafileManager: React.FC = () => {
             </Button>
           }
         >
-          <Space size="large" align="center" style={{ flexWrap: 'wrap' }}>
-            <Space align="center">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+            <Space size="large" align="center">
               <Badge
                 status={loading ? 'processing' : isRunning ? 'success' : 'error'}
                 text={
@@ -125,20 +183,20 @@ const SeafileManager: React.FC = () => {
                   </Text>
                 }
               />
+              {isRunning && status?.localIp && (
+                <Button
+                  type="link"
+                  icon={<LinkOutlined />}
+                  href={`http://${status.localIp}`}
+                  target="_blank"
+                  style={{ padding: 0 }}
+                >
+                  {`http://${status.localIp}`}
+                </Button>
+              )}
             </Space>
 
-            {isRunning && status?.localIp && (
-              <Button
-                type="link"
-                icon={<LinkOutlined />}
-                href={`http://${status.localIp}`}
-                target="_blank"
-                style={{ padding: 0 }}
-              >
-                {`http://${status.localIp}`}
-              </Button>
-            )}
-          </Space>
+          </div>
 
           <div style={{ marginTop: 20 }}>
             <Space wrap>
@@ -188,6 +246,68 @@ const SeafileManager: React.FC = () => {
               locale={{ emptyText: '未找到 Seafile 容器' }}
             />
           )}
+          {status?.imagesSize && (
+            <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #f0f0f0' }}>
+              <Space size={6}>
+                <HddOutlined style={{ color: '#fa8c16' }} />
+                <Text type="secondary">容器镜像总占用</Text>
+                <Text strong style={{ color: '#fa8c16' }}>{status.imagesSize}</Text>
+              </Space>
+            </div>
+          )}
+        </Card>
+
+        {/* SeafDAV */}
+        <Card
+          title={
+            <Space>
+              <CloudServerOutlined />
+              SeafDAV（WebDAV）
+            </Space>
+          }
+        >
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Space align="center" size="large">
+              <Space>
+                <Text>状态：</Text>
+                <Badge
+                  status={seafdav?.enabled && isRunning ? 'success' : 'default'}
+                  text={seafdav?.enabled && isRunning ? '已开启' : seafdav?.enabled && !isRunning ? '已配置（Seafile 未运行）' : '已关闭'}
+                />
+              </Space>
+              <Tooltip title={!isRunning ? 'Seafile 未运行，请先启动 Seafile' : '切换后将自动重启 Seafile'}>
+                <Switch
+                  checked={seafdav?.enabled ?? false}
+                  loading={seafdavToggling}
+                  disabled={!isRunning}
+                  onChange={handleSeafdavToggle}
+                  checkedChildren="开启"
+                  unCheckedChildren="关闭"
+                />
+              </Tooltip>
+            </Space>
+
+            {seafdav?.enabled && isRunning && status?.localIp && (
+              <Space direction="vertical" size={4}>
+                <Text type="secondary" style={{ fontSize: 12 }}>WebDAV 地址：</Text>
+                <Button
+                  type="link"
+                  icon={<LinkOutlined />}
+                  href={`http://${status.localIp}${seafdav.shareName}`}
+                  target="_blank"
+                  style={{ padding: 0, height: 'auto' }}
+                >
+                  {`http://${status.localIp}${seafdav.shareName}`}
+                </Button>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  在 Finder 中使用：前往 → 连接服务器，输入上方地址，账号为 Seafile 登录账号
+                </Text>
+              </Space>
+            )}
+            {seafdav?.enabled && !isRunning && (
+              <Text type="secondary" style={{ fontSize: 12 }}>Seafile 未运行，WebDAV 暂不可用</Text>
+            )}
+          </Space>
         </Card>
 
       </Space>

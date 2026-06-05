@@ -2816,12 +2816,15 @@ app.get('/api/seafile/status', async (_req, res) => {
   try {
     const { execSync } = await import('child_process');
     const output = execSync(
-      'docker ps -a --filter "name=seafile" --format "{{.Names}}|{{.Status}}|{{.Image}}"',
+      'docker ps -a --filter "name=seafile" --format "{{.Names}}|{{.Status}}|{{.Image}}|{{.Size}}"',
       { env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' }, encoding: 'utf8' }
     );
     const containers = output.trim().split('\n').filter(Boolean).map(line => {
-      const [name, status, image] = line.split('|');
-      return { name, status, image, running: status?.startsWith('Up') };
+      const [name, status, image, sizeStr] = line.split('|');
+      // sizeStr 格式: "16.8MB (virtual 1.49GB)"，取括号内的 virtual 值
+      const virtualMatch = sizeStr?.match(/virtual\s+([\d.]+\s*\w+)/i);
+      const imageSize = virtualMatch ? virtualMatch[1] : '';
+      return { name, status, image, running: status?.startsWith('Up'), imageSize };
     });
     const allRunning = containers.length > 0 && containers.every(c => c.running);
 
@@ -2838,7 +2841,41 @@ app.get('/api/seafile/status', async (_req, res) => {
       if (localIp) break;
     }
 
-    res.json({ success: true, running: allRunning, containers, localIp });
+    // 统计各容器关联的磁盘占用
+    const duSize = (p) => {
+      try {
+        return execSync(`du -sh "${p}" 2>/dev/null | cut -f1`, {
+          env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' },
+          encoding: 'utf8', timeout: 8000,
+        }).trim();
+      } catch (_) { return ''; }
+    };
+    // 容器名 → 数据目录映射
+    const containerDiskMap = {
+      seafile:           duSize(`${SEAFILE_DIR}/data/seafile/seafile-data`),
+      'seafile-mysql':   duSize(`${SEAFILE_DIR}/mysql`),
+      'seafile-memcached': '',
+    };
+    // 每个容器附上镜像大小和数据大小
+    const containersWithDisk = containers.map(c => {
+      // 按最长 key 优先匹配，避免 "seafile" 覆盖 "seafile-mysql"
+      const matchKey = Object.keys(containerDiskMap)
+        .sort((a, b) => b.length - a.length)
+        .find(k => c.name.includes(k));
+      return { ...c, diskUsage: matchKey ? containerDiskMap[matchKey] : '' };
+    });
+    // 镜像总占用
+    let imagesSize = '';
+    try {
+      const out = execSync(
+        'docker system df --format "{{.Type}}|{{.Size}}" 2>/dev/null',
+        { env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' }, encoding: 'utf8', timeout: 5000 }
+      );
+      const line = out.split('\n').find(l => l.startsWith('Images|'));
+      imagesSize = line ? line.split('|')[1] : '';
+    } catch (_) {}
+
+    res.json({ success: true, running: allRunning, containers: containersWithDisk, localIp, imagesSize });
   } catch (e) {
     res.json({ success: false, running: false, containers: [], error: e.message });
   }
@@ -2846,8 +2883,16 @@ app.get('/api/seafile/status', async (_req, res) => {
 
 app.post('/api/seafile/start', async (_req, res) => {
   try {
+    // 启动时同步开启 SeafDAV
+    try {
+      let conf = fs.readFileSync(SEAFDAV_CONF, 'utf8');
+      if (!/^\s*enabled\s*=\s*true/mi.test(conf)) {
+        conf = conf.replace(/^\s*enabled\s*=\s*(true|false)/mi, 'enabled = true');
+        fs.writeFileSync(SEAFDAV_CONF, conf, 'utf8');
+      }
+    } catch (_) {}
     await runDockerCompose('up -d');
-    res.json({ success: true, message: 'Seafile 已启动' });
+    res.json({ success: true, message: 'Seafile 已启动，SeafDAV 已开启' });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -2870,6 +2915,38 @@ app.post('/api/seafile/restart', async (_req, res) => {
     res.status(500).json({ success: false, error: e.message });
   }
 });
+
+const SEAFDAV_CONF = '/Users/maiyou001/seafile/data/seafile/conf/seafdav.conf';
+
+// 读取 SeafDAV 配置状态
+app.get('/api/seafile/seafdav/status', (_req, res) => {
+  try {
+    const content = fs.readFileSync(SEAFDAV_CONF, 'utf8');
+    const enabled = /^\s*enabled\s*=\s*true/mi.test(content);
+    const portMatch = content.match(/^\s*port\s*=\s*(\d+)/mi);
+    const shareMatch = content.match(/^\s*share_name\s*=\s*(\S+)/mi);
+    const port = portMatch ? portMatch[1] : '8080';
+    const shareName = shareMatch ? shareMatch[1] : '/seafdav';
+    res.json({ success: true, enabled, port, shareName });
+  } catch (e) {
+    res.json({ success: false, enabled: false, error: e.message });
+  }
+});
+
+// 开启 / 关闭 SeafDAV（修改 enabled 值，然后重启 Seafile）
+app.post('/api/seafile/seafdav/toggle', async (req, res) => {
+  const { enable } = req.body; // true = 开启，false = 关闭
+  try {
+    let content = fs.readFileSync(SEAFDAV_CONF, 'utf8');
+    content = content.replace(/^\s*enabled\s*=\s*(true|false)/mi, `enabled = ${enable ? 'true' : 'false'}`);
+    fs.writeFileSync(SEAFDAV_CONF, content, 'utf8');
+    await runDockerCompose('restart');
+    res.json({ success: true, enabled: !!enable, message: `SeafDAV 已${enable ? '开启' : '关闭'}，Seafile 已重启` });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ─────────────────────── IPA 工具 API ───────────────────────────────
 
 /** 从 URL 下载文件（支持 http/https 及重定向） */
