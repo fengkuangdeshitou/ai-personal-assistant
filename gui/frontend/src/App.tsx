@@ -13,6 +13,7 @@ import DataDecrypt from './pages/DataDecrypt';
 import SeafileManager from './pages/SeafileManager';
 import IpaViewer from './pages/IpaViewer';
 import SdkReplacer from './pages/SdkReplacer';
+import ApkReinforce from './pages/ApkReinforce';
 import './App.css';
 
 const { Content } = Layout;
@@ -37,6 +38,7 @@ function App() {
                   <Route path="/seafile" element={<SeafileManager />} />
                   <Route path="/ipa-viewer" element={<IpaViewer />} />
                   <Route path="/sdk-replacer" element={<SdkReplacer />} />
+                  <Route path="/apk-reinforce" element={<ApkReinforce />} />
                   <Route path="/settings" element={<Settings />} />
                 </Routes>
               </Content>

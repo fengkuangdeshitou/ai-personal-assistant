@@ -1,0 +1,698 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Card, Button, Typography, Space, Tag, Alert, Progress,
+  Divider, Tooltip, Badge, Row, Col, Input, Modal, Table,
+} from 'antd';
+import {
+  SafetyCertificateOutlined, CheckCircleOutlined, CloseCircleOutlined,
+  LoadingOutlined, DownloadOutlined, FolderOpenOutlined, SyncOutlined,
+  InfoCircleOutlined, WarningOutlined, EnvironmentOutlined,
+} from '@ant-design/icons';
+
+const { Title, Text } = Typography;
+
+interface EnvStatus {
+  python3: string | null;
+  java: string | null;
+  ndk: string | null;
+  dex2c: boolean;
+  apksigner: string | null;
+}
+
+interface ReinforceSession {
+  status: 'running' | 'done' | 'error';
+  stage?: 'queued' | 'initializing' | 'preprocess' | 'dcc' | 'postprocess' | 'done' | 'error';
+  progress: number;
+  log: string[];
+  outputName: string;
+  error?: string;
+  timing?: {
+    mode?: 'fast' | 'balanced' | 'full';
+    queueMs?: number;
+    preMs?: number;
+    dccMs?: number;
+    postMs?: number;
+    totalMs?: number;
+    retries?: number;
+  };
+}
+
+interface ReinforceHistoryItem {
+  ts: string;
+  sessionId: string;
+  status: 'running' | 'done' | 'error';
+  stage?: string;
+  error?: string | null;
+  outputName?: string;
+  progress?: number;
+  timing?: {
+    totalMs?: number;
+    retries?: number;
+  };
+  options?: {
+    selfCodeTemplate?: string;
+    reinforceMode?: string;
+  };
+}
+
+interface ApkItem {
+  path: string;
+  name: string;
+}
+
+const EnvRow: React.FC<{ label: string; value: string | null | boolean; tip?: string; action?: React.ReactNode }> = ({
+  label, value, tip, action,
+}) => {
+  const ok = value !== null && value !== false && value !== '';
+  return (
+    <Row align="middle" gutter={8} style={{ marginBottom: 8 }}>
+      <Col flex="20px">
+        {ok
+          ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
+          : <CloseCircleOutlined style={{ color: '#ff4d4f' }} />}
+      </Col>
+      <Col flex="100px"><Text strong>{label}</Text></Col>
+      <Col flex="auto">
+        <Text type={ok ? 'success' : 'danger'} style={{ fontSize: 12, wordBreak: 'break-all' }}>
+          {value === null || value === false || value === ''
+            ? '未找到'
+            : typeof value === 'boolean' ? '已安装' : value}
+        </Text>
+        {tip && !ok && (
+          <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>{tip}</Text>
+        )}
+      </Col>
+      {action && <Col>{action}</Col>}
+    </Row>
+  );
+};
+
+const ApkReinforce: React.FC = () => {
+  const [envStatus, setEnvStatus] = useState<EnvStatus | null>(null);
+  const [envLoading, setEnvLoading] = useState(false);
+  const [setupLoading, setSetupLoading] = useState(false);
+  const [ndkInstalling, setNdkInstalling] = useState(false);
+  const [setupLog, setSetupLog] = useState<string[]>([]);
+
+  const [apkItems, setApkItems] = useState<ApkItem[]>([]);
+  const [apkPath, setApkPath] = useState('');
+  const [apkName, setApkName] = useState('');
+  const [packageName, setPackageName] = useState('');
+  const reinforceMode: 'balanced' = 'balanced';
+  const [pickLoading, setPickLoading] = useState(false);
+
+  const [envModalOpen, setEnvModalOpen] = useState(false);
+
+  const [reinforcing, setReinforcing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [sessionId, setSessionId] = useState('');
+  const [session, setSession] = useState<ReinforceSession | null>(null);
+  const [historyItems, setHistoryItems] = useState<ReinforceHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [pickError, setPickError] = useState('');
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollErrorRef = useRef(0);
+  const logContainerRef = useRef<HTMLDivElement>(null);
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchEnvStatus = async () => {
+    setEnvLoading(true);
+    try {
+      const res = await fetch('/api/apk/env-check');
+      const data = await res.json();
+      setEnvStatus(data);
+    } finally {
+      setEnvLoading(false);
+    }
+  };
+
+  const fetchHistory = async (silent = false) => {
+    if (!silent) setHistoryLoading(true);
+    try {
+      const res = await fetch('/api/apk/reinforce-history?limit=20');
+      const data = await res.json();
+      if (data.success) {
+        const items = data.items || [];
+        setHistoryItems(items);
+        return items as ReinforceHistoryItem[];
+      }
+      return [] as ReinforceHistoryItem[];
+    } finally {
+      if (!silent) setHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchEnvStatus();
+    fetchHistory();
+    // 恢复上次未完成的加固会话
+    const savedId = localStorage.getItem('apkReinforceSessionId');
+    if (savedId) {
+      fetch(`/api/apk/reinforce-status/${savedId}`)
+        .then(r => r.json())
+        .then(data => {
+          if (!data.success) { localStorage.removeItem('apkReinforceSessionId'); return; }
+          setSessionId(savedId);
+          setSession(data);
+          if (data.status === 'running') {
+            setReinforcing(true);
+            startPolling(savedId);
+          }
+        })
+        .catch(() => {});
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, [session?.log]);
+
+  const handleInstallNdk = async () => {
+    setNdkInstalling(true);
+    setSetupLog(prev => [...prev, '正在通过 brew 安装 Android NDK，请稍候（约需 3-5 分钟）...']);
+    try {
+      const res = await fetch('/api/apk/install-ndk', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setSetupLog(prev => [...prev, '✅ NDK 安装完成']);
+        await fetchEnvStatus();
+      } else {
+        setSetupLog(prev => [...prev, `❌ NDK 安装失败: ${data.error}`]);
+      }
+    } catch (e: any) {
+      setSetupLog(prev => [...prev, `❌ 错误: ${e.message}`]);
+    } finally {
+      setNdkInstalling(false);
+    }
+  };
+
+  const handleSetupDex2c = async () => {
+    setSetupLoading(true);
+    setSetupLog(['正在安装 dex2c 工具链，请稍候（需要下载约 50MB）...']);
+    try {
+      const res = await fetch('/api/apk/setup-dex2c', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setSetupLog(prev => [...prev, '✅ 安装完成']);
+        await fetchEnvStatus();
+      } else {
+        setSetupLog(prev => [...prev, `❌ 安装失败: ${data.error}`]);
+      }
+    } catch (e: any) {
+      setSetupLog(prev => [...prev, `❌ 网络错误: ${e.message}`]);
+    } finally {
+      setSetupLoading(false);
+    }
+  };
+
+  const handlePickApk = async () => {
+    setPickLoading(true);
+    setPickError('');
+    try {
+      const res = await fetch('/api/apk/pick-files');
+      const data = await res.json();
+      if (data.success && Array.isArray(data.items) && data.items.length > 0) {
+        setApkItems(data.items);
+        setApkPath(data.items[0].path);
+        setApkName(data.items[0].name);
+        setSession(null);
+        localStorage.removeItem('apkReinforceSessionId');
+      } else if (!data.cancelled) {
+        setPickError(data.error || '未选择到有效 APK 文件');
+      }
+    } catch (e: any) {
+      console.error('选择文件失败:', e.message);
+      setPickError(`选择失败：${e.message}`);
+    } finally {
+      setPickLoading(false);
+    }
+  };
+
+  const handleReinforce = async () => {
+    if (!apkPath && apkItems.length === 0) return;
+    setReinforcing(true);
+    setSession(null);
+    try {
+      const targets = apkItems.length > 0 ? apkItems : [{ path: apkPath, name: apkName }];
+      let firstSessionId = '';
+      for (const target of targets) {
+        const res = await fetch('/api/apk/reinforce', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            apkPath: target.path,
+            ndkPath: envStatus?.ndk,
+            apksignerPath: envStatus?.apksigner,
+            protectAll: true,
+            reinforceMode,
+            packageName: packageName.trim() || undefined,
+          }),
+        });
+        const data = await res.json();
+        if (data.success && !firstSessionId) firstSessionId = data.sessionId;
+      }
+      if (firstSessionId) {
+        setSessionId(firstSessionId);
+        localStorage.setItem('apkReinforceSessionId', firstSessionId);
+        startPolling(firstSessionId);
+        await fetchHistory(true);
+      }
+    } catch (e: any) {
+      setReinforcing(false);
+      setSession({ status: 'error', progress: 0, log: [], outputName: '', error: e.message });
+    }
+  };
+
+  const startPolling = (sid: string) => {
+    pollErrorRef.current = 0;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/apk/reinforce-status/${sid}?logLimit=3000`);
+        const data = await res.json();
+        pollErrorRef.current = 0;
+        setSession(data);
+        if (data.status === 'running') {
+          fetchHistory(true);
+          pollRef.current = setTimeout(poll, 2000);
+        } else {
+          const items = await fetchHistory(true);
+          const hasRunning = items.some(item => item.status === 'running');
+          setReinforcing(hasRunning);
+          if (data.status === 'done') localStorage.removeItem('apkReinforceSessionId');
+        }
+      } catch (e: any) {
+        pollErrorRef.current += 1;
+        if (pollErrorRef.current >= 10) {
+          setReinforcing(false);
+          await fetchHistory(true);
+          setSession(prev => prev
+            ? { ...prev, status: 'error', error: `网络连接失败（${e.message}），请刷新页面重试` }
+            : null,
+          );
+          return;
+        }
+        pollRef.current = setTimeout(poll, 3000);
+      }
+    };
+    poll();
+  };
+
+  useEffect(() => () => { if (pollRef.current) clearTimeout(pollRef.current); }, []);
+
+  const handleCancel = async () => {
+    if (!sessionId) return;
+    setCancelling(true);
+    try {
+      await fetch(`/api/apk/cancel/${sessionId}`, { method: 'POST' });
+      localStorage.removeItem('apkReinforceSessionId');
+    } catch (_) {}
+    finally {
+      setCancelling(false);
+      setReinforcing(false);
+      fetchHistory(true);
+    }
+  };
+
+  const isEnvReady = !!(envStatus?.python3 && envStatus?.java && envStatus?.ndk && envStatus?.dex2c);
+  const formatMs = (ms?: number) => {
+    if (!ms || ms <= 0) return '-';
+    const sec = Math.round(ms / 1000);
+    if (sec < 60) return `${sec}s`;
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}m ${s}s`;
+  };
+  const formatTime = (iso?: string) => {
+    if (!iso) return '-';
+    try {
+      return new Date(iso).toLocaleString('zh-CN', { hour12: false });
+    } catch {
+      return iso;
+    }
+  };
+  const stageLabelMap: Record<string, string> = {
+    queued: '排队中',
+    initializing: '初始化',
+    preprocess: '预处理',
+    dcc: '核心编译',
+    postprocess: '后处理',
+    done: '完成',
+    error: '失败',
+  };
+  const historyTableData: ReinforceHistoryItem[] = sessionId && session
+    ? [
+      {
+        ts: new Date().toISOString(),
+        sessionId,
+        status: session.status,
+        stage: session.stage,
+        error: session.error,
+        outputName: session.outputName,
+        progress: session.progress,
+        timing: {
+          totalMs: session.timing?.totalMs,
+          retries: session.timing?.retries,
+        },
+        options: { reinforceMode: session.timing?.mode },
+      },
+      ...historyItems.filter(item => item.sessionId !== sessionId),
+    ]
+    : historyItems;
+
+  return (
+    <div style={{ padding: '24px 16px', width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <Space align="center" size={12}>
+          <Title level={4} style={{ margin: 0 }}>
+            <SafetyCertificateOutlined style={{ marginRight: 8, color: '#1677ff' }} />
+            APK 加固
+          </Title>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            基于 dex2c 将 Java 代码编译为 Native C，配合运行时防护，实现接近商业加固的防逆向保护。
+          </Text>
+        </Space>
+        <Space>
+          <Button
+            type="primary"
+            icon={reinforcing ? <LoadingOutlined /> : <SafetyCertificateOutlined />}
+            loading={reinforcing && !cancelling}
+            disabled={!isEnvReady || (!apkPath && apkItems.length === 0) || reinforcing}
+            onClick={handleReinforce}
+          >
+            {reinforcing ? '加固中...' : '开始加固'}
+          </Button>
+          {reinforcing && (
+            <Button
+              danger
+              size="small"
+              loading={cancelling}
+              onClick={handleCancel}
+            >
+              取消
+            </Button>
+          )}
+          <Button
+            icon={<EnvironmentOutlined />}
+            onClick={() => { setEnvModalOpen(true); fetchEnvStatus(); }}
+          >
+            环境检查
+          </Button>
+        </Space>
+      </div>
+
+      {/* ── 环境状态提示条 ── */}
+      {envStatus && !isEnvReady && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="运行环境未就绪"
+          description={`缺少：${[
+            !envStatus.python3 && 'Python3',
+            !envStatus.java && 'Java',
+            !envStatus.ndk && 'Android NDK',
+            !envStatus.dex2c && 'dex2c 工具',
+          ].filter(Boolean).join('、')}。请点击右上角「环境检查」完成配置。`}
+          action={
+            <Button size="small" onClick={() => { setEnvModalOpen(true); fetchEnvStatus(); }}>
+              配置环境
+            </Button>
+          }
+        />
+      )}
+
+      {/* ── 环境检查弹框 ── */}
+      <Modal
+        title={<Space><WarningOutlined />环境检查</Space>}
+        open={envModalOpen}
+        onCancel={() => setEnvModalOpen(false)}
+        footer={[
+          <Button key="refresh" icon={<SyncOutlined spin={envLoading} />} loading={envLoading} onClick={fetchEnvStatus}>
+            刷新
+          </Button>,
+          <Button key="close" type="primary" onClick={() => setEnvModalOpen(false)}>
+            关闭
+          </Button>,
+        ]}
+        width={600}
+      >
+        {envStatus ? (
+          <>
+            <EnvRow label="Python3" value={envStatus.python3} tip="brew install python3" />
+            <EnvRow label="Java" value={envStatus.java} tip="brew install openjdk（apktool 运行需要）" />
+            <EnvRow
+              label="Android NDK"
+              value={envStatus.ndk}
+              tip="Android Studio → SDK Manager → NDK（或点击右侧按钮自动安装）"
+              action={
+                !envStatus.ndk ? (
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={ndkInstalling}
+                    onClick={handleInstallNdk}
+                  >
+                    brew 安装 NDK
+                  </Button>
+                ) : undefined
+              }
+            />
+            <EnvRow
+              label="apksigner"
+              value={envStatus.apksigner}
+              tip="Android Studio → SDK Manager → Build-Tools"
+            />
+            <EnvRow
+              label="dex2c 工具"
+              value={envStatus.dex2c}
+              tip="点击右侧按钮自动安装"
+              action={
+                !envStatus.dex2c ? (
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={setupLoading}
+                    onClick={handleSetupDex2c}
+                    disabled={!envStatus.python3}
+                  >
+                    自动安装
+                  </Button>
+                ) : undefined
+              }
+            />
+            {setupLog.length > 0 && (
+              <div style={{ background: '#1a1a2e', borderRadius: 4, padding: '8px 12px', marginTop: 8 }}>
+                {setupLog.map((l, i) => (
+                  <div key={i} style={{ color: '#00ff88', fontFamily: 'monospace', fontSize: 12 }}>{l}</div>
+                ))}
+              </div>
+            )}
+            {!isEnvReady && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginTop: 12 }}
+                message="请完成上方环境配置后继续"
+              />
+            )}
+            {isEnvReady && (
+              <Alert type="success" showIcon style={{ marginTop: 12 }} message="环境就绪，可以开始加固" />
+            )}
+          </>
+        ) : (
+          <div style={{ textAlign: 'center', padding: 16 }}><LoadingOutlined /> 检测中...</div>
+        )}
+      </Modal>
+
+      <Card>
+        <Row gutter={16} align="top">
+          {/* 左侧：APK 与配置 */}
+          <Col xs={24} lg={10} style={{ display: 'flex' }}>
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <Card title={<Space><FolderOpenOutlined />当前 APK</Space>} size="small">
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Space wrap>
+                    <Button
+                      icon={<FolderOpenOutlined />}
+                      loading={pickLoading}
+                      onClick={handlePickApk}
+                      disabled={!isEnvReady}
+                    >
+                      选择 APK
+                    </Button>
+                    {apkName && <Tag color="blue" style={{ fontSize: 13 }}>{apkName}</Tag>}
+                    {apkItems.length > 1 && <Tag color="purple">{`已选择 ${apkItems.length} 个`}</Tag>}
+                  </Space>
+                  {apkPath
+                    ? <Text type="secondary" style={{ fontSize: 12 }}>{apkPath}</Text>
+                    : <Text type="secondary" style={{ fontSize: 12 }}>选择需要加固的 APK 文件（release 版本）</Text>}
+                  {pickError && <Text type="danger" style={{ fontSize: 12 }}>{pickError}</Text>}
+                  <div style={{ marginTop: 12 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      应用包名（可选，自动检测失败时填写，如 com.example.game）
+                    </Text>
+                    <Input
+                      placeholder="com.example.game（留空自动检测）"
+                      value={packageName}
+                      onChange={e => setPackageName(e.target.value)}
+                      style={{ marginTop: 4 }}
+                      size="small"
+                    />
+                  </div>
+                </Space>
+              </Card>
+
+              <Card title={<Space><SafetyCertificateOutlined />加固配置</Space>} size="small">
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Space>
+                    <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                    <Text>保护范围：仅自研核心代码（默认策略）</Text>
+                    <Tooltip title="dex2c 将所有 Java/Kotlin 方法编译为 ARM Native 代码，jadx/GDA 无法反编译">
+                      <InfoCircleOutlined style={{ color: '#8c8c8c', cursor: 'pointer' }} />
+                    </Tooltip>
+                  </Space>
+                  <Space>
+                    <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                    <Text>签名方式：Debug 签名（上架前需用正式 Keystore 重签）</Text>
+                  </Space>
+                </Space>
+              </Card>
+
+            </div>
+          </Col>
+
+          {/* 右侧：终端日志 */}
+          <Col xs={24} lg={14} style={{ display: 'flex' }}>
+            <Card
+              title="实时终端日志"
+              extra={session?.status === 'done' ? <Badge status="success" text="完成" /> : null}
+              bodyStyle={{ padding: 0 }}
+              style={{ width: '100%' }}
+            >
+              <div
+                ref={logContainerRef}
+                style={{
+                  height: 480,
+                  overflow: 'auto',
+                  background: '#0d1117',
+                  padding: '12px 14px',
+                  borderTop: '1px solid #30363d',
+                }}
+              >
+                {(session?.log ?? []).length === 0
+                  ? <Text style={{ color: '#8b949e', fontSize: 12 }}>等待加固日志输出...</Text>
+                  : (session?.log ?? []).map((line, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        color: line.startsWith('[err]') ? '#f85149' : '#e6edf3',
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        lineHeight: 1.55,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-all',
+                      }}
+                    >
+                      {line}
+                    </div>
+                  ))}
+                <div ref={logEndRef} />
+              </div>
+            </Card>
+          </Col>
+        </Row>
+      </Card>
+
+      <Card
+        title="加固历史"
+        style={{ marginTop: 16 }}
+        size="small"
+        extra={<Button size="small" onClick={() => { void fetchHistory(); }} loading={historyLoading}>刷新</Button>}
+        bodyStyle={{ minHeight: '50vh' }}
+      >
+        <Table
+          size="small"
+          loading={historyLoading}
+          rowKey={(r) => r.sessionId}
+          pagination={{ pageSize: 6, hideOnSinglePage: true }}
+          dataSource={historyTableData}
+          columns={[
+            {
+              title: '时间',
+              dataIndex: 'ts',
+              width: 170,
+              align: 'center',
+              render: (v) => <Text style={{ fontSize: 12 }}>{formatTime(v)}</Text>,
+            },
+            {
+              title: '状态',
+              dataIndex: 'status',
+              width: 90,
+              align: 'center',
+              render: (v) => (
+                <Badge
+                  status={v === 'done' ? 'success' : v === 'error' ? 'error' : 'processing'}
+                  text={v === 'done' ? '成功' : v === 'error' ? '失败' : '进行中'}
+                />
+              ),
+            },
+            {
+              title: '阶段',
+              dataIndex: 'stage',
+              width: 100,
+              align: 'center',
+              render: (v) => <Text style={{ fontSize: 12 }}>{stageLabelMap[v || 'initializing'] || v || '-'}</Text>,
+            },
+            {
+              title: '总耗时',
+              width: 100,
+              align: 'center',
+              render: (_, r) => <Text style={{ fontSize: 12 }}>{formatMs(r.timing?.totalMs)}</Text>,
+            },
+            {
+              title: '进度',
+              width: 90,
+              align: 'center',
+              render: (_, r) => {
+                const progress = typeof r.progress === 'number'
+                  ? r.progress
+                  : r.status === 'done'
+                    ? 100
+                    : undefined;
+                return <Text style={{ fontSize: 12 }}>{typeof progress === 'number' ? `${progress}%` : '-'}</Text>;
+              },
+            },
+            {
+              title: '重试',
+              width: 70,
+              align: 'center',
+              render: (_, r) => <Text style={{ fontSize: 12 }}>{r.timing?.retries ?? 0}</Text>,
+            },
+            {
+              title: '下载',
+              width: 120,
+              align: 'center',
+              render: (_, r) => (
+                r.status === 'done' && r.outputName
+                  ? (
+                    <a
+                      href={`/api/apk/download-reinforced/${r.sessionId}?filename=${encodeURIComponent(r.outputName)}`}
+                      download={r.outputName}
+                    >
+                      <Button size="small" icon={<DownloadOutlined />}>下载</Button>
+                    </a>
+                  )
+                  : <Text type="secondary" style={{ fontSize: 12 }}>-</Text>
+              ),
+            },
+          ]}
+        />
+      </Card>
+
+    </div>
+  );
+};
+
+export default ApkReinforce;

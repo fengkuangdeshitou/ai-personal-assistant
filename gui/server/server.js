@@ -3560,6 +3560,955 @@ app.post('/api/ipa/replace-by-path', async (req, res) => {
   }
 });
 
+// ── APK 加固 ────────────────────────────────────────────────────────
+
+const APK_TOOLS_DIR = path.join(__dirname, '../../tools');
+const DEX2C_DIR = path.join(APK_TOOLS_DIR, 'dex2c');
+if (!fs.existsSync(APK_TOOLS_DIR)) fs.mkdirSync(APK_TOOLS_DIR, { recursive: true });
+
+const APK_SESSION_DIR = path.join(__dirname, '.tmp', 'apk-reinforce');
+if (!fs.existsSync(APK_SESSION_DIR)) fs.mkdirSync(APK_SESSION_DIR, { recursive: true });
+const APK_REINFORCE_LOG_DIR = path.join(__dirname, 'logs');
+if (!fs.existsSync(APK_REINFORCE_LOG_DIR)) fs.mkdirSync(APK_REINFORCE_LOG_DIR, { recursive: true });
+const APK_REINFORCE_RUN_LOG = path.join(APK_REINFORCE_LOG_DIR, 'apk-reinforce-runs.jsonl');
+const APK_REINFORCE_CACHE_DIR = path.join(__dirname, '.cache', 'ccache');
+if (!fs.existsSync(APK_REINFORCE_CACHE_DIR)) fs.mkdirSync(APK_REINFORCE_CACHE_DIR, { recursive: true });
+const APK_REINFORCE_NATIVE_CACHE_DIR = path.join(__dirname, '.cache', 'native-libs');
+if (!fs.existsSync(APK_REINFORCE_NATIVE_CACHE_DIR)) fs.mkdirSync(APK_REINFORCE_NATIVE_CACHE_DIR, { recursive: true });
+const APK_REINFORCE_DEX_CACHE_DIR = path.join(__dirname, '.cache', 'dex-analysis');
+if (!fs.existsSync(APK_REINFORCE_DEX_CACHE_DIR)) fs.mkdirSync(APK_REINFORCE_DEX_CACHE_DIR, { recursive: true });
+const APK_REINFORCE_PREPROCESS_CACHE_DIR = path.join(__dirname, '.cache', 'preprocess');
+if (!fs.existsSync(APK_REINFORCE_PREPROCESS_CACHE_DIR)) fs.mkdirSync(APK_REINFORCE_PREPROCESS_CACHE_DIR, { recursive: true });
+
+function sha256File(filePath) {
+  const buf = fs.readFileSync(filePath);
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+const reinforceSessions = new Map();
+// 全局锁：确保同一时刻只有一个加固任务运行（dcc.cfg/filter.txt 全局共享）
+let reinforceMutex = Promise.resolve();
+
+function persistReinforceRunLog(sessionId, session) {
+  if (!session || session._persisted) return;
+  session._persisted = true;
+  const entry = {
+    ts: new Date().toISOString(),
+    sessionId,
+    status: session.status,
+    stage: session.stage,
+    error: session.error || null,
+    outputName: session.outputName,
+    options: session.options || {},
+    timing: session.timing || {},
+    // 仅保留尾部日志，避免文件膨胀
+    logTail: Array.isArray(session.log) ? session.log.slice(-80) : [],
+  };
+  try {
+    fs.appendFileSync(APK_REINFORCE_RUN_LOG, `${JSON.stringify(entry)}\n`, 'utf8');
+  } catch (e) {
+    console.error('[apk-reinforce] 写运行日志失败:', e.message);
+  }
+}
+
+function detectNdkPath() {
+  // 检查 ndk-build 是否存在，用于验证目录是否是有效 NDK
+  const isValidNdk = (p) => fs.existsSync(path.join(p, 'ndk-build'));
+
+  // 1. Android Studio SDK ndk 目录（优先使用，兼容性更稳定）
+  for (const base of [
+    path.join(os.homedir(), 'Library/Android/sdk/ndk'),
+    path.join(os.homedir(), 'Library/Android/sdk/ndk-bundle'),
+  ]) {
+    if (!fs.existsSync(base)) continue;
+    if (isValidNdk(base)) return base;
+    try {
+      const entries = fs.readdirSync(base)
+        .filter(e => {
+          const full = path.join(base, e);
+          return fs.statSync(full).isDirectory() && isValidNdk(full);
+        })
+        .sort().reverse();
+      if (entries.length > 0) return path.join(base, entries[0]);
+    } catch (_) {}
+  }
+
+  // 2. brew 安装路径（兜底）
+  const brewCaskBase = '/opt/homebrew/Caskroom/android-ndk';
+  if (fs.existsSync(brewCaskBase)) {
+    const versions = fs.readdirSync(brewCaskBase).sort().reverse();
+    for (const v of versions) {
+      const appNdk = path.join(brewCaskBase, v, 'AndroidNDK14206865.app', 'Contents', 'NDK');
+      if (isValidNdk(appNdk)) return appNdk;
+      const p = path.join(brewCaskBase, v);
+      if (isValidNdk(p)) return p;
+    }
+  }
+  for (const brewPath of [
+    '/opt/homebrew/share/android-ndk',       // 可能为 shim，放在最后兜底
+    '/usr/local/share/android-ndk',
+  ]) {
+    if (isValidNdk(brewPath)) return brewPath;
+  }
+
+  return null;
+}
+
+function detectApksignerPath(ndkPath) {
+  const searchDirs = [];
+  // 从 NDK 路径推断 SDK 根目录（仅适用于 SDK 内置 NDK）
+  if (ndkPath) searchDirs.push(ndkPath.replace(/\/ndk.*/, ''));
+  // 固定检查 Android Studio 默认 SDK 位置
+  searchDirs.push(path.join(os.homedir(), 'Library/Android/sdk'));
+  searchDirs.push('/usr/local/android-sdk');
+
+  for (const sdkRoot of searchDirs) {
+    const buildToolsDir = path.join(sdkRoot, 'build-tools');
+    if (!fs.existsSync(buildToolsDir)) continue;
+    const versions = fs.readdirSync(buildToolsDir).sort().reverse();
+    for (const v of versions) {
+      const p = path.join(buildToolsDir, v, 'apksigner');
+      if (fs.existsSync(p)) return p;
+    }
+  }
+  return null;
+}
+
+// 环境检查
+app.get('/api/apk/env-check', async (_req, res) => {
+  const result = { python3: null, java: null, ndk: null, dex2c: false, apksigner: null };
+  try { result.python3 = execSync('python3 --version 2>&1').toString().trim(); } catch (_) {}
+  try { result.java = execSync('java -version 2>&1').toString().split('\n')[0].trim(); } catch (_) {}
+  result.ndk = detectNdkPath();
+  result.apksigner = detectApksignerPath(result.ndk);
+  result.dex2c = fs.existsSync(path.join(DEX2C_DIR, 'dcc.py'));
+  res.json({ success: true, ...result });
+});
+
+// 选择 APK 文件
+app.get('/api/apk/pick-file', async (_req, res) => {
+  try {
+    const output = await runAppleScript(
+      'set f to choose file with prompt "选择 APK 文件"\n' +
+      'return POSIX path of f'
+    );
+    const apkPath = output.trim();
+    res.json({ success: true, path: apkPath, name: path.basename(apkPath) });
+  } catch (e) {
+    res.json({ success: false, cancelled: true });
+  }
+});
+
+// 选择多个 APK 文件
+app.get('/api/apk/pick-files', async (_req, res) => {
+  try {
+    const output = await runAppleScript(
+      'set fileList to choose file with prompt "选择 APK 文件（可单选/多选）" with multiple selections allowed\n' +
+      'set pathList to {}\n' +
+      'repeat with f in fileList\n' +
+      '  set end of pathList to POSIX path of f\n' +
+      'end repeat\n' +
+      'return pathList'
+    );
+    const paths = output
+      .split(', ')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .filter(p => p.toLowerCase().endsWith('.apk'));
+    if (paths.length === 0) {
+      return res.json({ success: false, cancelled: true, error: '未选择 APK 文件' });
+    }
+    res.json({
+      success: true,
+      paths,
+      items: paths.map(p => ({ path: p, name: path.basename(p) })),
+    });
+  } catch (e) {
+    res.json({ success: false, cancelled: true });
+  }
+});
+
+// 通过 brew 安装 Android NDK
+app.post('/api/apk/install-ndk', async (req, res) => {
+  req.setTimeout(30 * 60 * 1000);
+  try {
+    await runCmd('brew install --cask android-ndk');
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 自动安装 dex2c 工具链
+app.post('/api/apk/setup-dex2c', async (req, res) => {
+  req.setTimeout(30 * 60 * 1000);
+  try {
+    if (!fs.existsSync(DEX2C_DIR)) {
+      await runCmd(`git clone https://github.com/codehasan/dex2c "${DEX2C_DIR}"`);
+    }
+    await runCmd(`pip3 install -r "${path.join(DEX2C_DIR, 'requirements.txt')}"`);
+    // 下载 apktool.jar
+    const toolsDir = path.join(DEX2C_DIR, 'tools');
+    if (!fs.existsSync(toolsDir)) fs.mkdirSync(toolsDir, { recursive: true });
+    const apktoolPath = path.join(toolsDir, 'apktool.jar');
+    if (!fs.existsSync(apktoolPath)) {
+      await runCmd(`curl -L -o "${apktoolPath}" "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.2/apktool_3.0.2.jar"`);
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 开始加固
+app.post('/api/apk/reinforce', async (req, res) => {
+  const { apkPath, ndkPath, apksignerPath, protectAll = true, reinforceMode = 'balanced' } = req.body;
+  const normalizedMode = ['fast', 'balanced', 'full'].includes(reinforceMode) ? reinforceMode : 'balanced';
+  if (!apkPath || !fs.existsSync(apkPath)) {
+    return res.status(400).json({ success: false, error: 'APK 文件不存在' });
+  }
+  if (!fs.existsSync(path.join(DEX2C_DIR, 'dcc.py'))) {
+    return res.status(400).json({ success: false, error: '请先安装 dex2c 工具' });
+  }
+  const resolvedNdk = ndkPath || detectNdkPath();
+  if (!resolvedNdk) {
+    return res.status(400).json({ success: false, error: '未找到 Android NDK，请在 Android Studio 安装后重试' });
+  }
+
+  const sessionId = crypto.randomBytes(8).toString('hex');
+  const sessionDir = path.join(APK_SESSION_DIR, sessionId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  const apkBaseName = path.basename(apkPath, '.apk');
+  const inputApk = path.join(sessionDir, `${apkBaseName}.apk`);
+  const outputApk = path.join(sessionDir, `${apkBaseName}-reinforced.apk`);
+  fs.copyFileSync(apkPath, inputApk);
+
+  // ── 立即创建 session 并返回响应，后续所有工作异步执行 ──
+  const session = {
+    status: 'running',
+    stage: 'queued',
+    progress: 0,
+    log: [],
+    outputPath: outputApk,
+    outputName: `${apkBaseName}-reinforced.apk`,
+    proc: null,
+    timing: {
+      mode: normalizedMode,
+      createdAt: Date.now(),
+      queueMs: 0,
+      preMs: 0,
+      dccMs: 0,
+      postMs: 0,
+      totalMs: 0,
+      retries: 0,
+    },
+    options: null,
+    _persisted: false,
+  };
+  reinforceSessions.set(sessionId, session);
+  res.json({ success: true, sessionId });
+
+  // 所有耗时操作异步执行（使用 exec 而非 execSync，不阻塞事件循环）
+  const execAsync = (cmd, opts = {}) => new Promise((resolve, reject) => {
+    exec(cmd, { timeout: 180000, maxBuffer: 10 * 1024 * 1024, ...opts }, (err, stdout, stderr) => {
+      if (err) reject(err); else resolve({ stdout, stderr });
+    });
+  });
+
+  const _doReinforce = async () => {
+  const taskStart = Date.now();
+  session.stage = 'initializing';
+  session.timing.queueMs = Math.max(0, taskStart - (session.timing.createdAt || taskStart));
+  // ── 异步初始化：包名检测 + dcc.cfg 配置 ──
+  let filterContent = '';
+  let detectedPackage = req.body.packageName || '';
+  const filterPackages = new Set();
+  const modeConfig = {
+    fast: { retries: 1, runPreprocess: false },
+    balanced: { retries: 1, runPreprocess: false },
+    full: { retries: 5, runPreprocess: true },
+  }[normalizedMode];
+  const featureOptions = req.body.featureOptions || {};
+  // 固定默认策略：页面上的可选项不再影响实际执行，统一按默认值运行
+  const onlySelfCode = true;
+  const selfCodeTemplate = 'selfAll';
+  const templatePrefixMap = {
+    core: [
+      // 登录 / 鉴权
+      'com.gznb.game.ui.user',
+      'com.gznb.game.api',
+      'com.gznb.game.app',
+
+      // 支付 / 订单 / 业务主链路
+      'com.gznb.game.ui.manager.presenter',
+      'com.gznb.game.ui.manager.contract',
+      'com.gznb.game.ui.main.presenter',
+      'com.gznb.game.ui.main.contract',
+
+      // ApiService / 请求封装 / 签名验签
+      'com.gznb.game.util',
+      'com.gznb.game.interfaces',
+
+      // WebView addJavascriptInterface 常见承载位置
+      'com.gznb.game.ui.manager.activity',
+      'com.gznb.game.ui.dialog',
+
+      // 风控 / 设备标识 / 反作弊相关（自研 SDK 侧）
+      'com.gmspace.sdk.net',
+      'com.gmspace.sdk.utils',
+    ],
+    selfAll: ['com.gznb.game', 'com.gmspace.sdk'],
+    custom: [],
+  };
+  const selfCodePrefixes = templatePrefixMap.selfAll;
+  session.log.push('[cfg] selfAll 模板已启用：全量自研代码加固（极限防读）');
+  const enablePreprocess = true;
+  const enableResourcePatch = true;
+  const enableNdkFileTracking = true;
+  const retryLimit = 2;
+  session.options = {
+    reinforceMode: normalizedMode,
+    onlySelfCode,
+    selfCodeTemplate,
+    selfCodePrefixes,
+    preprocess: enablePreprocess,
+    resourcePatch: enableResourcePatch,
+    ndkFileTracking: enableNdkFileTracking,
+    maxRetries: retryLimit,
+    packageName: req.body.packageName || '',
+    apkPath: apkPath,
+    fixedDefaults: true,
+  };
+
+  // 用 aapt 检测清单包名
+  try {
+    const apksignerDir = path.dirname(detectApksignerPath() || '');
+    const aaptPath = path.join(apksignerDir, 'aapt');
+    if (fs.existsSync(aaptPath)) {
+      const { stdout: badging } = await execAsync(`"${aaptPath}" dump badging "${inputApk}" 2>/dev/null || true`);
+      const m = badging.match(/^package:.*?name='([^']+)'/m);
+      if (m) {
+        detectedPackage = detectedPackage || m[1];
+        filterPackages.add(m[1].replace(/\./g, '/'));
+      }
+    }
+  } catch (_) {}
+
+  if (req.body.packageName) filterPackages.add(req.body.packageName.replace(/\./g, '/'));
+  if (onlySelfCode) {
+    // 仅加固自研包，避免将系统/第三方依赖纳入编译，显著降低耗时并减少兼容风险
+    filterPackages.clear();
+    selfCodePrefixes.forEach(p => filterPackages.add(p.replace(/\./g, '/')));
+  }
+
+  // 写 dcc.cfg（包名稍后 pre 阶段补充）
+  const apktoolJar = path.join(DEX2C_DIR, 'tools', 'apktool.jar');
+  const resolvedApksigner = apksignerPath || detectApksignerPath(resolvedNdk);
+  let zipalignPath = null;
+  if (resolvedApksigner) {
+    const candidate = path.join(path.dirname(resolvedApksigner), 'zipalign');
+    if (fs.existsSync(candidate)) zipalignPath = candidate;
+  }
+  const debugKeystore = path.join(os.homedir(), '.android/debug.keystore');
+  const hasDebugKeystore = fs.existsSync(debugKeystore);
+
+  const dccCfg = { ndk_dir: resolvedNdk, apktool: apktoolJar };
+  if (resolvedApksigner) dccCfg.apksigner = resolvedApksigner;
+  if (zipalignPath) dccCfg.zipalign = zipalignPath;
+  if (hasDebugKeystore) {
+    dccCfg.signature = {
+      keystore_path: debugKeystore, alias: 'androiddebugkey',
+      keystore_pass: 'android', store_pass: 'android',
+      v1_enabled: true, v2_enabled: true, v3_enabled: false,
+    };
+  }
+  fs.writeFileSync(path.join(DEX2C_DIR, 'dcc.cfg'), JSON.stringify(dccCfg, null, 2));
+
+  // 统一生成 filter，避免 fast 模式下仍然走 apktool 预处理
+  const ensureFilterFile = () => {
+    if (filterPackages.size === 0 && detectedPackage) filterPackages.add(detectedPackage.replace(/\./g, '/'));
+    const includeRules = [...filterPackages].map(p => `${p}/.*`).join('\n');
+    if (!includeRules) { session.status = 'error'; session.error = '无法检测包名，请手动填写'; return false; }
+
+    const badClassesFile = path.join(DEX2C_DIR, 'bad_classes.json');
+    let knownBadClasses = [];
+    try {
+      if (fs.existsSync(badClassesFile)) {
+        const saved = JSON.parse(fs.readFileSync(badClassesFile, 'utf8'));
+        knownBadClasses = [...new Set([...saved])];
+      }
+    } catch (_) {}
+
+    const fastExtraExcludes = normalizedMode === 'fast'
+      ? [
+        '!.*/ui/.*',
+        '!.*/activity/.*',
+        '!.*/fragment/.*',
+        '!.*/adapter/.*',
+      ]
+      : [];
+
+    const autoExcludes = [
+      '!.*/databinding/.*',
+      '!.*/BR$',
+      '!.*BuildConfig$',
+      '!.*/interfaces/.*',
+      '!.*/bean/.*',
+      ...fastExtraExcludes,
+      ...knownBadClasses.map(c => `!${c}`),
+    ];
+    filterContent = autoExcludes.join('\n') + '\n' + includeRules;
+    fs.writeFileSync(path.join(DEX2C_DIR, 'filter.txt'), filterContent);
+    session.log.push(`[dcc] 模式: ${normalizedMode}，重试上限: ${modeConfig.retries}`);
+    if (onlySelfCode) {
+      session.log.push(`[dcc] 仅加固自研代码（模板: ${selfCodeTemplate}）: ${selfCodePrefixes.join(', ')}`);
+    }
+    session.log.push(`[dcc] 保护范围: ${[...filterPackages].map(p => p.replace(/\//g, '.')).join(', ')}`);
+    return true;
+  };
+
+  const computePreprocessCacheKey = () => {
+    const h = crypto.createHash('sha256');
+    h.update('pre-cache-v1\n');
+    h.update(`apk=${sha256File(inputApk)}\n`);
+    h.update(`mode=${normalizedMode}\n`);
+    h.update(`onlySelf=${onlySelfCode ? 1 : 0}\n`);
+    h.update(`template=${selfCodeTemplate}\n`);
+    h.update(`prefixes=${selfCodePrefixes.join(',')}\n`);
+    h.update(`pkg=${req.body.packageName || ''}\n`);
+    return h.digest('hex');
+  };
+
+  // ── 预处理：反编译 manifest，补充业务包名到 filter，必要时注入 Application stub ──
+  if (enablePreprocess) {
+    const preStart = Date.now();
+    session.stage = 'preprocess';
+    try {
+      const preCacheKey = computePreprocessCacheKey();
+      const preCacheDir = path.join(APK_REINFORCE_PREPROCESS_CACHE_DIR, preCacheKey);
+      const preCacheApk = path.join(preCacheDir, 'pre.apk');
+      const preCacheMeta = path.join(preCacheDir, 'meta.json');
+      if (fs.existsSync(preCacheApk) && fs.existsSync(preCacheMeta)) {
+        const meta = JSON.parse(fs.readFileSync(preCacheMeta, 'utf8'));
+        if (Array.isArray(meta.extraFilterPackages)) {
+          meta.extraFilterPackages.forEach(p => filterPackages.add(p));
+        }
+        fs.copyFileSync(preCacheApk, inputApk);
+        session.log.push('[pre] 命中预处理缓存，复用已处理 APK');
+        if (!ensureFilterFile()) return;
+      } else {
+        session.log.push('[pre] 检查 APK 是否有自定义 Application 类（反编译中...）');
+        const preDecompileDir = path.join(sessionDir, 'pre_decompile');
+        await execAsync(`java -jar "${apktoolJar}" d -f -o "${preDecompileDir}" "${inputApk}"`);
+
+        const manifestPath = path.join(preDecompileDir, 'AndroidManifest.xml');
+        const manifestText = fs.readFileSync(manifestPath, 'utf8');
+        const extraFilterPackages = [];
+
+        try {
+          const appMatch = manifestText.match(/android:name="([^"]+Application[^"]*)"/);
+          if (appMatch) {
+            const parts = appMatch[1].split('.');
+            if (parts.length >= 3) {
+              const codePkg = parts.slice(0, 3).join('/');
+              if (!filterPackages.has(codePkg)) {
+                filterPackages.add(codePkg);
+                extraFilterPackages.push(codePkg);
+                session.log.push(`[dcc] 检测到业务代码包: ${codePkg.replace(/\//g, '.')}，已加入保护范围`);
+              }
+            }
+          }
+        } catch (_) {}
+
+        if (!ensureFilterFile()) return;
+
+        const hasAppClass = /android:name\s*=/.test(manifestText.match(/<application[^>]*>/)?.[0] || '');
+        if (!hasAppClass && detectedPackage) {
+          session.log.push('[pre] 未检测到自定义 Application 类，注入 stub...');
+          const stubClass = detectedPackage + '.DccStub';
+          const stubPath = detectedPackage.replace(/\./g, '/');
+
+          const patchedManifest = manifestText.replace(
+            /<application(\s)/,
+            `<application\n        android:name="${stubClass}"$1`
+          );
+          fs.writeFileSync(manifestPath, patchedManifest);
+
+          const smaliDir = path.join(preDecompileDir, 'smali', ...stubPath.split('/'));
+          fs.mkdirSync(smaliDir, { recursive: true });
+          const smaliContent = `.class public L${stubPath}/DccStub;\n.super Landroid/app/Application;\n\n.method public constructor <init>()V\n    .registers 1\n    invoke-direct {p0}, Landroid/app/Application;-><init>()V\n    return-void\n.end method\n`;
+          fs.writeFileSync(path.join(smaliDir, 'DccStub.smali'), smaliContent);
+
+          const preBuiltApk = path.join(sessionDir, `${apkBaseName}-pre.apk`);
+          await execAsync(`java -jar "${apktoolJar}" b -o "${preBuiltApk}" "${preDecompileDir}"`);
+          fs.copyFileSync(preBuiltApk, inputApk);
+          session.log.push('[pre] stub 注入成功，dcc.py 将使用预处理后的 APK');
+        } else if (hasAppClass) {
+          session.log.push('[pre] 已有自定义 Application 类，跳过预处理');
+        } else {
+          session.log.push('[pre] 未检测到包名，跳过预处理');
+        }
+
+        try {
+          fs.mkdirSync(preCacheDir, { recursive: true });
+          fs.copyFileSync(inputApk, preCacheApk);
+          fs.writeFileSync(preCacheMeta, JSON.stringify({ extraFilterPackages }, null, 2), 'utf8');
+          session.log.push('[pre] 已写入预处理缓存');
+        } catch (_) {}
+      }
+    } catch (preErr) {
+      session.log.push(`[pre] 预处理跳过: ${preErr.message?.split('\n')[0]}`);
+      if (!ensureFilterFile()) return;
+    } finally {
+      session.timing.preMs += Date.now() - preStart;
+    }
+  } else {
+    session.log.push('[pre] 已关闭 apktool 预处理');
+    if (!ensureFilterFile()) return;
+  }
+
+  const progressMap = [
+    { kw: 'Decompil', pct: 5 },
+    { kw: 'smali', pct: 10 },
+    { kw: 'Translat', pct: 15 },
+    { kw: 'Generat', pct: 20 },
+    { kw: 'Compile++', pct: 25 },  // NDK 开始编译
+    { kw: 'Linking', pct: 88 },
+    { kw: 'Building apk', pct: 90 },
+    { kw: 'Zipalign', pct: 92 },
+    { kw: 'Signing', pct: 94 },
+  ];
+
+  // ── NDK 编译进度追踪：异步计算 .o 文件数量，不阻塞事件循环 ──
+  let ndkProgressTimer = null;
+  const countFilesAsync = (dir, ext) => new Promise(resolve => {
+    exec(`find "${dir}" -name "*${ext}" -type f 2>/dev/null | wc -l`, { timeout: 5000 }, (err, stdout) => {
+      resolve(err ? 0 : parseInt(stdout.trim()) || 0);
+    });
+  });
+
+  const scheduleNdkCheck = () => {
+    ndkProgressTimer = setTimeout(async () => {
+      try {
+        const tmpDir = path.join(DEX2C_DIR, '.tmp');
+        const entries = fs.existsSync(tmpDir)
+          ? fs.readdirSync(tmpDir).filter(e => e.startsWith('dcc-project-'))
+          : [];
+        if (entries.length > 0) {
+          const projDir = path.join(tmpDir, entries[0]);
+          const [total, done] = await Promise.all([
+            countFilesAsync(path.join(projDir, 'jni'), '.cpp'),
+            countFilesAsync(projDir, '.o'),
+          ]);
+          if (total > 10 && done > 0) {
+            const ndkPct = Math.min(87, 25 + Math.floor((done / total) * 62));
+            if (ndkPct > session.progress) session.progress = ndkPct;
+          }
+        }
+      } catch (_) {}
+      if (ndkTracking) scheduleNdkCheck();
+    }, 3000);
+  };
+
+  let ndkTracking = false;
+  const startNdkProgressTracking = () => {
+    if (ndkTracking) return;
+    ndkTracking = true;
+    scheduleNdkCheck();
+  };
+  const stopNdkProgressTracking = () => {
+    ndkTracking = false;
+    if (ndkProgressTimer) { clearTimeout(ndkProgressTimer); ndkProgressTimer = null; }
+  };
+
+  // 将 build-tools 目录加入 PATH，确保 zipalign/apksigner 可被 dcc.py 直接调用
+  const extraPath = zipalignPath ? path.dirname(zipalignPath) : '';
+  const spawnEnv = { ...process.env };
+  if (extraPath) spawnEnv.PATH = `${extraPath}:${spawnEnv.PATH || ''}`;
+  spawnEnv.DCC_LIB_CACHE = '1';
+  spawnEnv.DCC_LIB_CACHE_DIR = APK_REINFORCE_NATIVE_CACHE_DIR;
+  spawnEnv.DCC_DEX_CACHE = '1';
+  spawnEnv.DCC_DEX_CACHE_DIR = APK_REINFORCE_DEX_CACHE_DIR;
+  session.log.push(`[dcc] native 缓存目录: ${APK_REINFORCE_NATIVE_CACHE_DIR}`);
+  session.log.push(`[dcc] dex 缓存目录: ${APK_REINFORCE_DEX_CACHE_DIR}`);
+  // 自动启用 ccache：不降低保护效果，但重复构建会显著提速
+  try {
+    const ccachePath = execSync('command -v ccache 2>/dev/null').toString().trim();
+    if (ccachePath) {
+      spawnEnv.NDK_CCACHE = ccachePath;
+      // 固定 ccache 目录：让“同代码、不同包名”的多 APK 构建复用编译产物
+      spawnEnv.CCACHE_DIR = APK_REINFORCE_CACHE_DIR;
+      spawnEnv.CCACHE_BASEDIR = DEX2C_DIR;
+      spawnEnv.CCACHE_COMPILERCHECK = 'content';
+      spawnEnv.CCACHE_SLOPPINESS = 'time_macros';
+      spawnEnv.CCACHE_MAXSIZE = process.env.CCACHE_MAXSIZE || '10G';
+      try {
+        execSync(`"${ccachePath}" -M ${spawnEnv.CCACHE_MAXSIZE}`, { stdio: 'ignore' });
+      } catch (_) {}
+      try {
+        const statsBefore = execSync(`"${ccachePath}" -s 2>/dev/null | rg "cache hit|cache miss|cache size|max cache size" || true`).toString().trim();
+        if (statsBefore) session.log.push(`[dcc] ccache 统计(前): ${statsBefore.replace(/\n/g, ' | ')}`);
+      } catch (_) {}
+      session.log.push(`[dcc] 已启用 ccache: ${ccachePath}`);
+      session.log.push(`[dcc] ccache 目录: ${APK_REINFORCE_CACHE_DIR}`);
+    } else {
+      session.log.push('[dcc] 未检测到 ccache，建议 brew install ccache 以提升重复构建速度');
+    }
+  } catch (_) {
+    session.log.push('[dcc] 未检测到 ccache，建议 brew install ccache 以提升重复构建速度');
+  }
+  // 快速模式优先只编译 armeabi-v7a，避免 arm64 链接参数过长导致失败，并显著缩短耗时
+  if (normalizedMode === 'fast') {
+    spawnEnv.DCC_APP_ABI = 'armeabi-v7a';
+    session.log.push('[dcc] fast 模式: 仅编译 ABI=armeabi-v7a（速度优先）');
+  }
+
+  // 从 NDK 报错的 .cpp 文件名中提取 Java 类路径
+  // 例：Java_com_gznb_game_ui_main_videogame_newvideo_PreloadTask_start__.cpp
+  //   → com/gznb/game/ui/main/videogame/newvideo/PreloadTask
+  const extractClassFromCppFilename = (line) => {
+    const m = line.match(/jni\/nc\/Java_([^.:]+)\.cpp/);
+    if (!m) return null;
+    const parts = m[1].split('_');
+    const classParts = [];
+    for (const p of parts) {
+      classParts.push(p);
+      // 类名首字母大写时停止（之后是方法名）
+      if (/^[A-Z]/.test(p)) break;
+    }
+    return classParts.join('/');
+  };
+
+  // 自动重试机制：最多 MAX_RETRIES 次，每次排除编译失败的类
+  const MAX_RETRIES = retryLimit;
+  session.log.push(`[opt] 预处理:${enablePreprocess ? '开启' : '关闭'} 资源补全:${enableResourcePatch ? '开启' : '关闭'} NDK精细进度:${enableNdkFileTracking ? '开启' : '关闭'}`);
+  const excludedClasses = new Set();
+
+  const DCC_TIMEOUT_MS = 30 * 60 * 1000;
+  const runDcc = () => new Promise((resolve) => {
+    const dccArgs = ['dcc.py', '-a', inputApk, '-o', outputApk, '--skip-synthetic'];
+    session.log.push('[dcc] 已启用 --skip-synthetic（跳过合成方法编译）');
+    if (normalizedMode === 'fast') {
+      dccArgs.push('--force-keep-libs');
+      session.log.push('[dcc] fast 模式: 启用 --force-keep-libs（忽略 APK 原始 ABI 校验）');
+    }
+    const proc = spawn('python3', dccArgs, {
+      cwd: DEX2C_DIR, env: spawnEnv,
+    });
+    session.proc = proc;
+    const killTimer = setTimeout(() => {
+      session.log.push('[dcc] 超时（30分钟），强制终止进程');
+      try { proc.kill('SIGTERM'); } catch (_) {}
+    }, DCC_TIMEOUT_MS);
+    const collectedLines = [];
+
+    const onLine = (line) => {
+      if (!line.trim()) return;
+      session.log.push(line);
+      collectedLines.push(line);
+      for (const { kw, pct } of progressMap) {
+        if (line.includes(kw) && pct > session.progress) { session.progress = pct; break; }
+      }
+      // NDK 编译开始时启动进度追踪
+      if (enableNdkFileTracking && (line.includes('Compile++') || line.includes('ndk-build'))) startNdkProgressTracking();
+      // Linking 阶段说明 NDK 编译完成
+      if (enableNdkFileTracking && (line.includes('Linking') || line.includes('Zipalign') || line.includes('Signing'))) stopNdkProgressTracking();
+    };
+
+    proc.stdout.on('data', d => d.toString().split('\n').forEach(onLine));
+    proc.stderr.on('data', d => d.toString().split('\n').forEach(l => {
+      if (/\[(ERROR|WARN)\s*\]/.test(l) || /^Traceback|^  File |^\S*Error:|^\S*Exception:/.test(l.trim())) {
+        onLine(`[err] ${l}`);
+      } else {
+        onLine(l);
+      }
+    }));
+
+    proc.on('close', code => {
+      clearTimeout(killTimer);
+      session.proc = null;
+      stopNdkProgressTracking();
+      if (spawnEnv.NDK_CCACHE) {
+        try {
+          const statsAfter = execSync(`"${spawnEnv.NDK_CCACHE}" -s 2>/dev/null | rg "cache hit|cache miss|cache size|max cache size" || true`).toString().trim();
+          if (statsAfter) session.log.push(`[dcc] ccache 统计(后): ${statsAfter.replace(/\n/g, ' | ')}`);
+        } catch (_) {}
+      }
+      resolve({ code, lines: collectedLines });
+    });
+  });
+
+  // 运行 dcc.py，失败时自动排除有问题的类并重试
+  let retryCount = 0;
+  session.stage = 'dcc';
+  const dccStart = Date.now();
+  while (retryCount <= MAX_RETRIES) {
+    const { code, lines } = await runDcc();
+    if (fs.existsSync(outputApk)) break; // 成功
+
+    // 收集所有编译失败的类
+    const newExcludes = new Set();
+    for (const l of lines) {
+      if (l.includes('error:') && l.includes('.cpp')) {
+        const cls = extractClassFromCppFilename(l);
+        if (cls && !excludedClasses.has(cls)) newExcludes.add(cls);
+      }
+    }
+
+    if (newExcludes.size === 0 || retryCount >= MAX_RETRIES) {
+      const hasArgTooLong = lines.some(l => l.includes('Argument list too long'));
+      const hasAbiMismatch = lines.some(l => l.includes('ABI') && l.includes('is not supported'));
+      session.status = 'error';
+      session.error = hasArgTooLong
+        ? `NDK 链接失败（命令参数过长），建议使用 fast 模式或减少保护范围`
+        : hasAbiMismatch
+          ? `ABI 不匹配（原 APK 含多 ABI，当前编译 ABI 不完整），建议启用 --force-keep-libs 或使用 balanced 模式`
+          : `NDK 编译失败（已重试 ${retryCount} 次），请查看日志`;
+      return;
+    }
+
+    // 将新失败的类加入排除列表，更新 filter.txt
+    for (const cls of newExcludes) excludedClasses.add(cls);
+    const exclusions = [...excludedClasses].map(c => `!${c}`).join('\n');
+    const newFilter = `${exclusions}\n${filterContent}`;
+    fs.writeFileSync(path.join(DEX2C_DIR, 'filter.txt'), newFilter);
+
+    // 持久化到 bad_classes.json，下次直接预排除，避免重试
+    const badClassesFile = path.join(DEX2C_DIR, 'bad_classes.json');
+    try {
+      const existing = fs.existsSync(badClassesFile) ? JSON.parse(fs.readFileSync(badClassesFile, 'utf8')) : [];
+      const merged = [...new Set([...existing, ...newExcludes])];
+      fs.writeFileSync(badClassesFile, JSON.stringify(merged, null, 2));
+      session.log.push(`[retry ${retryCount + 1}] 已将 ${newExcludes.size} 个问题类记录到 bad_classes.json，下次加固将预先排除`);
+    } catch (_) {}
+
+    session.log.push(`[retry ${retryCount + 1}] 排除: ${[...newExcludes].map(c => c.replace(/\//g, '.')).join(', ')}`);
+    session.log.push(`[retry ${retryCount + 1}] 重新开始编译...`);
+    session.progress = 5;
+    retryCount++;
+    session.timing.retries = retryCount;
+  }
+  session.timing.dccMs += Date.now() - dccStart;
+
+  if (!fs.existsSync(outputApk)) {
+    session.status = 'error';
+    session.error = '加固失败，请查看日志';
+    return;
+  }
+
+  // dcc.py 完成，进入后处理阶段（资源修复、签名等）
+  await (async () => {
+    const postStart = Date.now();
+    session.stage = 'postprocess';
+    if (!enableResourcePatch) {
+      session.progress = 98;
+      session.log.push('[post] 已关闭资源补全，跳过资源完整性检查');
+      session.status = 'done';
+      session.stage = 'done';
+      session.progress = 100;
+      session.timing.postMs += Date.now() - postStart;
+      session.timing.totalMs = Date.now() - taskStart;
+      return;
+    }
+    // ── 后处理：修复 apktool 重打包时丢失的混淆资源文件 ──
+    // 用 Python zipfile 直接在内存中合并，不解压到磁盘，避免文件名特殊字符问题
+    try {
+      session.progress = 95;
+      session.log.push('[post] 检查资源文件完整性...');
+      const patchDir = path.join(sessionDir, 'patch');
+      fs.mkdirSync(patchDir, { recursive: true });
+      const patchedApk = path.join(patchDir, 'patched.apk');
+
+      const pyScript = `
+import zipfile, sys
+
+orig_apk  = sys.argv[1]
+reinf_apk = sys.argv[2]
+out_apk   = sys.argv[3]
+
+with zipfile.ZipFile(reinf_apk) as rf:
+    reinforced_names = set(rf.namelist())
+
+missing = []
+with zipfile.ZipFile(orig_apk) as of:
+    for item in of.infolist():
+        n = item.filename
+        if (n.startswith('res/') or n.startswith('assets/')) and n not in reinforced_names:
+            missing.append(item.filename)
+
+if not missing:
+    print('OK:0')
+    sys.exit(0)
+
+# 创建新 APK：复制加固内容（去掉旧签名）+ 补充缺失资源
+with zipfile.ZipFile(out_apk, 'w', zipfile.ZIP_DEFLATED, allowZip64=True) as out:
+    with zipfile.ZipFile(reinf_apk) as rf:
+        for item in rf.infolist():
+            if not item.filename.startswith('META-INF/'):
+                out.writestr(item, rf.read(item.filename))
+    with zipfile.ZipFile(orig_apk) as of:
+        for name in missing:
+            info = of.getinfo(name)
+            out.writestr(info, of.read(name))
+
+print('OK:' + str(len(missing)))
+`.trim();
+
+      // 写到临时文件执行，避免 -c 模式下换行符被转义
+      const pyScriptPath = path.join(patchDir, 'fix_res.py');
+      fs.writeFileSync(pyScriptPath, pyScript);
+      const { stdout: pyStdout } = await execAsync(
+        `python3 "${pyScriptPath}" "${apkPath}" "${outputApk}" "${patchedApk}"`,
+        { timeout: 600000 } // 大 APK 合并最多 10 分钟
+      );
+      const pyResult = pyStdout.trim();
+
+      session.log.push(`[post] Python 合并结果: ${pyResult}`);
+
+      if (pyResult.startsWith('OK:') && pyResult !== 'OK:0') {
+        const count = parseInt(pyResult.split(':')[1]);
+        // zipalign
+        const alignedApk = path.join(patchDir, 'patched-aligned.apk');
+        if (zipalignPath && fs.existsSync(zipalignPath)) {
+          await execAsync(`"${zipalignPath}" -p -f 4 "${patchedApk}" "${alignedApk}"`);
+          // 签名
+          if (hasDebugKeystore && resolvedApksigner) {
+            await execAsync(
+              `"${resolvedApksigner}" sign --ks "${debugKeystore}" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "${alignedApk}"`
+            );
+          }
+          fs.copyFileSync(alignedApk, outputApk);
+        } else {
+          fs.copyFileSync(patchedApk, outputApk);
+        }
+        session.progress = 98;
+        session.log.push(`[post] 资源修复完成，共补全 ${count} 个文件`);
+      } else if (pyResult === 'OK:0') {
+        session.progress = 98;
+        session.log.push('[post] 资源文件完整，无需修复');
+      }
+    } catch (postErr) {
+      const errMsg = postErr.stderr?.toString() || postErr.message || String(postErr);
+      session.log.push(`[post] 资源修复跳过: ${errMsg.substring(0, 400)}`);
+    }
+
+    session.status = 'done';
+    session.stage = 'done';
+    session.progress = 100;
+    session.timing.postMs += Date.now() - postStart;
+    session.timing.totalMs = Date.now() - taskStart;
+  })();
+
+  };
+
+  // 通过 mutex 串行加固，避免多任务并发写 dcc.cfg/filter.txt
+  reinforceMutex = reinforceMutex.then(() => _doReinforce().catch(err => {
+    if (session.status === 'running') {
+      session.status = 'error';
+      session.stage = 'error';
+      session.error = err.message || '未知错误';
+      session.log.push(`[FATAL] ${err.message}`);
+      if (!session.timing.totalMs) {
+        session.timing.totalMs = Date.now() - (session.timing.createdAt || Date.now());
+      }
+    }
+  }).finally(() => {
+    persistReinforceRunLog(sessionId, session);
+    // 完成后 30 分钟自动清理会话和临时文件
+    setTimeout(() => {
+      reinforceSessions.delete(sessionId);
+      try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch (_) {}
+    }, 30 * 60 * 1000);
+  }));
+});
+
+// 取消加固
+app.post('/api/apk/cancel/:sessionId', (req, res) => {
+  const session = reinforceSessions.get(req.params.sessionId);
+  if (!session) return res.status(404).json({ success: false, error: '会话不存在' });
+  if (session.status !== 'running') return res.json({ success: true, message: '任务已结束' });
+  if (session.proc) {
+    try { session.proc.kill('SIGTERM'); } catch (_) {}
+  }
+  session.status = 'error';
+  session.stage = 'error';
+  session.error = '用户取消';
+  if (!session.timing.totalMs) {
+    session.timing.totalMs = Date.now() - (session.timing.createdAt || Date.now());
+  }
+  session.log.push('[cancel] 加固已取消');
+  persistReinforceRunLog(req.params.sessionId, session);
+  res.json({ success: true });
+});
+
+// 查询加固进度
+app.get('/api/apk/reinforce-status/:sessionId', (req, res) => {
+  const session = reinforceSessions.get(req.params.sessionId);
+  if (!session) return res.status(404).json({ success: false, error: '会话不存在' });
+  const logLimit = Math.max(200, Math.min(5000, parseInt(req.query.logLimit, 10) || 2000));
+  res.json({
+    success: true,
+    status: session.status,
+    stage: session.stage,
+    progress: session.progress,
+    log: session.log.slice(-logLimit),
+    outputName: session.outputName,
+    error: session.error,
+    timing: session.timing,
+  });
+});
+
+// 查询历史加固耗时日志（用于复盘瓶颈）
+app.get('/api/apk/reinforce-history', (req, res) => {
+  const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 30));
+  const runningItems = [...reinforceSessions.entries()].map(([sessionId, session]) => ({
+    ts: new Date((session.timing?.createdAt || Date.now())).toISOString(),
+    sessionId,
+    status: session.status,
+    stage: session.stage,
+    error: session.error || null,
+    outputName: session.outputName,
+    progress: session.progress,
+    options: session.options || {},
+    timing: session.timing || {},
+    logTail: Array.isArray(session.log) ? session.log.slice(-80) : [],
+  }));
+  if (!fs.existsSync(APK_REINFORCE_RUN_LOG)) {
+    return res.json({ success: true, items: runningItems.slice(-limit).reverse() });
+  }
+  try {
+    const lines = fs.readFileSync(APK_REINFORCE_RUN_LOG, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .slice(-limit);
+    const persistedItems = lines.map(line => {
+      try { return JSON.parse(line); } catch (_) { return null; }
+    }).filter(Boolean);
+    const mergedBySession = new Map();
+    [...persistedItems, ...runningItems].forEach(item => {
+      mergedBySession.set(item.sessionId, item);
+    });
+    const items = [...mergedBySession.values()]
+      .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
+      .slice(0, limit);
+    res.json({ success: true, items });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 下载加固后 APK
+app.get('/api/apk/download-reinforced/:sessionId', (req, res) => {
+  const session = reinforceSessions.get(req.params.sessionId);
+  if (!session || session.status !== 'done' || !fs.existsSync(session.outputPath)) {
+    return res.status(404).json({ success: false, error: '文件不存在或加固未完成' });
+  }
+  const filename = req.query.filename || session.outputName;
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(String(filename))}"`);
+  res.sendFile(session.outputPath);
+});
+
 // ── 后端管理 ────────────────────────────────────────────────────────
 
 app.post('/api/server/restart', (_req, res) => {
