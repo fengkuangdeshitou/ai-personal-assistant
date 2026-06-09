@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Card, Button, Typography, Space, Tag, Alert, Progress,
-  Divider, Tooltip, Badge, Row, Col, Input, Modal, Table,
+  Divider, Tooltip, Badge, Row, Col, Input, Table, Modal,
 } from 'antd';
 import {
   SafetyCertificateOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -98,7 +98,7 @@ const ApkReinforce: React.FC = () => {
   const [apkPath, setApkPath] = useState('');
   const [apkName, setApkName] = useState('');
   const [packageName, setPackageName] = useState('');
-  const reinforceMode: 'balanced' = 'balanced';
+  const reinforceMode: 'shellLite' = 'shellLite';
   const [pickLoading, setPickLoading] = useState(false);
 
   const [envModalOpen, setEnvModalOpen] = useState(false);
@@ -247,6 +247,9 @@ const ApkReinforce: React.FC = () => {
             apksignerPath: envStatus?.apksigner,
             protectAll: true,
             reinforceMode,
+            enableStage2Inject: true,
+            enableStage2RuntimeLoad: true,
+            enableStage3StripClasses2: true,
             packageName: packageName.trim() || undefined,
           }),
         });
@@ -548,15 +551,28 @@ const ApkReinforce: React.FC = () => {
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   <Space>
                     <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                    <Text>保护范围：仅自研核心代码（默认策略）</Text>
+                    <Text>模式：自研轻量壳（默认，目标 3 分钟内）</Text>
                     <Tooltip title="dex2c 将所有 Java/Kotlin 方法编译为 ARM Native 代码，jadx/GDA 无法反编译">
                       <InfoCircleOutlined style={{ color: '#8c8c8c', cursor: 'pointer' }} />
                     </Tooltip>
                   </Space>
                   <Space>
                     <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                    <Text>签名方式：Debug 签名（上架前需用正式 Keystore 重签）</Text>
+                    <Text>核心 dex（classes2+）加密写入 assets/payload，并从 APK 中删除明文版本</Text>
                   </Space>
+                  <Space>
+                    <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                    <Text>签名方式：Release 签名（已固定项目配置）</Text>
+                  </Space>
+                  <Space>
+                    <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                    <Text>签名后执行安全校验：确保输出 APK 不含任何明文业务 DEX（classes2+）</Text>
+                  </Space>
+                  <div style={{ marginTop: 6 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      发布策略已固定：默认执行壳接管 + 运行时加载 + 阶段3明文收敛，无需手动灰度开关。
+                    </Text>
+                  </div>
                 </Space>
               </Card>
 
@@ -568,7 +584,7 @@ const ApkReinforce: React.FC = () => {
             <Card
               title="实时终端日志"
               extra={session?.status === 'done' ? <Badge status="success" text="完成" /> : null}
-              bodyStyle={{ padding: 0 }}
+              styles={{ body: { padding: 0 } }}
               style={{ width: '100%' }}
             >
               <div
@@ -587,7 +603,13 @@ const ApkReinforce: React.FC = () => {
                     <div
                       key={i}
                       style={{
-                        color: line.startsWith('[err]') ? '#f85149' : '#e6edf3',
+                        color: line.startsWith('[err]') || line.includes('❌')
+                          ? '#f85149'
+                          : line.includes('✅')
+                            ? '#3fb950'
+                            : line.includes('⚠️')
+                              ? '#d29922'
+                              : '#e6edf3',
                         fontFamily: 'monospace',
                         fontSize: 12,
                         lineHeight: 1.55,
@@ -610,7 +632,7 @@ const ApkReinforce: React.FC = () => {
         style={{ marginTop: 16 }}
         size="small"
         extra={<Button size="small" onClick={() => { void fetchHistory(); }} loading={historyLoading}>刷新</Button>}
-        bodyStyle={{ minHeight: '50vh' }}
+        styles={{ body: { minHeight: '50vh' } }}
       >
         <Table
           size="small"
