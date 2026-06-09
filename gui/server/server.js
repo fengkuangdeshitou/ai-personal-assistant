@@ -264,7 +264,7 @@ function scanProjects(dir) {
 
 async function getLastCommitTime(repoPath) {
   try {
-    const git = simpleGit({ baseDir: repoPath });
+    const git = simpleGit({ baseDir: repoPath, timeout: { block: 4000 } });
     const log = await git.log({ maxCount: 1 });
     if (log && log.latest && log.latest.date) {
       return new Date(log.latest.date).toISOString();
@@ -283,7 +283,7 @@ async function getLastCommitTime(repoPath) {
 
 async function getStatusCounts(repoPath) {
   try {
-    const git = simpleGit({ baseDir: repoPath });
+    const git = simpleGit({ baseDir: repoPath, timeout: { block: 4000 } });
     const status = await git.status();
     const modified = (status.modified?.length || 0) + (status.renamed?.length || 0) + (status.staged?.length || 0);
     const added = (status.created?.length || 0) + (status.not_added?.length || 0);
@@ -297,7 +297,7 @@ async function getStatusCounts(repoPath) {
 
 async function getCurrentBranch(repoPath) {
   try {
-    const git = simpleGit({ baseDir: repoPath });
+    const git = simpleGit({ baseDir: repoPath, timeout: { block: 4000 } });
     const branch = await git.branch();
     return branch.current;
   } catch (e) {
@@ -514,26 +514,29 @@ app.post('/api/query-scheme-secret', async (req, res) => {
 app.get('/api/projects', async (_req, res) => {
   let projects = readConfig();
   if (!projects) {
-    // 如果没有projects.json文件，返回空数组
     projects = [];
   }
 
-  // Enrich with lastCommitTime, status, and branch
+  // 每个 git 操作独立 2 秒超时，全部项目并行执行，最坏2秒内完成
+  const T = (fn, fallback) =>
+    Promise.race([fn(), new Promise(r => setTimeout(() => r(fallback), 2000))]);
+
   const enriched = await Promise.all(
     projects.map(async (p) => {
-      const [lastCommitTime, status, branch] = await Promise.all([
-        getLastCommitTime(p.path),
-        getStatusCounts(p.path),
-        getCurrentBranch(p.path)
-      ]);
-      return { ...p, lastCommitTime, status, branch };
+      try {
+        const [lastCommitTime, status, branch] = await Promise.all([
+          T(() => getLastCommitTime(p.path), new Date().toISOString()),
+          T(() => getStatusCounts(p.path), { modified: 0, added: 0, deleted: 0, isClean: true }),
+          T(() => getCurrentBranch(p.path), 'unknown'),
+        ]);
+        return { ...p, lastCommitTime, status, branch };
+      } catch (_) {
+        return { ...p, lastCommitTime: new Date().toISOString(), status: { modified: 0, added: 0, deleted: 0, isClean: true }, branch: 'unknown' };
+      }
     })
   );
-  res.json({
-    success: true,
-    message: enriched,
-    count: enriched.length
-  });
+
+  res.json({ success: true, message: enriched, count: enriched.length });
 });
 
 // 扫描项目端点
@@ -542,15 +545,21 @@ app.post('/api/projects/scan', async (_req, res) => {
     // 重新扫描项目目录
     const scannedProjects = scanProjects(DEFAULT_DIR);
     
-    // Enrich with lastCommitTime, status, and branch
+    // Enrich with lastCommitTime, status, and branch（全部并行 + 2秒超时）
+    const TT = (fn, fallback) =>
+      Promise.race([fn(), new Promise(r => setTimeout(() => r(fallback), 2000))]);
     const enriched = await Promise.all(
       scannedProjects.map(async (p) => {
-        const [lastCommitTime, status, branch] = await Promise.all([
-          getLastCommitTime(p.path),
-          getStatusCounts(p.path),
-          getCurrentBranch(p.path)
-        ]);
-        return { ...p, lastCommitTime, status, branch };
+        try {
+          const [lastCommitTime, status, branch] = await Promise.all([
+            TT(() => getLastCommitTime(p.path), new Date().toISOString()),
+            TT(() => getStatusCounts(p.path), { modified: 0, added: 0, deleted: 0, isClean: true }),
+            TT(() => getCurrentBranch(p.path), 'unknown'),
+          ]);
+          return { ...p, lastCommitTime, status, branch };
+        } catch (_) {
+          return { ...p, lastCommitTime: new Date().toISOString(), status: { modified: 0, added: 0, deleted: 0, isClean: true }, branch: 'unknown' };
+        }
       })
     );
     
@@ -3732,6 +3741,41 @@ app.get('/api/apk/pick-files', async (_req, res) => {
   }
 });
 
+// 拖拽上传 APK 到服务端（前端 drag-and-drop 使用）
+const apkUploadDir = path.join(__dirname, '.tmp', 'apk-uploads');
+if (!fs.existsSync(apkUploadDir)) fs.mkdirSync(apkUploadDir, { recursive: true });
+
+const apkUploadMiddleware = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, apkUploadDir),
+    filename: (_req, file, cb) => {
+      const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+      cb(null, `${Date.now()}-${crypto.randomBytes(3).toString('hex')}-${safe}`);
+    },
+  }),
+  limits: { fileSize: 500 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    cb(null, file.originalname.toLowerCase().endsWith('.apk'));
+  },
+});
+
+app.post('/api/apk/upload', apkUploadMiddleware.array('files', 20), (req, res) => {
+  try {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (files.length === 0) {
+      return res.status(400).json({ success: false, error: '未收到有效 APK 文件（仅支持 .apk）' });
+    }
+    const items = files.map(f => ({
+      path: f.path,
+      name: f.originalname,
+      size: f.size,
+    }));
+    res.json({ success: true, items });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // 通过 brew 安装 Android NDK
 app.post('/api/apk/install-ndk', async (req, res) => {
   req.setTimeout(30 * 60 * 1000);
@@ -4208,6 +4252,78 @@ static jstring xor_jstr(JNIEnv *env, const unsigned char *src, int len, unsigned
     return out;
 }
 
+/* xor_cstr: 返回 XOR 解码后的 malloc C 字符串，调用方负责 free() */
+static char *xor_cstr(const unsigned char *src, int len, unsigned char key) {
+    char *tmp = (char *)malloc((size_t)len + 1);
+    if (tmp == NULL) return NULL;
+    for (int i = 0; i < len; i++) tmp[i] = (char)(src[i] ^ key);
+    tmp[len] = '\0';
+    return tmp;
+}
+
+/* C2: 扫描 /proc/self/maps 中是否含 frida 注入特征 */
+static int scan_maps_for_frida() {
+    static const unsigned char s_maps[] = ${cArr('/proc/self/maps')};
+    char *maps_path = xor_cstr(s_maps, (int)sizeof(s_maps), 0x5A);
+    if (maps_path == NULL) return 0;
+    FILE *f = fopen(maps_path, "r");
+    free(maps_path);
+    if (f == NULL) return 0;
+
+    /* frida 各注入模式均会在 maps 中留下以下特征之一 */
+    static const unsigned char s_k1[] = ${cArr('frida')};
+    static const unsigned char s_k2[] = ${cArr('gum-js-loop')};
+    static const unsigned char s_k3[] = ${cArr('gmain')};
+    static const unsigned char s_k4[] = ${cArr('linjector')};
+    char *k1 = xor_cstr(s_k1, (int)sizeof(s_k1), 0x5A);
+    char *k2 = xor_cstr(s_k2, (int)sizeof(s_k2), 0x5A);
+    char *k3 = xor_cstr(s_k3, (int)sizeof(s_k3), 0x5A);
+    char *k4 = xor_cstr(s_k4, (int)sizeof(s_k4), 0x5A);
+
+    char line[512];
+    int found = 0;
+    while (!found && fgets(line, (int)sizeof(line), f)) {
+        if ((k1 && strstr(line, k1)) ||
+            (k2 && strstr(line, k2)) ||
+            (k3 && strstr(line, k3)) ||
+            (k4 && strstr(line, k4))) {
+            found = 1;
+        }
+    }
+    fclose(f);
+    free(k1); free(k2); free(k3); free(k4);
+    return found;
+}
+
+/* C3: 读取 /proc/self/status 中 TracerPid，非零说明正在被调试 */
+static int check_tracerpid() {
+    static const unsigned char s_status[] = ${cArr('/proc/self/status')};
+    char *status_path = xor_cstr(s_status, (int)sizeof(s_status), 0x5A);
+    if (status_path == NULL) return 0;
+    FILE *f = fopen(status_path, "r");
+    free(status_path);
+    if (f == NULL) return 0;
+
+    static const unsigned char s_tracer[] = ${cArr('TracerPid:')};
+    char *tracer_key = xor_cstr(s_tracer, (int)sizeof(s_tracer), 0x5A);
+    if (tracer_key == NULL) { fclose(f); return 0; }
+    int key_len = (int)strlen(tracer_key);
+
+    char line[128];
+    int traced = 0;
+    while (fgets(line, (int)sizeof(line), f)) {
+        if (strncmp(line, tracer_key, (size_t)key_len) == 0) {
+            int pid = 0;
+            sscanf(line + key_len, " %d", &pid);
+            if (pid != 0) traced = 1;
+            break;
+        }
+    }
+    fclose(f);
+    free(tracer_key);
+    return traced;
+}
+
 static jstring get_signer_digest(JNIEnv *env, jobject appCtx) {
     jclass contextCls = (*env)->GetObjectClass(env, appCtx);
     if (contextCls == NULL || has_exception(env)) return NULL;
@@ -4366,8 +4482,8 @@ static jstring get_signer_digest(JNIEnv *env, jobject appCtx) {
     return out;
 }
 
-JNIEXPORT jbyteArray JNICALL
-Java_${stage2Path.replace(/\//g, '_')}_Stage2PayloadLoader_nativeAesDecrypt(JNIEnv *env, jclass clazz, jobject appCtx, jbyteArray enc, jstring pkg) {
+/* C1: 改为 static — 不导出符号，由 JNI_OnLoad 动态注册，消除精准 Hook 入口 */
+static jbyteArray nativeAesDecryptImpl(JNIEnv *env, jclass clazz, jobject appCtx, jbyteArray enc, jstring pkg) {
     (void)clazz;
     if (appCtx == NULL || enc == NULL || pkg == NULL) { LOGE("E01"); return NULL; }
     jsize len = (*env)->GetArrayLength(env, enc);
@@ -4582,6 +4698,61 @@ Java_${stage2Path.replace(/\//g, '_')}_Stage2PayloadLoader_nativeAesDecrypt(JNIE
     jbyteArray out = (jbyteArray)(*env)->CallObjectMethod(env, cipher, cipherDoFinal, body);
     if (out == NULL || has_exception(env)) { LOGE("E31"); return NULL; }
     return out;
+}
+
+/* C1: 全局缓存动态注册所需的方法名和签名字符串（RegisterNatives 不拷贝字符串）*/
+static char g_mn[20];  /* "nativeAesDecrypt" */
+static char g_ms[52];  /* JNI 方法签名 */
+
+/* JNI_OnLoad: 在 SO 加载时执行反调试检查，并动态注册 nativeAesDecryptImpl */
+JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
+    (void)reserved;
+
+    /* C2: /proc/self/maps 扫描 frida 特征（最有效，覆盖 frida-server 标准模式）*/
+    if (scan_maps_for_frida()) {
+        LOGE("E90");
+        return JNI_ERR;
+    }
+
+    /* C3: TracerPid 检测（过滤 ptrace 附加场景）*/
+    if (check_tracerpid()) {
+        LOGE("E91");
+        return JNI_ERR;
+    }
+
+    JNIEnv *env = NULL;
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        LOGE("E92");
+        return JNI_ERR;
+    }
+
+    /* C1: 用 XOR 编码的类名动态查找壳类，FindClass 不暴露明文类路径 */
+    static const unsigned char s_cls[] = ${cArr(stage2Path + '/' + shellLoaderClassName)};
+    char *cls_name = xor_cstr(s_cls, (int)sizeof(s_cls), 0x5A);
+    if (cls_name == NULL) return JNI_ERR;
+    jclass cls = (*env)->FindClass(env, cls_name);
+    free(cls_name);
+    if (cls == NULL || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        LOGE("E93");
+        return JNI_ERR;
+    }
+
+    /* C1: XOR 解码方法名和签名，写入全局 buffer，避免栈变量被回收 */
+    static const unsigned char s_mn[] = ${cArr('nativeAesDecrypt')};
+    static const unsigned char s_ms[] = ${cArr('(Landroid/content/Context;[BLjava/lang/String;)[B')};
+    for (int i = 0; i < (int)sizeof(s_mn); i++) g_mn[i] = (char)(s_mn[i] ^ 0x5A);
+    for (int i = 0; i < (int)sizeof(s_ms); i++) g_ms[i] = (char)(s_ms[i] ^ 0x5A);
+
+    JNINativeMethod methods[] = {
+        { g_mn, g_ms, (void *)nativeAesDecryptImpl }
+    };
+    if ((*env)->RegisterNatives(env, cls, methods, 1) != 0) {
+        LOGE("E94");
+        return JNI_ERR;
+    }
+
+    return JNI_VERSION_1_6;
 }
 `.trim();
       const nativeCPath = path.join(jniDir, 'shellguard.c');
@@ -6142,6 +6313,24 @@ app.get('/api/apk/reinforce-history', (req, res) => {
       .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
       .slice(0, limit);
     res.json({ success: true, items });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 清空加固历史（持久化日志 + 已结束内存会话）
+app.post('/api/apk/reinforce-history/clear', (_req, res) => {
+  try {
+    // 删除持久化历史文件
+    if (fs.existsSync(APK_REINFORCE_RUN_LOG)) {
+      fs.rmSync(APK_REINFORCE_RUN_LOG, { force: true });
+    }
+    // 清理已结束会话，保留进行中会话
+    for (const [sessionId, session] of reinforceSessions.entries()) {
+      if (session?.status === 'running') continue;
+      reinforceSessions.delete(sessionId);
+    }
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }

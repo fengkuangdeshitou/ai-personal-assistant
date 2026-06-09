@@ -1,12 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Card, Button, Typography, Space, Tag, Alert, Progress,
-  Divider, Tooltip, Badge, Row, Col, Input, Table, Modal,
+  Card, Button, Typography, Space, Alert,
+  Tooltip, Badge, Row, Col, Table, Modal,
 } from 'antd';
 import {
   SafetyCertificateOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  LoadingOutlined, DownloadOutlined, FolderOpenOutlined, SyncOutlined,
+  LoadingOutlined, DownloadOutlined, SyncOutlined,
   InfoCircleOutlined, WarningOutlined, EnvironmentOutlined,
+  InboxOutlined,
 } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
@@ -40,7 +41,7 @@ interface ReinforceSession {
 interface ReinforceHistoryItem {
   ts: string;
   sessionId: string;
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'done' | 'error' | 'pending';
   stage?: string;
   error?: string | null;
   outputName?: string;
@@ -97,7 +98,6 @@ const ApkReinforce: React.FC = () => {
   const [apkItems, setApkItems] = useState<ApkItem[]>([]);
   const [apkPath, setApkPath] = useState('');
   const [apkName, setApkName] = useState('');
-  const [packageName, setPackageName] = useState('');
   const reinforceMode: 'shellLite' = 'shellLite';
   const [pickLoading, setPickLoading] = useState(false);
 
@@ -110,10 +110,23 @@ const ApkReinforce: React.FC = () => {
   const [historyItems, setHistoryItems] = useState<ReinforceHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [pickError, setPickError] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollErrorRef = useRef(0);
+  const pollTickRef = useRef(0);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchJsonWithTimeout = async (url: string, init?: RequestInit, timeoutMs = 10000) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...(init || {}), signal: controller.signal });
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   const fetchEnvStatus = async () => {
     setEnvLoading(true);
@@ -129,8 +142,7 @@ const ApkReinforce: React.FC = () => {
   const fetchHistory = async (silent = false) => {
     if (!silent) setHistoryLoading(true);
     try {
-      const res = await fetch('/api/apk/reinforce-history?limit=20');
-      const data = await res.json();
+      const data = await fetchJsonWithTimeout('/api/apk/reinforce-history?limit=30', undefined, 8000);
       if (data.success) {
         const items = data.items || [];
         setHistoryItems(items);
@@ -148,8 +160,7 @@ const ApkReinforce: React.FC = () => {
     // 恢复上次未完成的加固会话
     const savedId = localStorage.getItem('apkReinforceSessionId');
     if (savedId) {
-      fetch(`/api/apk/reinforce-status/${savedId}`)
-        .then(r => r.json())
+      fetchJsonWithTimeout(`/api/apk/reinforce-status/${savedId}?logLimit=500`, undefined, 8000)
         .then(data => {
           if (!data.success) { localStorage.removeItem('apkReinforceSessionId'); return; }
           setSessionId(savedId);
@@ -207,28 +218,39 @@ const ApkReinforce: React.FC = () => {
     }
   };
 
-  const handlePickApk = async () => {
+  const handleUploadFiles = useCallback(async (files: File[]) => {
+    const apkFiles = files.filter(f => f.name.toLowerCase().endsWith('.apk'));
+    if (apkFiles.length === 0) {
+      setPickError('请上传 .apk 格式文件');
+      return;
+    }
     setPickLoading(true);
     setPickError('');
     try {
-      const res = await fetch('/api/apk/pick-files');
+      const form = new FormData();
+      apkFiles.forEach(f => form.append('files', f));
+      const res = await fetch('/api/apk/upload', { method: 'POST', body: form });
       const data = await res.json();
       if (data.success && Array.isArray(data.items) && data.items.length > 0) {
-        setApkItems(data.items);
-        setApkPath(data.items[0].path);
-        setApkName(data.items[0].name);
+        setApkItems(prev => {
+          const next = [...prev, ...data.items];
+          if (next.length > 0) {
+            setApkPath(next[0].path);
+            setApkName(next[0].name);
+          }
+          return next;
+        });
         setSession(null);
         localStorage.removeItem('apkReinforceSessionId');
-      } else if (!data.cancelled) {
-        setPickError(data.error || '未选择到有效 APK 文件');
+      } else {
+        setPickError(data.error || '上传失败');
       }
     } catch (e: any) {
-      console.error('选择文件失败:', e.message);
-      setPickError(`选择失败：${e.message}`);
+      setPickError(`上传失败：${e.message}`);
     } finally {
       setPickLoading(false);
     }
-  };
+  }, []);
 
   const handleReinforce = async () => {
     if (!apkPath && apkItems.length === 0) return;
@@ -236,32 +258,33 @@ const ApkReinforce: React.FC = () => {
     setSession(null);
     try {
       const targets = apkItems.length > 0 ? apkItems : [{ path: apkPath, name: apkName }];
-      let firstSessionId = '';
-      for (const target of targets) {
-        const res = await fetch('/api/apk/reinforce', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            apkPath: target.path,
-            ndkPath: envStatus?.ndk,
-            apksignerPath: envStatus?.apksigner,
-            protectAll: true,
-            reinforceMode,
-            enableStage2Inject: true,
-            enableStage2RuntimeLoad: true,
-            enableStage3StripClasses2: true,
-            packageName: packageName.trim() || undefined,
-          }),
-        });
-        const data = await res.json();
-        if (data.success && !firstSessionId) firstSessionId = data.sessionId;
+      // 所有任务同时启动（Promise.all 并发请求）
+      const results = await Promise.all(
+        targets.map(target =>
+          fetch('/api/apk/reinforce', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              apkPath: target.path,
+              ndkPath: envStatus?.ndk,
+              apksignerPath: envStatus?.apksigner,
+              protectAll: true,
+              reinforceMode,
+              enableStage2Inject: true,
+              enableStage2RuntimeLoad: true,
+              enableStage3StripClasses2: true,
+            }),
+          }).then(r => r.json()),
+        ),
+      );
+      const firstSession = results.find(d => d.success && d.sessionId);
+      if (firstSession) {
+        setSessionId(firstSession.sessionId);
+        localStorage.setItem('apkReinforceSessionId', firstSession.sessionId);
+        startPolling(firstSession.sessionId);
       }
-      if (firstSessionId) {
-        setSessionId(firstSessionId);
-        localStorage.setItem('apkReinforceSessionId', firstSessionId);
-        startPolling(firstSessionId);
-        await fetchHistory(true);
-      }
+      // 立即刷新历史，让所有已启动任务显示在队列里
+      await fetchHistory(true);
     } catch (e: any) {
       setReinforcing(false);
       setSession({ status: 'error', progress: 0, log: [], outputName: '', error: e.message });
@@ -270,14 +293,16 @@ const ApkReinforce: React.FC = () => {
 
   const startPolling = (sid: string) => {
     pollErrorRef.current = 0;
+    pollTickRef.current = 0;
     const poll = async () => {
       try {
-        const res = await fetch(`/api/apk/reinforce-status/${sid}?logLimit=3000`);
-        const data = await res.json();
+        const data = await fetchJsonWithTimeout(`/api/apk/reinforce-status/${sid}?logLimit=500`, undefined, 8000);
         pollErrorRef.current = 0;
+        pollTickRef.current += 1;
         setSession(data);
         if (data.status === 'running') {
-          fetchHistory(true);
+          // 历史列表是重接口，降频刷新避免占满后端请求队列
+          if (pollTickRef.current % 5 === 0) fetchHistory(true);
           pollRef.current = setTimeout(poll, 2000);
         } else {
           const items = await fetchHistory(true);
@@ -318,6 +343,31 @@ const ApkReinforce: React.FC = () => {
     }
   };
 
+  const handleClearHistory = async () => {
+    Modal.confirm({
+      title: '确认清空加固历史？',
+      content: '将删除后端已保存的历史记录（进行中的任务不受影响）。',
+      okText: '确认清空',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await fetchJsonWithTimeout('/api/apk/reinforce-history/clear', { method: 'POST' }, 10000);
+          await fetchHistory(true);
+          if (!reinforcing) setSession(null);
+        } catch (e: any) {
+          setSession(prev => ({
+            status: 'error',
+            progress: prev?.progress || 0,
+            log: prev?.log || [],
+            outputName: prev?.outputName || '',
+            error: `清空失败：${e?.message || '未知错误'}`,
+          }));
+        }
+      },
+    });
+  };
+
   const isEnvReady = !!(envStatus?.python3 && envStatus?.java && envStatus?.ndk && envStatus?.dex2c);
   const formatMs = (ms?: number) => {
     if (!ms || ms <= 0) return '-';
@@ -344,25 +394,40 @@ const ApkReinforce: React.FC = () => {
     done: '完成',
     error: '失败',
   };
-  const historyTableData: ReinforceHistoryItem[] = sessionId && session
-    ? [
-      {
-        ts: new Date().toISOString(),
-        sessionId,
-        status: session.status,
-        stage: session.stage,
-        error: session.error,
-        outputName: session.outputName,
-        progress: session.progress,
-        timing: {
-          totalMs: session.timing?.totalMs,
-          retries: session.timing?.retries,
+  // 队列项（已拖入但尚未点击开始加固）
+  const pendingItems: ReinforceHistoryItem[] = (!reinforcing && apkItems.length > 0)
+    ? apkItems.map((item, i) => ({
+      ts: new Date().toISOString(),
+      sessionId: `__pending__${i}__${item.name}`,
+      status: 'pending' as const,
+      stage: 'queued',
+      outputName: item.name,
+      progress: 0,
+    }))
+    : [];
+
+  const historyTableData: ReinforceHistoryItem[] = [
+    ...pendingItems,
+    ...(sessionId && session
+      ? [
+        {
+          ts: new Date().toISOString(),
+          sessionId,
+          status: session.status,
+          stage: session.stage,
+          error: session.error,
+          outputName: session.outputName,
+          progress: session.progress,
+          timing: {
+            totalMs: session.timing?.totalMs,
+            retries: session.timing?.retries,
+          },
+          options: { reinforceMode: session.timing?.mode },
         },
-        options: { reinforceMode: session.timing?.mode },
-      },
-      ...historyItems.filter(item => item.sessionId !== sessionId),
-    ]
-    : historyItems;
+        ...historyItems.filter(item => item.sessionId !== sessionId),
+      ]
+      : historyItems),
+  ];
 
   return (
     <div style={{ padding: '24px 16px', width: '100%' }}>
@@ -510,41 +575,80 @@ const ApkReinforce: React.FC = () => {
       </Modal>
 
       <Card>
-        <Row gutter={16} align="top">
+        <Row gutter={16} style={{ alignItems: 'stretch' }}>
           {/* 左侧：APK 与配置 */}
-          <Col xs={24} lg={10} style={{ display: 'flex' }}>
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <Card title={<Space><FolderOpenOutlined />当前 APK</Space>} size="small">
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <Space wrap>
-                    <Button
-                      icon={<FolderOpenOutlined />}
-                      loading={pickLoading}
-                      onClick={handlePickApk}
-                      disabled={!isEnvReady}
-                    >
-                      选择 APK
-                    </Button>
-                    {apkName && <Tag color="blue" style={{ fontSize: 13 }}>{apkName}</Tag>}
-                    {apkItems.length > 1 && <Tag color="purple">{`已选择 ${apkItems.length} 个`}</Tag>}
-                  </Space>
-                  {apkPath
-                    ? <Text type="secondary" style={{ fontSize: 12 }}>{apkPath}</Text>
-                    : <Text type="secondary" style={{ fontSize: 12 }}>选择需要加固的 APK 文件（release 版本）</Text>}
-                  {pickError && <Text type="danger" style={{ fontSize: 12 }}>{pickError}</Text>}
-                  <div style={{ marginTop: 12 }}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      应用包名（可选，自动检测失败时填写，如 com.example.game）
+          <Col xs={24} lg={10} style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 16, flex: 1 }}>
+              <Card
+                title={<Space><InboxOutlined />加固队列</Space>}
+                extra={(
+                  <Space size={8}>
+                    <Text style={{ fontSize: 12, fontWeight: 500, color: '#1677ff' }}>
+                      待加固队列（{apkItems.length} 个）
                     </Text>
-                    <Input
-                      placeholder="com.example.game（留空自动检测）"
-                      value={packageName}
-                      onChange={e => setPackageName(e.target.value)}
-                      style={{ marginTop: 4 }}
+                    <Button
                       size="small"
-                    />
+                      type="text"
+                      danger
+                      disabled={reinforcing || apkItems.length === 0}
+                      onClick={() => { setApkItems([]); setApkPath(''); setApkName(''); setPickError(''); }}
+                    >
+                      清空队列
+                    </Button>
+                  </Space>
+                )}
+                size="small"
+                style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+                styles={{ body: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '12px 16px' } }}
+              >
+                {/* 拖拽上传区 — 占满卡片剩余高度 */}
+                <div
+                  onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={e => {
+                    e.preventDefault();
+                    setIsDragging(false);
+                    if (!isEnvReady || reinforcing) return;
+                    void handleUploadFiles(Array.from(e.dataTransfer.files));
+                  }}
+                  onClick={() => {
+                    if (!isEnvReady || reinforcing) return;
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = '.apk';
+                    input.multiple = true;
+                    input.onchange = () => {
+                      if (input.files) void handleUploadFiles(Array.from(input.files));
+                    };
+                    input.click();
+                  }}
+                  style={{
+                    flex: 1,
+                    minHeight: 80,
+                    border: `2px dashed ${isDragging ? '#1677ff' : '#d9d9d9'}`,
+                    borderRadius: 8,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: (isEnvReady && !reinforcing) ? 'pointer' : 'not-allowed',
+                    background: isDragging ? '#e6f4ff' : '#fafafa',
+                    transition: 'all 0.2s',
+                    opacity: (isEnvReady && !reinforcing) ? 1 : 0.5,
+                  }}
+                >
+                  {pickLoading
+                    ? <LoadingOutlined style={{ fontSize: 28, color: '#1677ff' }} />
+                    : <InboxOutlined style={{ fontSize: 28, color: isDragging ? '#1677ff' : '#bfbfbf' }} />}
+                  <div style={{ marginTop: 8, fontSize: 14, color: isDragging ? '#1677ff' : '#595959' }}>
+                    {pickLoading ? '上传中…' : '拖拽 APK 到此处，或点击选择'}
                   </div>
-                </Space>
+                  <div style={{ fontSize: 12, color: '#8c8c8c', marginTop: 4 }}>
+                    支持多个文件同时拖入 · 仅接受 .apk
+                  </div>
+                </div>
+
+                {pickError && <Text type="danger" style={{ fontSize: 12, marginTop: 6 }}>{pickError}</Text>}
               </Card>
 
               <Card title={<Space><SafetyCertificateOutlined />加固配置</Space>} size="small">
@@ -631,15 +735,28 @@ const ApkReinforce: React.FC = () => {
         title="加固历史"
         style={{ marginTop: 16 }}
         size="small"
-        extra={<Button size="small" onClick={() => { void fetchHistory(); }} loading={historyLoading}>刷新</Button>}
-        styles={{ body: { minHeight: '50vh' } }}
+        extra={
+          <Space size={4}>
+            <Button size="small" onClick={() => { void fetchHistory(); }} loading={historyLoading}>刷新</Button>
+            <Button size="small" danger onClick={handleClearHistory}>清空</Button>
+          </Space>
+        }
+        styles={{ body: { padding: 0 } }}
       >
         <Table
           size="small"
           loading={historyLoading}
           rowKey={(r) => r.sessionId}
-          pagination={{ pageSize: 6, hideOnSinglePage: true }}
+          pagination={false}
           dataSource={historyTableData}
+          locale={{
+            emptyText: (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0' }}>
+                <SyncOutlined style={{ fontSize: 32, color: '#d9d9d9', marginBottom: 12 }} />
+                <Text type="secondary" style={{ fontSize: 13 }}>暂无加固记录</Text>
+              </div>
+            ),
+          }}
           columns={[
             {
               title: '时间',
@@ -655,8 +772,8 @@ const ApkReinforce: React.FC = () => {
               align: 'center',
               render: (v) => (
                 <Badge
-                  status={v === 'done' ? 'success' : v === 'error' ? 'error' : 'processing'}
-                  text={v === 'done' ? '成功' : v === 'error' ? '失败' : '进行中'}
+                  status={v === 'done' ? 'success' : v === 'error' ? 'error' : v === 'pending' ? 'default' : 'processing'}
+                  text={v === 'done' ? '成功' : v === 'error' ? '失败' : v === 'pending' ? '待加固' : '进行中'}
                 />
               ),
             },
