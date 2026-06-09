@@ -63,7 +63,7 @@ api.interceptors.response.use(
 export const projectApi = {
   // 获取项目列表
   getProjects: async (): Promise<ApiResponse> => {
-    const response = await api.get('/api/projects');
+    const response = await api.get('/api/projects', { timeout: 10000 });
     return response.data;
   },
 

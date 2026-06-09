@@ -1,28 +1,62 @@
 import { useState, useEffect, useCallback } from 'react';
 import { projectApi, ossApi } from './client';
+
+let projectsInFlight: Promise<any[]> | null = null;
+let projectsCacheAt = 0;
+let projectsCacheData: any[] = [];
+
 export const useProjects = () => {
   const [projects, setProjects] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadProjects = useCallback(async () => {
+    const now = Date.now();
+    // StrictMode 下首屏会重复触发 effect，5 秒内直接复用缓存避免重复请求
+    if (projectsCacheData.length > 0 && now - projectsCacheAt < 5000) {
+      setProjects(projectsCacheData);
+      return;
+    }
+    if (projectsInFlight) {
+      const data = await projectsInFlight;
+      setProjects(data);
+      return;
+    }
+
     console.log('Loading projects...');
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await projectApi.getProjects();
-      console.log('API response:', response);
-      if (response.success) {
-        console.log('Setting projects:', response.message?.length || 0, 'projects');
-        setProjects(response.message || []);
-      } else {
-        setError(response.error || '加载项目失败');
-      }
+      projectsInFlight = (async () => {
+        let response;
+        try {
+          response = await projectApi.getProjects();
+        } catch (e: any) {
+          // 后端偶发瞬时阻塞时，自动重试一次，避免页面直接报 timeout
+          if (e?.code === 'ECONNABORTED' || String(e?.message || '').includes('timeout')) {
+            response = await projectApi.getProjects();
+          } else {
+            throw e;
+          }
+        }
+        console.log('API response:', response);
+        if (!response.success) {
+          throw new Error(response.error || '加载项目失败');
+        }
+        return Array.isArray(response.message) ? response.message : [];
+      })();
+
+      const data = await projectsInFlight;
+      projectsCacheData = data;
+      projectsCacheAt = Date.now();
+      console.log('Setting projects:', data.length, 'projects');
+      setProjects(data);
     } catch (err: any) {
       console.error('Load projects error:', err);
       setError(err.response?.data?.error || err.message || '网络错误');
     } finally {
+      projectsInFlight = null;
       setIsLoading(false);
     }
   }, []);

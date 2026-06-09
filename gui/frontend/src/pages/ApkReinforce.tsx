@@ -61,6 +61,11 @@ interface ApkItem {
   name: string;
 }
 
+let envCheckInFlight: Promise<EnvStatus> | null = null;
+let envCheckCache: { ts: number; data: EnvStatus | null } = { ts: 0, data: null };
+let reinforceHistoryInFlight: Promise<ReinforceHistoryItem[]> | null = null;
+let reinforceHistoryCache: { ts: number; data: ReinforceHistoryItem[] } = { ts: 0, data: [] };
+
 const EnvRow: React.FC<{ label: string; value: string | null | boolean; tip?: string; action?: React.ReactNode }> = ({
   label, value, tip, action,
 }) => {
@@ -131,25 +136,59 @@ const ApkReinforce: React.FC = () => {
   const fetchEnvStatus = async () => {
     setEnvLoading(true);
     try {
-      const res = await fetch('/api/apk/env-check');
-      const data = await res.json();
+      const now = Date.now();
+      if (envCheckCache.data && now - envCheckCache.ts < 5000) {
+        setEnvStatus(envCheckCache.data);
+        return;
+      }
+
+      if (envCheckInFlight) {
+        const data = await envCheckInFlight;
+        setEnvStatus(data);
+        return;
+      }
+
+      envCheckInFlight = fetch('/api/apk/env-check').then(res => res.json());
+      const data = await envCheckInFlight;
+      envCheckCache = { ts: Date.now(), data };
       setEnvStatus(data);
     } finally {
+      envCheckInFlight = null;
       setEnvLoading(false);
     }
   };
 
-  const fetchHistory = async (silent = false) => {
+  const fetchHistory = async (silent = false, force = false) => {
     if (!silent) setHistoryLoading(true);
     try {
-      const data = await fetchJsonWithTimeout('/api/apk/reinforce-history?limit=30', undefined, 8000);
-      if (data.success) {
-        const items = data.items || [];
+      const now = Date.now();
+      if (!force && reinforceHistoryCache.data.length > 0 && now - reinforceHistoryCache.ts < 3000) {
+        setHistoryItems(reinforceHistoryCache.data);
+        return reinforceHistoryCache.data;
+      }
+
+      if (!force && reinforceHistoryInFlight) {
+        const items = await reinforceHistoryInFlight;
         setHistoryItems(items);
+        return items;
+      }
+
+      reinforceHistoryInFlight = (async () => {
+        const data = await fetchJsonWithTimeout('/api/apk/reinforce-history?limit=30', undefined, 8000);
+        if (!data.success) return [] as ReinforceHistoryItem[];
+        const items = data.items || [];
+        reinforceHistoryCache = { ts: Date.now(), data: items };
         return items as ReinforceHistoryItem[];
+      })();
+
+      const items = await reinforceHistoryInFlight;
+      if (Array.isArray(items)) {
+        setHistoryItems(items);
+        return items;
       }
       return [] as ReinforceHistoryItem[];
     } finally {
+      reinforceHistoryInFlight = null;
       if (!silent) setHistoryLoading(false);
     }
   };

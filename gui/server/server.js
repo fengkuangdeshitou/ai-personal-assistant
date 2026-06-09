@@ -45,6 +45,38 @@ const DEFAULT_DIR = '/Users/maiyou001/Project';
 const CONFIG_PATH = path.join(__dirname, 'projects.json');
 const OSS_CONFIG_PATH = path.join(__dirname, 'oss-connection-config.json');
 const CHANNEL_CONFIG_PATH = path.join(__dirname, 'channel-config.json');
+let statsCache = { ts: 0, data: null };
+let statsInFlight = null;
+let projectsCache = { ts: 0, data: null };
+let projectsInFlight = null;
+let projectsMetaByPath = new Map();
+
+// 全局 git 并发信号量：最多同时跑 3 个 git 子进程，防止 event loop 被打满
+const GIT_CONCURRENCY = 3;
+let gitRunning = 0;
+const gitQueue = [];
+function runGitOp(fn) {
+  return new Promise((resolve, reject) => {
+    const task = () => {
+      gitRunning++;
+      Promise.resolve().then(fn).then(
+        (v) => { gitRunning--; flushGitQueue(); resolve(v); },
+        (e) => { gitRunning--; flushGitQueue(); reject(e); }
+      );
+    };
+    if (gitRunning < GIT_CONCURRENCY) {
+      task();
+    } else {
+      gitQueue.push(task);
+    }
+  });
+}
+function flushGitQueue() {
+  while (gitQueue.length > 0 && gitRunning < GIT_CONCURRENCY) {
+    const task = gitQueue.shift();
+    task();
+  }
+}
 
 // 内存存储（用于小文件，如 IPA 解析时直接读取）
 const upload = multer({
@@ -263,46 +295,64 @@ function scanProjects(dir) {
 }
 
 async function getLastCommitTime(repoPath) {
-  try {
-    const git = simpleGit({ baseDir: repoPath, timeout: { block: 4000 } });
-    const log = await git.log({ maxCount: 1 });
-    if (log && log.latest && log.latest.date) {
-      return new Date(log.latest.date).toISOString();
+  return runGitOp(async () => {
+    try {
+      const git = simpleGit({ baseDir: repoPath, timeout: { block: 3000 } });
+      const log = await git.log({ maxCount: 1 });
+      if (log && log.latest && log.latest.date) {
+        return new Date(log.latest.date).toISOString();
+      }
+    } catch (_) {}
+    try {
+      return fs.statSync(repoPath).mtime.toISOString();
+    } catch (_) {
+      return new Date().toISOString();
     }
-  } catch (e) {
-    // ignore
-  }
-  // fallback: directory mtime
-  try {
-    const stat = fs.statSync(repoPath);
-    return stat.mtime.toISOString();
-  } catch (_) {
-    return new Date().toISOString();
-  }
+  });
 }
 
 async function getStatusCounts(repoPath) {
-  try {
-    const git = simpleGit({ baseDir: repoPath, timeout: { block: 4000 } });
-    const status = await git.status();
-    const modified = (status.modified?.length || 0) + (status.renamed?.length || 0) + (status.staged?.length || 0);
-    const added = (status.created?.length || 0) + (status.not_added?.length || 0);
-    const deleted = (status.deleted?.length || 0);
-    const isClean = status.isClean();
-    return { modified, added, deleted, isClean };
-  } catch (e) {
-    return { modified: 0, added: 0, deleted: 0, isClean: true, error: e.message };
-  }
+  return runGitOp(async () => {
+    try {
+      const git = simpleGit({ baseDir: repoPath, timeout: { block: 3000 } });
+      const status = await git.status();
+      const modified = (status.modified?.length || 0) + (status.renamed?.length || 0) + (status.staged?.length || 0);
+      const added = (status.created?.length || 0) + (status.not_added?.length || 0);
+      const deleted = (status.deleted?.length || 0);
+      const isClean = status.isClean();
+      return { modified, added, deleted, isClean };
+    } catch (e) {
+      return { modified: 0, added: 0, deleted: 0, isClean: true, error: e.message };
+    }
+  });
 }
 
 async function getCurrentBranch(repoPath) {
-  try {
-    const git = simpleGit({ baseDir: repoPath, timeout: { block: 4000 } });
-    const branch = await git.branch();
-    return branch.current;
-  } catch (e) {
-    return 'unknown';
-  }
+  return runGitOp(async () => {
+    try {
+      const git = simpleGit({ baseDir: repoPath, timeout: { block: 3000 } });
+      const branch = await git.branch();
+      return branch.current;
+    } catch (_) {
+      return 'unknown';
+    }
+  });
+}
+
+async function mapWithConcurrency(items, limit, worker) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const results = new Array(items.length);
+  let cursor = 0;
+  const n = Math.max(1, Math.min(limit || 1, items.length));
+  const runners = Array.from({ length: n }, async () => {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= items.length) break;
+      results[idx] = await worker(items[idx], idx);
+    }
+  });
+  await Promise.all(runners);
+  return results;
 }
 
 async function getWeeklyCommits(repoPath, days = 7) {
@@ -354,53 +404,43 @@ async function getWeeklyCommits(repoPath, days = 7) {
 }
 
 async function getTodayCommits(repoPath) {
+  return runGitOp(async () => {
   try {
-    const git = simpleGit({ baseDir: repoPath });
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    // Use local date string for git log --since
-    const sinceStr = today.getFullYear() + '-' + 
-                     String(today.getMonth() + 1).padStart(2, '0') + '-' + 
-                     String(today.getDate()).padStart(2, '0');
-    
-    const log = await git.log({ '--since': '1 day ago', '--all': true });
-    const commits = log.all || [];
-    
-    const detailedCommits = await Promise.all(
-      commits.map(async (commit) => {
-        try {
-          const diff = await git.diffSummary([`${commit.hash}^`, commit.hash]);
-          return {
-            hash: commit.hash.substring(0, 7),
-            message: commit.message,
-            author: commit.author_name,
-            email: commit.author_email,
-            date: commit.date,
-            insertions: diff.insertions || 0,
-            deletions: diff.deletions || 0,
-            files: diff.files.length,
-            changedFiles: diff.files.map(f => f.file).slice(0, 5)
-          };
-        } catch (e) {
-          return {
-            hash: commit.hash.substring(0, 7),
-            message: commit.message,
-            author: commit.author_name,
-            email: commit.author_email,
-            date: commit.date,
-            insertions: 0,
-            deletions: 0,
-            files: 0,
-            changedFiles: []
-          };
-        }
-      })
-    );
+    const git = simpleGit({ baseDir: repoPath, timeout: { block: 4000 } });
+
+    // 用单条 git log --shortstat 一次性拿到所有 commit + 增删行数，避免逐 commit diffSummary
+    const raw = await git.raw([
+      'log', '--since=midnight', '--all',
+      '--pretty=format:COMMIT|%h|%s|%an|%ae|%ai',
+      '--shortstat',
+      '--no-merges',
+    ]);
+
+    const lines = raw.split('\n');
+    const commits = [];
+    let current = null;
+    for (const line of lines) {
+      if (line.startsWith('COMMIT|')) {
+        const [, hash, message, author, email, date] = line.split('|');
+        current = { hash, message, author, email, date, insertions: 0, deletions: 0, files: 0, changedFiles: [] };
+        commits.push(current);
+      } else if (current && line.includes('changed')) {
+        const ins = (line.match(/(\d+) insertion/) || [])[1];
+        const del = (line.match(/(\d+) deletion/) || [])[1];
+        const fil = (line.match(/(\d+) file/) || [])[1];
+        current.insertions = parseInt(ins || '0', 10);
+        current.deletions = parseInt(del || '0', 10);
+        current.files = parseInt(fil || '0', 10);
+      }
+    }
+
+    const detailedCommits = commits;
     
     return detailedCommits;
   } catch (e) {
     return [];
   }
+  }); // end runGitOp
 }
 
 // 阿里云RFC3986编码函数
@@ -512,31 +552,62 @@ app.post('/api/query-scheme-secret', async (req, res) => {
 });
 
 app.get('/api/projects', async (_req, res) => {
-  let projects = readConfig();
-  if (!projects) {
-    projects = [];
+  try {
+    const now = Date.now();
+    if (projectsCache.data && now - projectsCache.ts < 10000) {
+      return res.json(projectsCache.data);
+    }
+    if (projectsInFlight) {
+      const data = await projectsInFlight;
+      return res.json(data);
+    }
+
+    projectsInFlight = (async () => {
+      let projects = readConfig();
+      if (!projects) projects = [];
+
+      // 直接返回基础项目列表，不做任何 git 操作
+      // git 元信息（分支/状态/最后提交）由前端按需单独调用 /api/project-meta/:path
+      const enriched = projects.map((p) => {
+        const cached = projectsMetaByPath.get(p.path);
+        return { ...p, ...(cached || {}) };
+      });
+
+      const payload = { success: true, message: enriched, count: enriched.length };
+      projectsCache = { ts: Date.now(), data: payload };
+      return payload;
+    })();
+
+    const payload = await projectsInFlight;
+    res.json(payload);
+  } finally {
+    projectsInFlight = null;
   }
+});
 
-  // 每个 git 操作独立 2 秒超时，全部项目并行执行，最坏2秒内完成
-  const T = (fn, fallback) =>
-    Promise.race([fn(), new Promise(r => setTimeout(() => r(fallback), 2000))]);
-
-  const enriched = await Promise.all(
-    projects.map(async (p) => {
-      try {
-        const [lastCommitTime, status, branch] = await Promise.all([
-          T(() => getLastCommitTime(p.path), new Date().toISOString()),
-          T(() => getStatusCounts(p.path), { modified: 0, added: 0, deleted: 0, isClean: true }),
-          T(() => getCurrentBranch(p.path), 'unknown'),
-        ]);
-        return { ...p, lastCommitTime, status, branch };
-      } catch (_) {
-        return { ...p, lastCommitTime: new Date().toISOString(), status: { modified: 0, added: 0, deleted: 0, isClean: true }, branch: 'unknown' };
-      }
-    })
-  );
-
-  res.json({ success: true, message: enriched, count: enriched.length });
+// 单项目 git 元信息（按需懒加载，只取 lastCommitTime + branch，不做 git status 避免阻塞）
+app.get('/api/project-meta', async (req, res) => {
+  const projectPath = req.query.path;
+  if (!projectPath) return res.status(400).json({ success: false, error: 'Missing path' });
+  // 先看内存缓存（10 分钟有效），直接返回不占 git 并发槽
+  const cached = projectsMetaByPath.get(projectPath);
+  if (cached && cached._ts && Date.now() - cached._ts < 600000) {
+    return res.json({ success: true, ...cached });
+  }
+  try {
+    const T = (fn, fallback) =>
+      Promise.race([fn(), new Promise(r => setTimeout(() => r(fallback), 2500))]);
+    // 仅并发 2 个轻量 git 命令（lastCommitTime + branch），不做 git status
+    const [lastCommitTime, branch] = await Promise.all([
+      T(() => getLastCommitTime(projectPath), new Date().toISOString()),
+      T(() => getCurrentBranch(projectPath), 'unknown'),
+    ]);
+    const meta = { lastCommitTime, branch, _ts: Date.now() };
+    projectsMetaByPath.set(projectPath, meta);
+    res.json({ success: true, lastCommitTime, branch });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 // 扫描项目端点
@@ -628,41 +699,62 @@ app.get('/api/commits/weekly', async (req, res) => {
 // Get dashboard stats
 app.get('/api/stats', async (req, res) => {
   try {
-    let projects = readConfig();
-    if (!projects) projects = scanProjects(DEFAULT_DIR);
-
-    const activeProjects = projects.filter(p => p.active !== false);
-
-    // Calculate today's Git statistics
-    let totalCommits = 0;
-    let totalInsertions = 0;
-    let totalDeletions = 0;
-
-    for (const project of activeProjects) {
-      try {
-        const commits = await getTodayCommits(project.path);
-        totalCommits += commits.length;
-
-        // Sum up insertions and deletions from today's commits
-        for (const commit of commits) {
-          totalInsertions += commit.insertions || 0;
-          totalDeletions += commit.deletions || 0;
-        }
-      } catch (error) {
-        // Skip projects that can't be analyzed
-        console.warn(`Failed to analyze git stats for ${project.name}:`, error.message);
-      }
+    const now = Date.now();
+    if (statsCache.data && now - statsCache.ts < 120000) {
+      return res.json(statsCache.data);
+    }
+    if (statsInFlight) {
+      const payload = await statsInFlight;
+      return res.json(payload);
     }
 
-    res.json({
-      projects: activeProjects.length,
-      totalProjects: projects.length,
-      commits: totalCommits,
-      insertions: totalInsertions,
-      deletions: totalDeletions
-    });
+    statsInFlight = (async () => {
+      let projects = readConfig();
+      if (!projects) projects = scanProjects(DEFAULT_DIR);
+      if (!Array.isArray(projects)) projects = [];
+
+      const activeProjects = projects.filter(p => p.active !== false);
+
+      const withTimeout = (fn, fallback) =>
+        Promise.race([fn(), new Promise(resolve => setTimeout(() => resolve(fallback), 3000))]);
+
+      // 限并发：每次只跑 2 个项目，避免 N 个项目同时 git log 把 CPU 打满
+      const rows = await mapWithConcurrency(activeProjects, 2, async (project) => {
+        try {
+            const commits = await withTimeout(() => getTodayCommits(project.path), []);
+            const totals = commits.reduce((acc, c) => {
+              acc.insertions += c.insertions || 0;
+              acc.deletions += c.deletions || 0;
+              return acc;
+            }, { insertions: 0, deletions: 0 });
+            return {
+              commits: commits.length,
+              insertions: totals.insertions,
+              deletions: totals.deletions,
+            };
+          } catch (error) {
+            console.warn(`Failed to analyze git stats for ${project.name}:`, error.message);
+            return { commits: 0, insertions: 0, deletions: 0 };
+          }
+      });
+
+      const payload = {
+        projects: activeProjects.length,
+        totalProjects: projects.length,
+        commits: rows.reduce((sum, r) => sum + r.commits, 0),
+        insertions: rows.reduce((sum, r) => sum + r.insertions, 0),
+        deletions: rows.reduce((sum, r) => sum + r.deletions, 0),
+      };
+      statsCache = { ts: Date.now(), data: payload };
+      return payload;
+    })();
+
+    const payload = await statsInFlight;
+    res.json(payload);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  } finally {
+    statsInFlight = null;
   }
 });// Get today's git operations for all projects
 app.get('/api/git/today-operations', async (req, res) => {

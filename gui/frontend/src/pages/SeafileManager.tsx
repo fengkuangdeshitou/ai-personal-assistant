@@ -35,6 +35,9 @@ interface SeafDavStatus {
   shareName: string;
 }
 
+let seafileStatusInFlight: Promise<SeafileStatus> | null = null;
+let seafileStatusCache: { ts: number; data: SeafileStatus | null } = { ts: 0, data: null };
+
 const SeafileManager: React.FC = () => {
   const [status, setStatus] = useState<SeafileStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -42,14 +45,28 @@ const SeafileManager: React.FC = () => {
   const [seafdav, setSeafdav] = useState<SeafDavStatus | null>(null);
   const [seafdavToggling, setSeafdavToggling] = useState(false);
 
-  const fetchStatus = useCallback(async () => {
+  const fetchStatus = useCallback(async (force = false) => {
     setLoading(true);
     try {
-      const res = await api.get('/api/seafile/status');
-      setStatus(res.data);
+      const now = Date.now();
+      if (!force && seafileStatusCache.data && now - seafileStatusCache.ts < 5000) {
+        setStatus(seafileStatusCache.data);
+        return;
+      }
+      if (!force && seafileStatusInFlight) {
+        const data = await seafileStatusInFlight;
+        setStatus(data);
+        return;
+      }
+
+      seafileStatusInFlight = api.get('/api/seafile/status').then(res => res.data as SeafileStatus);
+      const data = await seafileStatusInFlight;
+      seafileStatusCache = { ts: Date.now(), data };
+      setStatus(data);
     } catch {
       message.error('获取状态失败');
     } finally {
+      seafileStatusInFlight = null;
       setLoading(false);
     }
   }, []);
@@ -165,7 +182,7 @@ const SeafileManager: React.FC = () => {
           extra={
             <Button
               icon={<SyncOutlined spin={loading} />}
-              onClick={fetchStatus}
+                onClick={() => fetchStatus(true)}
               loading={loading}
               size="small"
             >

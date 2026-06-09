@@ -43,6 +43,9 @@ interface TodayOperationsResponse {
   totalProjects: number;
 }
 
+let todayOpsInFlight: Promise<TodayOperationsResponse> | null = null;
+let todayOpsCache: { ts: number; data: TodayOperationsResponse | null } = { ts: 0, data: null };
+
 const Timeline: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState<ProjectOperations[]>([]);
@@ -53,8 +56,26 @@ const Timeline: React.FC = () => {
   const loadTodayOperations = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${getApiBaseUrl()}/api/git/today-operations`);
-      const data: TodayOperationsResponse = await response.json();
+      const now = Date.now();
+      if (todayOpsCache.data && now - todayOpsCache.ts < 5000) {
+        const cached = todayOpsCache.data;
+        if (cached.success) {
+          setProjects(cached.projects);
+          return;
+        }
+      }
+
+      if (todayOpsInFlight) {
+        const shared = await todayOpsInFlight;
+        if (shared.success) setProjects(shared.projects);
+        else messageApi.error('获取工作记录失败');
+        return;
+      }
+
+      todayOpsInFlight = fetch(`${getApiBaseUrl()}/api/git/today-operations`)
+        .then(r => r.json() as Promise<TodayOperationsResponse>);
+      const data = await todayOpsInFlight;
+      todayOpsCache = { ts: Date.now(), data };
 
       if (data.success) {
         setProjects(data.projects);
@@ -65,6 +86,7 @@ const Timeline: React.FC = () => {
       console.error('Load today operations error:', error);
       messageApi.error('加载工作记录失败');
     } finally {
+      todayOpsInFlight = null;
       setLoading(false);
     }
   }, [messageApi]);

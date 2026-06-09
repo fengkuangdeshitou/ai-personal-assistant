@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Button, Avatar, Typography,
   Tag, message, Modal, Select, Progress, Spin, Alert
@@ -12,11 +12,19 @@ import {
   PlusOutlined,
   PullRequestOutlined,
   ExportOutlined,
-  ToolOutlined
+  ToolOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons';
 import { useProjects, useOSSConfig } from '../api';
 import { getApiBaseUrl } from '../utils/api';
 import './Projects.css';
+
+interface ProjectMeta {
+  lastCommitTime?: string;
+  branch?: string;
+  status?: { modified: number; added: number; deleted: number; isClean?: boolean };
+  loading?: boolean;
+}
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -51,6 +59,31 @@ const Projects: React.FC = () => {
   const [selectedEnv, setSelectedEnv] = useState<'dev' | 'prod'>('dev');
   const [selectedType, setSelectedType] = useState<'box' | 'ios' | 'other'>('box');
   const [projectGitStatus, setProjectGitStatus] = useState<Map<string, { operation: 'pull' | 'push' | null, progress: number, status: 'idle' | 'running' | 'success' | 'error', message: string }>>(new Map());
+  // 懒加载 git 元信息（branch / lastCommitTime / status），不阻塞列表显示
+  const [projectMeta, setProjectMeta] = useState<Map<string, ProjectMeta>>(new Map());
+  const metaFetchedPaths = useRef<Set<string>>(new Set());
+
+  const fetchProjectMeta = useCallback(async (projectPath: string) => {
+    if (metaFetchedPaths.current.has(projectPath)) return;
+    metaFetchedPaths.current.add(projectPath);
+    setProjectMeta(prev => new Map(prev.set(projectPath, { loading: true })));
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/api/project-meta?path=${encodeURIComponent(projectPath)}`);
+      const data = await res.json();
+      if (data.success) {
+        setProjectMeta(prev => new Map(prev.set(projectPath, {
+          lastCommitTime: data.lastCommitTime,
+          branch: data.branch,
+          status: data.status,
+          loading: false,
+        })));
+      } else {
+        setProjectMeta(prev => new Map(prev.set(projectPath, { loading: false })));
+      }
+    } catch {
+      setProjectMeta(prev => new Map(prev.set(projectPath, { loading: false })));
+    }
+  }, []);
 
   // 移除uploadAsZip状态，直接使用压缩上传作为默认行为
 
@@ -72,34 +105,26 @@ const Projects: React.FC = () => {
   ];
 
   useEffect(() => {
-    loadProjects();
-  }, [loadProjects]);
-
-  useEffect(() => {
     if (projects && projects.length > 0) {
-      console.log('Projects data loaded:', projects.length, 'projects');
-      console.log('Active projects:', projects.filter(p => p.active).length);
-      console.log('Selected type:', selectedType);
-      
-      // 过滤项目
-      const baseFiltered = projects.filter(p => p.active);
-      const filtered = baseFiltered.filter(p => p.type === selectedType);
-      console.log('Filtered projects for type', selectedType, ':', filtered.length);
-      
-      // 按最后提交时间排序，取最近6个
-      const sorted = [...filtered].sort((a: any, b: any) => {
-        const aTime = a.lastCommitTime ? new Date(a.lastCommitTime).getTime() : 0;
-        const bTime = b.lastCommitTime ? new Date(b.lastCommitTime).getTime() : 0;
-        return bTime - aTime;
-      });
-      console.log('Recent projects:', sorted.slice(0, 6).map(p => p.name));
-      
-      setRecentProjects(sorted.slice(0, 6));
+      const baseFiltered = projects.filter((p: any) => p.active);
+      const filtered = baseFiltered.filter((p: any) => p.type === selectedType);
+
+      // 不依赖 lastCommitTime 排序（该字段现在由懒加载填充），直接取前 6 个
+      setRecentProjects(filtered.slice(0, 6));
+
+      // 列表渲染后依次懒加载每个可见项目的 git 元信息（串行，避免并发打爆后端）
+      let delay = 0;
+      for (const p of filtered.slice(0, 6)) {
+        const path = (p as any).path;
+        if (!metaFetchedPaths.current.has(path)) {
+          setTimeout(() => fetchProjectMeta(path), delay);
+          delay += 300; // 每个项目间隔 300ms，避免同时发出
+        }
+      }
     } else {
-      console.log('No projects data or empty array');
       setRecentProjects([]);
     }
-  }, [projects, selectedType]);
+  }, [projects, selectedType, fetchProjectMeta]);
 
   // 格式化相对时间
   const formatRelativeTime = (dateString: string) => {
@@ -1047,19 +1072,30 @@ const Projects: React.FC = () => {
                   <div className="project-meta">
                     <div className="project-path">路径: {project.path}</div>
                     <div className="project-commit-info">
-                      {project.lastCommitTime && (
-                        <span className="project-commit-time">最后提交: {formatRelativeTime(project.lastCommitTime)}</span>
-                      )}
-                      {project.branch && (
-                        <Tag color="purple" style={{ marginLeft: '8px' }}>
-                          {project.branch}
-                        </Tag>
-                      )}
-                      {project.status && (project.status.modified > 0 || project.status.added > 0 || project.status.deleted > 0) && (
-                        <span className="project-changes" style={{ marginLeft: '8px' }}>
-                          改动: <span className="change-count">{project.status.modified + project.status.added + project.status.deleted}</span> 个文件
-                        </span>
-                      )}
+                      {(() => {
+                        const meta = projectMeta.get((project as any).path);
+                        if (meta?.loading) {
+                          return <LoadingOutlined style={{ color: '#aaa', fontSize: 12, marginRight: 6 }} />;
+                        }
+                        const lastCommitTime = meta?.lastCommitTime || (project as any).lastCommitTime;
+                        const branch = meta?.branch || (project as any).branch;
+                        const status = meta?.status || (project as any).status;
+                        return (
+                          <>
+                            {lastCommitTime && (
+                              <span className="project-commit-time">最后提交: {formatRelativeTime(lastCommitTime)}</span>
+                            )}
+                            {branch && branch !== 'unknown' && (
+                              <Tag color="purple" style={{ marginLeft: '8px' }}>{branch}</Tag>
+                            )}
+                            {status && (status.modified > 0 || status.added > 0 || status.deleted > 0) && (
+                              <span className="project-changes" style={{ marginLeft: '8px' }}>
+                                改动: <span className="change-count">{status.modified + status.added + status.deleted}</span> 个文件
+                              </span>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>

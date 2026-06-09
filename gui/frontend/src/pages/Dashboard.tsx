@@ -10,6 +10,9 @@ import { getApiBaseUrl } from '../utils/api';
 import './Dashboard.css';
 
 const { Title, Text } = Typography;
+let statsInFlight: Promise<any> | null = null;
+let statsCacheAt = 0;
+let statsCacheData: any = null;
 
 const Dashboard: React.FC = () => {
   const [greeting, setGreeting] = useState('');
@@ -49,12 +52,36 @@ const Dashboard: React.FC = () => {
 
   const loadStats = async () => {
     try {
-      console.log('Loading stats...');
-      const response = await fetch(`${getApiBaseUrl()}/api/stats`);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      const now = Date.now();
+      // StrictMode 下首屏重复 mount 时，短期复用缓存/进行中请求
+      if (statsCacheData && now - statsCacheAt < 5000) {
+        setStats({
+          commits: statsCacheData.commits || 0,
+          insertions: statsCacheData.insertions || 0,
+          deletions: statsCacheData.deletions || 0,
+          projects: statsCacheData.projects || 0
+        });
+        return;
       }
-      const data = await response.json();
+      if (statsInFlight) {
+        const data = await statsInFlight;
+        setStats({
+          commits: data.commits || 0,
+          insertions: data.insertions || 0,
+          deletions: data.deletions || 0,
+          projects: data.projects || 0
+        });
+        return;
+      }
+
+      console.log('Loading stats...');
+      statsInFlight = fetch(`${getApiBaseUrl()}/api/stats`).then(r => {
+        if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+        return r.json();
+      });
+      const data = await statsInFlight;
+      statsCacheData = data;
+      statsCacheAt = Date.now();
       console.log('Stats data:', data);
 
       setStats({
@@ -72,6 +99,8 @@ const Dashboard: React.FC = () => {
         deletions: 0,
         projects: 0
       });
+    } finally {
+      statsInFlight = null;
     }
   };
 
