@@ -110,18 +110,20 @@ app.use(express.json());
 
 // 全请求日志（调试用）
 app.use((req, _res, next) => {
-  if (req.path.startsWith('/api/ipa')) {
-    console.log(`[req] ${req.method} ${req.path} origin=${req.headers.origin || '-'} ct=${(req.headers['content-type'] || '').split(';')[0]}`);
+  if (req.path.startsWith('/api/ipa') || req.path.startsWith('/api/apk')) {
+    console.log(`[req] ${req.method} ${req.path} origin=${req.headers.origin || '-'} ip=${req.ip || req.socket?.remoteAddress || '-'} ct=${(req.headers['content-type'] || '').split(';')[0]}`);
   }
   next();
 });
 
-// IPA 替换等耗时操作：延长超时（30 分钟）
-app.use('/api/ipa', (req, res, next) => {
-  req.setTimeout(30 * 60 * 1000);
-  res.setTimeout(30 * 60 * 1000);
-  next();
-});
+// IPA / APK 加固等耗时操作：延长超时（30 分钟）
+for (const prefix of ['/api/ipa', '/api/apk']) {
+  app.use(prefix, (req, res, next) => {
+    req.setTimeout(30 * 60 * 1000);
+    res.setTimeout(30 * 60 * 1000);
+    next();
+  });
+}
 
 // 提供静态文件服务 - 从上级gui目录提供HTML文件
 app.use(express.static(path.join(__dirname, '..')));

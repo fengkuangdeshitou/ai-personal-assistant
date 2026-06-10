@@ -9,6 +9,7 @@ import {
   InfoCircleOutlined, WarningOutlined, EnvironmentOutlined,
   InboxOutlined,
 } from '@ant-design/icons';
+import { apiUrl } from '../utils/api';
 
 const { Title, Text } = Typography;
 
@@ -147,6 +148,14 @@ const ApkReinforce: React.FC = () => {
     }
   };
 
+  const parseEnvStatus = (data: Record<string, unknown>): EnvStatus => ({
+    python3: (data.python3 as string) ?? null,
+    java: (data.java as string) ?? null,
+    ndk: (data.ndk as string) ?? null,
+    dex2c: !!data.dex2c,
+    apksigner: (data.apksigner as string) ?? null,
+  });
+
   const fetchEnvStatus = async () => {
     setEnvLoading(true);
     try {
@@ -162,10 +171,19 @@ const ApkReinforce: React.FC = () => {
         return;
       }
 
-      envCheckInFlight = fetch('/api/apk/env-check').then(res => res.json());
+      envCheckInFlight = fetch(apiUrl('/api/apk/env-check'))
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok || data.success === false) {
+            throw new Error(data.error || `环境检查失败 (${res.status})`);
+          }
+          return parseEnvStatus(data);
+        });
       const data = await envCheckInFlight;
       envCheckCache = { ts: Date.now(), data };
       setEnvStatus(data);
+    } catch (e: any) {
+      setPickError(prev => prev || `环境检查失败：${e?.message || '网络错误'}`);
     } finally {
       envCheckInFlight = null;
       setEnvLoading(false);
@@ -188,7 +206,7 @@ const ApkReinforce: React.FC = () => {
       }
 
       reinforceHistoryInFlight = (async () => {
-        const data = await fetchJsonWithTimeout('/api/apk/reinforce-history?limit=30', undefined, 8000);
+        const data = await fetchJsonWithTimeout(apiUrl('/api/apk/reinforce-history?limit=30'), undefined, 8000);
         if (!data.success) return [] as ReinforceHistoryItem[];
         const items = data.items || [];
         reinforceHistoryCache = { ts: Date.now(), data: items };
@@ -209,7 +227,7 @@ const ApkReinforce: React.FC = () => {
 
   const fetchSignProfiles = async () => {
     try {
-      const data = await fetchJsonWithTimeout('/api/apk/sign-profiles', undefined, 8000);
+      const data = await fetchJsonWithTimeout(apiUrl('/api/apk/sign-profiles'), undefined, 8000);
       if (data.success && Array.isArray(data.profiles) && data.profiles.length > 0) {
         setSignProfiles(data.profiles.map((p: SignProfileOption) => ({
           ...p,
@@ -229,7 +247,7 @@ const ApkReinforce: React.FC = () => {
     // 恢复上次未完成的加固会话
     const savedId = localStorage.getItem('apkReinforceSessionId');
     if (savedId) {
-      fetchJsonWithTimeout(`/api/apk/reinforce-status/${savedId}?logLimit=500`, undefined, 8000)
+      fetchJsonWithTimeout(apiUrl(`/api/apk/reinforce-status/${savedId}?logLimit=500`), undefined, 8000)
         .then(data => {
           if (!data.success) { localStorage.removeItem('apkReinforceSessionId'); return; }
           setSessionId(savedId);
@@ -253,7 +271,7 @@ const ApkReinforce: React.FC = () => {
     setNdkInstalling(true);
     setSetupLog(prev => [...prev, '正在通过 brew 安装 Android NDK，请稍候（约需 3-5 分钟）...']);
     try {
-      const res = await fetch('/api/apk/install-ndk', { method: 'POST' });
+      const res = await fetch(apiUrl('/api/apk/install-ndk'), { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         setSetupLog(prev => [...prev, '✅ NDK 安装完成']);
@@ -272,7 +290,7 @@ const ApkReinforce: React.FC = () => {
     setSetupLoading(true);
     setSetupLog(['正在安装 dex2c 工具链，请稍候（需要下载约 50MB）...']);
     try {
-      const res = await fetch('/api/apk/setup-dex2c', { method: 'POST' });
+      const res = await fetch(apiUrl('/api/apk/setup-dex2c'), { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         setSetupLog(prev => [...prev, '✅ 安装完成']);
@@ -298,7 +316,7 @@ const ApkReinforce: React.FC = () => {
     try {
       const form = new FormData();
       apkFiles.forEach(f => form.append('files', f));
-      const res = await fetch('/api/apk/upload', { method: 'POST', body: form });
+      const res = await fetch(apiUrl('/api/apk/upload'), { method: 'POST', body: form });
       const data = await res.json();
       if (data.success && Array.isArray(data.items) && data.items.length > 0) {
         setApkItems(prev => {
@@ -325,12 +343,13 @@ const ApkReinforce: React.FC = () => {
     if (!apkPath && apkItems.length === 0) return;
     setReinforcing(true);
     setSession(null);
+    setPickError('');
+    const targets = apkItems.length > 0 ? apkItems : [{ path: apkPath, name: apkName }];
     try {
-      const targets = apkItems.length > 0 ? apkItems : [{ path: apkPath, name: apkName }];
       // 所有任务同时启动（Promise.all 并发请求）
       const results = await Promise.all(
-        targets.map(target =>
-          fetch('/api/apk/reinforce', {
+        targets.map(async (target) => {
+          const res = await fetch(apiUrl('/api/apk/reinforce'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -344,24 +363,35 @@ const ApkReinforce: React.FC = () => {
               enableStage2RuntimeLoad: true,
               enableStage3StripClasses2: true,
             }),
-          }).then(r => r.json()),
-        ),
+          });
+          const data = await res.json();
+          return { ...data, _httpOk: res.ok, _name: target.name };
+        }),
       );
+      const failures = results.filter(d => !d._httpOk || !d.success || !d.sessionId);
       const firstSession = results.find(d => d.success && d.sessionId);
-      if (firstSession) {
-        setSessionId(firstSession.sessionId);
-        localStorage.setItem('apkReinforceSessionId', firstSession.sessionId);
-        startPolling(firstSession.sessionId);
+      if (!firstSession) {
+        const errMsg = failures
+          .map(d => `${d._name}: ${d.error || '提交失败'}`)
+          .join('；') || '加固任务提交失败';
+        throw new Error(errMsg);
+      }
+      setSessionId(firstSession.sessionId);
+      localStorage.setItem('apkReinforceSessionId', firstSession.sessionId);
+      startPolling(firstSession.sessionId);
+      if (failures.length > 0) {
+        setPickError(`部分任务提交失败：${failures.map(d => d._name).join('、')}`);
       }
       // 任务已提交到后端，清空本地待加固队列，避免加固完成后"待加固"条目残留
       setApkItems([]);
       setApkPath('');
       setApkName('');
-      // 立即刷新历史，让所有已启动任务显示在队列里
       await fetchHistory(true, true);
     } catch (e: any) {
       setReinforcing(false);
-      setSession({ status: 'error', progress: 0, log: [], outputName: '', error: e.message });
+      const errText = e?.message || '未知错误';
+      setPickError(`加固启动失败：${errText}`);
+      setSession({ status: 'error', progress: 0, log: [], outputName: '', error: errText });
     }
   };
 
@@ -370,7 +400,7 @@ const ApkReinforce: React.FC = () => {
     pollTickRef.current = 0;
     const poll = async () => {
       try {
-        const data = await fetchJsonWithTimeout(`/api/apk/reinforce-status/${sid}?logLimit=500`, undefined, 8000);
+        const data = await fetchJsonWithTimeout(apiUrl(`/api/apk/reinforce-status/${sid}?logLimit=500`), undefined, 8000);
         pollErrorRef.current = 0;
         pollTickRef.current += 1;
         setSession(data);
@@ -407,7 +437,7 @@ const ApkReinforce: React.FC = () => {
     if (!sessionId) return;
     setCancelling(true);
     try {
-      await fetch(`/api/apk/cancel/${sessionId}`, { method: 'POST' });
+      await fetch(apiUrl(`/api/apk/cancel/${sessionId}`), { method: 'POST' });
       localStorage.removeItem('apkReinforceSessionId');
     } catch (_) {}
     finally {
@@ -426,7 +456,7 @@ const ApkReinforce: React.FC = () => {
       cancelText: '取消',
       onOk: async () => {
         try {
-          await fetchJsonWithTimeout('/api/apk/reinforce-history/clear', { method: 'POST' }, 10000);
+          await fetchJsonWithTimeout(apiUrl('/api/apk/reinforce-history/clear'), { method: 'POST' }, 10000);
           await fetchHistory(true);
           if (!reinforcing) setSession(null);
         } catch (e: any) {
@@ -902,7 +932,7 @@ const ApkReinforce: React.FC = () => {
                 r.status === 'done' && r.outputName
                   ? (
                     <a
-                      href={`/api/apk/download-reinforced/${r.sessionId}?filename=${encodeURIComponent(r.outputName)}`}
+                      href={apiUrl(`/api/apk/download-reinforced/${r.sessionId}?filename=${encodeURIComponent(r.outputName)}`)}
                       download={r.outputName}
                     >
                       <Button size="small" icon={<DownloadOutlined />}>下载</Button>
