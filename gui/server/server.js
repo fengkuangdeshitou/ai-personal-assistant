@@ -4144,17 +4144,14 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const AdmZip = require('adm-zip');
 
-const [,, srcApk, outApk, payloadDir, metaFile, bootstrapFile, packageName, appName, stripClasses2, shellAppClass, runtimeLoaderClass, signerDigest, nativeSecretHex] = process.argv;
+const [,, srcApk, outApk, payloadDir, metaFile, bootstrapFile, packageName, appName, stripClasses2, shellAppClass, runtimeLoaderClass, , nativeSecretHex] = process.argv;
 fs.mkdirSync(payloadDir, { recursive: true });
-// 与 SO 内 nativeAesDecrypt 保持相同的两步密钥推导：
-//   step1 = SHA256(pkgName + "|" + signerDigest)
-//   step2 = SHA256(step1 || NATIVE_SECRET)   <- U1 额外混淆层
-const keyMaterial = String(packageName || path.basename(srcApk)) + '|' + String(signerDigest || 'nosig');
-const step1 = crypto.createHash('sha256').update(keyMaterial, 'utf8').digest();
-const nativeSecretBuf = nativeSecretHex ? Buffer.from(nativeSecretHex, 'hex') : null;
-const key = (nativeSecretBuf && nativeSecretBuf.length === 32)
-  ? crypto.createHash('sha256').update(Buffer.concat([step1, nativeSecretBuf])).digest()
-  : step1;
+// 方案三：静态内嵌密钥 — nativeSecret 本身即为每次加固随机生成的 256-bit AES 密钥，
+// 不再依赖 signerDigest / packageName，渠道工具可任意重签名而不影响解密。
+if (!nativeSecretHex || Buffer.from(nativeSecretHex, 'hex').length !== 32) {
+  throw new Error('nativeSecretHex must be a 64-char hex string (32 bytes)');
+}
+const key = Buffer.from(nativeSecretHex, 'hex');
 
 const zin = new AdmZip(srcApk);
 const entries = zin.getEntries();
@@ -4576,118 +4573,20 @@ static jstring get_signer_digest(JNIEnv *env, jobject appCtx) {
 
 /* C1: 改为 static — 不导出符号，由 JNI_OnLoad 动态注册，消除精准 Hook 入口 */
 static jbyteArray nativeAesDecryptImpl(JNIEnv *env, jclass clazz, jobject appCtx, jbyteArray enc, jstring pkg) {
-    (void)clazz;
-    if (appCtx == NULL || enc == NULL || pkg == NULL) { LOGE("E01"); return NULL; }
+    (void)clazz; (void)appCtx; (void)pkg;  /* 方案三：静态内嵌密钥，不再依赖签名证书 */
+    if (enc == NULL) { LOGE("E01"); return NULL; }
     jsize len = (*env)->GetArrayLength(env, enc);
     if (len <= 12) { LOGE("E02"); return NULL; }
 
-    jstring signer = NULL;
-    signer = get_signer_digest(env, appCtx);
-    if (signer == NULL) {
-        LOGE("E34");
-    }
-    if (signer == NULL) {
-        signer = (*env)->NewStringUTF(env, "nosig");
-    }
-    if (signer == NULL || has_exception(env)) { LOGE("E35"); return NULL; }
+    /* 方案三：直接解码 XOR 混淆的静态密钥 nativeSecret，无需任何运行时信息 */
+    static const unsigned char s_ns[32] = { ${nsEncC} };
+    const unsigned char ns_xk = ${nsXorKeyHex};
+    unsigned char keyRaw[32];
+    for (int i = 0; i < 32; i++) keyRaw[i] = s_ns[i] ^ ns_xk;
 
-    const char *pkgStr = (*env)->GetStringUTFChars(env, pkg, NULL);
-    const char *signerStr = (*env)->GetStringUTFChars(env, signer, NULL);
-    if (pkgStr == NULL || signerStr == NULL) {
-        LOGE("E03");
-        if (pkgStr) (*env)->ReleaseStringUTFChars(env, pkg, pkgStr);
-        if (signerStr) (*env)->ReleaseStringUTFChars(env, signer, signerStr);
-        return NULL;
-    }
-
-    size_t kmLen = strlen(pkgStr) + 1 + strlen(signerStr) + 1;
-    char *keyMaterial = (char *)malloc(kmLen);
-    if (keyMaterial == NULL) {
-        LOGE("E04");
-        (*env)->ReleaseStringUTFChars(env, pkg, pkgStr);
-        (*env)->ReleaseStringUTFChars(env, signer, signerStr);
-        return NULL;
-    }
-    const unsigned char s_fmt[] = {0x7f,0x29,0x26,0x7f,0x29};
-    char *fmt = (char *)malloc(sizeof(s_fmt) + 1);
-    if (fmt == NULL) {
-        LOGE("E04b");
-        (*env)->ReleaseStringUTFChars(env, pkg, pkgStr);
-        (*env)->ReleaseStringUTFChars(env, signer, signerStr);
-        free(keyMaterial);
-        return NULL;
-    }
-    for (size_t i = 0; i < sizeof(s_fmt); i++) fmt[i] = (char)(s_fmt[i] ^ 0x5A);
-    fmt[sizeof(s_fmt)] = '\0';
-    snprintf(keyMaterial, kmLen, fmt, pkgStr, signerStr);
-    free(fmt);
-    (*env)->ReleaseStringUTFChars(env, pkg, pkgStr);
-    (*env)->ReleaseStringUTFChars(env, signer, signerStr);
-
-    const unsigned char s_md_cls2[] = {0x30,0x3b,0x2c,0x3b,0x75,0x29,0x3f,0x39,0x2f,0x28,0x33,0x2e,0x23,0x75,0x17,0x3f,0x29,0x29,0x3b,0x3d,0x3f,0x1e,0x33,0x3d,0x3f,0x29,0x2e};
-    jstring mdClsName2 = xor_jstr(env, s_md_cls2, sizeof(s_md_cls2), 0x5A);
-    if (mdClsName2 == NULL || has_exception(env)) { free(keyMaterial); return NULL; }
-    const char *mdClsUtf2 = (*env)->GetStringUTFChars(env, mdClsName2, NULL);
-    if (mdClsUtf2 == NULL || has_exception(env)) { free(keyMaterial); return NULL; }
-    jclass mdCls = (*env)->FindClass(env, mdClsUtf2);
-    (*env)->ReleaseStringUTFChars(env, mdClsName2, mdClsUtf2);
-    if (mdCls == NULL || has_exception(env)) { LOGE("E05"); free(keyMaterial); return NULL; }
-    static const unsigned char s2_getInstance[] = ${cArr('getInstance')};
-    static const unsigned char s2_getInstanceSig[] = ${cArr('(Ljava/lang/String;)Ljava/security/MessageDigest;')};
-    static const unsigned char s2_digest[] = ${cArr('digest')};
-    static const unsigned char s2_digestSig[] = ${cArr('([B)[B')};
-    jstring j2GetInstance = xor_jstr(env, s2_getInstance, sizeof(s2_getInstance), 0x5A);
-    jstring j2GetInstanceSig = xor_jstr(env, s2_getInstanceSig, sizeof(s2_getInstanceSig), 0x5A);
-    jstring j2Digest = xor_jstr(env, s2_digest, sizeof(s2_digest), 0x5A);
-    jstring j2DigestSig = xor_jstr(env, s2_digestSig, sizeof(s2_digestSig), 0x5A);
-    if (!j2GetInstance || !j2GetInstanceSig || !j2Digest || !j2DigestSig || has_exception(env)) { LOGE("E06"); free(keyMaterial); return NULL; }
-    const char *gi2Str = (*env)->GetStringUTFChars(env, j2GetInstance, NULL);
-    const char *gi2SigStr = (*env)->GetStringUTFChars(env, j2GetInstanceSig, NULL);
-    const char *dg2Str = (*env)->GetStringUTFChars(env, j2Digest, NULL);
-    const char *dg2SigStr = (*env)->GetStringUTFChars(env, j2DigestSig, NULL);
-    if (!gi2Str || !gi2SigStr || !dg2Str || !dg2SigStr) { LOGE("E06b"); free(keyMaterial); return NULL; }
-    jmethodID mdGetInstance = (*env)->GetStaticMethodID(env, mdCls, gi2Str, gi2SigStr);
-    jmethodID mdDigest = (*env)->GetMethodID(env, mdCls, dg2Str, dg2SigStr);
-    (*env)->ReleaseStringUTFChars(env, j2GetInstance, gi2Str);
-    (*env)->ReleaseStringUTFChars(env, j2GetInstanceSig, gi2SigStr);
-    (*env)->ReleaseStringUTFChars(env, j2Digest, dg2Str);
-    (*env)->ReleaseStringUTFChars(env, j2DigestSig, dg2SigStr);
-    if (mdGetInstance == NULL || mdDigest == NULL || has_exception(env)) { LOGE("E06c"); free(keyMaterial); return NULL; }
-    const unsigned char s_sha256_2[] = {0x09,0x12,0x1b,0x77,0x68,0x6f,0x6c};
-    jstring sha256 = xor_jstr(env, s_sha256_2, sizeof(s_sha256_2), 0x5A);
-    if (sha256 == NULL || has_exception(env)) { LOGE("E07"); free(keyMaterial); return NULL; }
-    jobject md = (*env)->CallStaticObjectMethod(env, mdCls, mdGetInstance, sha256);
-    if (md == NULL || has_exception(env)) { LOGE("E08"); free(keyMaterial); return NULL; }
-
-    jsize kmBytesLen = (jsize)strlen(keyMaterial);
-    jbyteArray kmBytes = (*env)->NewByteArray(env, kmBytesLen);
-    if (kmBytes == NULL || has_exception(env)) { LOGE("E09"); free(keyMaterial); return NULL; }
-    (*env)->SetByteArrayRegion(env, kmBytes, 0, kmBytesLen, (const jbyte *)keyMaterial);
-    free(keyMaterial);
-    if (has_exception(env)) { LOGE("E10"); return NULL; }
-    jbyteArray keyBytes = (jbyteArray)(*env)->CallObjectMethod(env, md, mdDigest, kmBytes);
+    jbyteArray keyBytes = (*env)->NewByteArray(env, 32);
     if (keyBytes == NULL || has_exception(env)) { LOGE("E11"); return NULL; }
-
-    /* U1: 混入 NATIVE_SECRET — keyBytes = SHA256(SHA256(pkg+sig) || NATIVE_SECRET)
-     * NATIVE_SECRET 以 XOR 混淆存储，需逆向 SO 才能提取，阻断纯静态密钥推导 */
-    {
-        static const unsigned char s_ns[32] = { ${nsEncC} };
-        const unsigned char ns_xk = ${nsXorKeyHex};
-        unsigned char ns[32];
-        for (int i = 0; i < 32; i++) ns[i] = s_ns[i] ^ ns_xk;
-        jsize k1Len = (*env)->GetArrayLength(env, keyBytes);
-        jbyteArray combined = (*env)->NewByteArray(env, k1Len + 32);
-        if (combined == NULL || has_exception(env)) return NULL;
-        jbyte *k1Raw = (jbyte*)malloc((size_t)k1Len);
-        if (k1Raw == NULL) return NULL;
-        (*env)->GetByteArrayRegion(env, keyBytes, 0, k1Len, k1Raw);
-        (*env)->SetByteArrayRegion(env, combined, 0, k1Len, k1Raw);
-        (*env)->SetByteArrayRegion(env, combined, k1Len, 32, (const jbyte*)ns);
-        free(k1Raw);
-        if (has_exception(env)) return NULL;
-        keyBytes = (jbyteArray)(*env)->CallObjectMethod(env, md, mdDigest, combined);
-        if (keyBytes == NULL || has_exception(env)) return NULL;
-    }
+    (*env)->SetByteArrayRegion(env, keyBytes, 0, 32, (const jbyte *)keyRaw);
 
     static const unsigned char s_skCls[] = ${cArr('javax/crypto/spec/SecretKeySpec')};
     static const unsigned char s_skCtorSig[] = ${cArr('([BLjava/lang/String;)V')};

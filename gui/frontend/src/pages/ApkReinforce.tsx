@@ -322,8 +322,12 @@ const ApkReinforce: React.FC = () => {
         localStorage.setItem('apkReinforceSessionId', firstSession.sessionId);
         startPolling(firstSession.sessionId);
       }
+      // 任务已提交到后端，清空本地待加固队列，避免加固完成后"待加固"条目残留
+      setApkItems([]);
+      setApkPath('');
+      setApkName('');
       // 立即刷新历史，让所有已启动任务显示在队列里
-      await fetchHistory(true);
+      await fetchHistory(true, true);
     } catch (e: any) {
       setReinforcing(false);
       setSession({ status: 'error', progress: 0, log: [], outputName: '', error: e.message });
