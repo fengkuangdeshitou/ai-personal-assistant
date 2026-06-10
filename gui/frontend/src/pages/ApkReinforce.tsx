@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Card, Button, Typography, Space, Alert,
-  Tooltip, Badge, Row, Col, Table, Modal,
+  Tooltip, Badge, Row, Col, Table, Modal, Select,
 } from 'antd';
 import {
   SafetyCertificateOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -61,6 +61,18 @@ interface ApkItem {
   name: string;
 }
 
+interface SignProfileOption {
+  id: string;
+  label: string;
+  configured: boolean;
+}
+
+const FALLBACK_SIGN_PROFILES: SignProfileOption[] = [
+  { id: 'milu', label: '咪噜', configured: true },
+  { id: 'wan52', label: '52wan', configured: true },
+  { id: 'youxiaobao', label: '游小宝', configured: true },
+];
+
 let envCheckInFlight: Promise<EnvStatus> | null = null;
 let envCheckCache: { ts: number; data: EnvStatus | null } = { ts: 0, data: null };
 let reinforceHistoryInFlight: Promise<ReinforceHistoryItem[]> | null = null;
@@ -104,6 +116,8 @@ const ApkReinforce: React.FC = () => {
   const [apkPath, setApkPath] = useState('');
   const [apkName, setApkName] = useState('');
   const reinforceMode: 'shellLite' = 'shellLite';
+  const [signProfile, setSignProfile] = useState('milu');
+  const [signProfiles, setSignProfiles] = useState<SignProfileOption[]>(FALLBACK_SIGN_PROFILES);
   const [pickLoading, setPickLoading] = useState(false);
 
   const [envModalOpen, setEnvModalOpen] = useState(false);
@@ -193,8 +207,24 @@ const ApkReinforce: React.FC = () => {
     }
   };
 
+  const fetchSignProfiles = async () => {
+    try {
+      const data = await fetchJsonWithTimeout('/api/apk/sign-profiles', undefined, 8000);
+      if (data.success && Array.isArray(data.profiles) && data.profiles.length > 0) {
+        setSignProfiles(data.profiles.map((p: SignProfileOption) => ({
+          ...p,
+          configured: p.configured !== false,
+        })));
+        if (data.defaultProfile) setSignProfile(data.defaultProfile);
+      }
+    } catch {
+      // 使用本地 fallback
+    }
+  };
+
   useEffect(() => {
     fetchEnvStatus();
+    fetchSignProfiles();
     fetchHistory();
     // 恢复上次未完成的加固会话
     const savedId = localStorage.getItem('apkReinforceSessionId');
@@ -309,6 +339,7 @@ const ApkReinforce: React.FC = () => {
               apksignerPath: envStatus?.apksigner,
               protectAll: true,
               reinforceMode,
+              signProfile,
               enableStage2Inject: true,
               enableStage2RuntimeLoad: true,
               enableStage3StripClasses2: true,
@@ -412,6 +443,7 @@ const ApkReinforce: React.FC = () => {
   };
 
   const isEnvReady = !!(envStatus?.python3 && envStatus?.java && envStatus?.ndk && envStatus?.dex2c);
+  const selectedSignProfile = signProfiles.find(p => p.id === signProfile) || signProfiles[0];
   const formatMs = (ms?: number) => {
     if (!ms || ms <= 0) return '-';
     const sec = Math.round(ms / 1000);
@@ -486,6 +518,22 @@ const ApkReinforce: React.FC = () => {
         </Space>
         <Space>
           <Button
+            icon={<EnvironmentOutlined />}
+            onClick={() => { setEnvModalOpen(true); fetchEnvStatus(); }}
+          >
+            环境检查
+          </Button>
+          <Select
+            value={signProfile}
+            onChange={setSignProfile}
+            disabled={reinforcing}
+            style={{ width: 130 }}
+            options={signProfiles.map(p => ({
+              value: p.id,
+              label: p.label,
+            }))}
+          />
+          <Button
             type="primary"
             icon={reinforcing ? <LoadingOutlined /> : <SafetyCertificateOutlined />}
             loading={reinforcing && !cancelling}
@@ -504,12 +552,6 @@ const ApkReinforce: React.FC = () => {
               取消
             </Button>
           )}
-          <Button
-            icon={<EnvironmentOutlined />}
-            onClick={() => { setEnvModalOpen(true); fetchEnvStatus(); }}
-          >
-            环境检查
-          </Button>
         </Space>
       </div>
 
@@ -709,7 +751,7 @@ const ApkReinforce: React.FC = () => {
                   </Space>
                   <Space>
                     <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                    <Text>签名方式：Release 签名（已固定项目配置）</Text>
+                    <Text>签名方式：Release 签名（{selectedSignProfile?.label || '咪噜'}）</Text>
                   </Space>
                   <Space>
                     <CheckCircleOutlined style={{ color: '#52c41a' }} />

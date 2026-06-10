@@ -3676,10 +3676,40 @@ const APK_REINFORCE_CACHE_DIR = path.join(__dirname, '.cache', 'ccache');
 if (!fs.existsSync(APK_REINFORCE_CACHE_DIR)) fs.mkdirSync(APK_REINFORCE_CACHE_DIR, { recursive: true });
 const APK_REINFORCE_NATIVE_CACHE_DIR = path.join(__dirname, '.cache', 'native-libs');
 if (!fs.existsSync(APK_REINFORCE_NATIVE_CACHE_DIR)) fs.mkdirSync(APK_REINFORCE_NATIVE_CACHE_DIR, { recursive: true });
-const DEFAULT_RELEASE_KEYSTORE_PATH = '/Users/maiyou001/Desktop/985game.jks';
-const DEFAULT_RELEASE_KEY_ALIAS = '985game';
-const DEFAULT_RELEASE_KEYSTORE_PASS = '985game2017';
-const DEFAULT_RELEASE_KEY_PASS = '985game2017';
+const APK_KEYSTORE_DIR = path.join(__dirname, 'keystores');
+if (!fs.existsSync(APK_KEYSTORE_DIR)) fs.mkdirSync(APK_KEYSTORE_DIR, { recursive: true });
+
+/** @type {Record<string, { label: string, keystorePath: string, keyAlias: string, keystorePass: string, keyPass: string }>} */
+const APK_SIGN_PROFILES = {
+  milu: {
+    label: '咪噜',
+    keystorePath: path.join(APK_KEYSTORE_DIR, '985game.jks'),
+    keyAlias: '985game',
+    keystorePass: '985game2017',
+    keyPass: '985game2017',
+  },
+  wan52: {
+    label: '52wan',
+    keystorePath: path.join(APK_KEYSTORE_DIR, 'hugu.jks'),
+    keyAlias: 'heigu',
+    keystorePass: 'heigu2020',
+    keyPass: 'heigu2020',
+  },
+  youxiaobao: {
+    label: '游小宝',
+    keystorePath: path.join(APK_KEYSTORE_DIR, 'cps.jks'),
+    keyAlias: 'cps',
+    keystorePass: 'cps2018',
+    keyPass: 'cps2018',
+  },
+};
+const DEFAULT_SIGN_PROFILE = 'milu';
+
+function resolveSignProfile(signProfile) {
+  const id = typeof signProfile === 'string' ? signProfile : DEFAULT_SIGN_PROFILE;
+  const profile = APK_SIGN_PROFILES[id] || APK_SIGN_PROFILES[DEFAULT_SIGN_PROFILE];
+  return { id: APK_SIGN_PROFILES[id] ? id : DEFAULT_SIGN_PROFILE, ...profile };
+}
 const APK_REINFORCE_DEX_CACHE_DIR = path.join(__dirname, '.cache', 'dex-analysis');
 if (!fs.existsSync(APK_REINFORCE_DEX_CACHE_DIR)) fs.mkdirSync(APK_REINFORCE_DEX_CACHE_DIR, { recursive: true });
 const APK_REINFORCE_PREPROCESS_CACHE_DIR = path.join(__dirname, '.cache', 'preprocess');
@@ -3900,6 +3930,24 @@ app.post('/api/apk/setup-dex2c', async (req, res) => {
   }
 });
 
+// 签名配置列表（供前端下拉选择）
+app.get('/api/apk/sign-profiles', (_req, res) => {
+  const profiles = Object.entries(APK_SIGN_PROFILES).map(([id, cfg]) => ({
+    id,
+    label: cfg.label,
+    configured: !!(
+      cfg.keystorePath &&
+      cfg.keyAlias &&
+      cfg.keystorePass &&
+      cfg.keyPass &&
+      cfg.keystorePass !== 'TODO' &&
+      cfg.keyPass !== 'TODO' &&
+      fs.existsSync(cfg.keystorePath)
+    ),
+  }));
+  res.json({ success: true, profiles, defaultProfile: DEFAULT_SIGN_PROFILE });
+});
+
 // 开始加固
 app.post('/api/apk/reinforce', async (req, res) => {
   const {
@@ -3908,8 +3956,10 @@ app.post('/api/apk/reinforce', async (req, res) => {
     apksignerPath,
     protectAll = true,
     reinforceMode = 'shellLite',
+    signProfile = DEFAULT_SIGN_PROFILE,
   } = req.body;
   const normalizedMode = ['fast', 'balanced', 'full', 'shellLite'].includes(reinforceMode) ? reinforceMode : 'shellLite';
+  const resolvedSignProfile = resolveSignProfile(signProfile);
   if (!apkPath || !fs.existsSync(apkPath)) {
     return res.status(400).json({ success: false, error: 'APK 文件不存在' });
   }
@@ -3984,10 +4034,11 @@ app.post('/api/apk/reinforce', async (req, res) => {
     let shellLoaderFqcn = `${shellStage2Package}.${shellLoaderClassName}`;
     let shellAppFqcn = `${shellStage2Package}.${shellAppClassName}`;
     const debugKeystoreForKey = path.join(os.homedir(), '.android/debug.keystore');
-    const releaseKeystoreForKey = DEFAULT_RELEASE_KEYSTORE_PATH;
-    const releaseAliasForKey = DEFAULT_RELEASE_KEY_ALIAS;
-    const releaseKsPassForKey = DEFAULT_RELEASE_KEYSTORE_PASS;
-    const releaseKeyPassForKey = DEFAULT_RELEASE_KEY_PASS;
+    const releaseKeystoreForKey = resolvedSignProfile.keystorePath;
+    const releaseAliasForKey = resolvedSignProfile.keyAlias;
+    const releaseKsPassForKey = resolvedSignProfile.keystorePass;
+    const releaseKeyPassForKey = resolvedSignProfile.keyPass;
+    session.log.push(`[shell] 签名配置: ${resolvedSignProfile.label} (${resolvedSignProfile.id})`);
     const hasReleaseSigningInput =
       !!releaseKeystoreForKey &&
       !!releaseAliasForKey &&
@@ -5557,10 +5608,10 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
       const candidate = path.join(path.dirname(resolvedApksigner), 'zipalign');
       if (fs.existsSync(candidate)) zipalignPath = candidate;
     }
-    const resolvedReleaseKeystorePath = DEFAULT_RELEASE_KEYSTORE_PATH;
-    const resolvedReleaseKeyAlias = DEFAULT_RELEASE_KEY_ALIAS;
-    const resolvedReleaseKeystorePass = DEFAULT_RELEASE_KEYSTORE_PASS;
-    const resolvedReleaseKeyPass = DEFAULT_RELEASE_KEY_PASS;
+    const resolvedReleaseKeystorePath = resolvedSignProfile.keystorePath;
+    const resolvedReleaseKeyAlias = resolvedSignProfile.keyAlias;
+    const resolvedReleaseKeystorePass = resolvedSignProfile.keystorePass;
+    const resolvedReleaseKeyPass = resolvedSignProfile.keyPass;
     const hasReleaseSigning =
       !!resolvedReleaseKeystorePath &&
       !!resolvedReleaseKeyAlias &&
@@ -5580,7 +5631,7 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
       await execAsync(
         `"${resolvedApksigner}" sign --ks "${resolvedReleaseKeystorePath}" --ks-key-alias "${resolvedReleaseKeyAlias}" --ks-pass pass:${resolvedReleaseKeystorePass} --key-pass pass:${resolvedReleaseKeyPass} "${outputApk}"`
       );
-      session.log.push('[shell] 签名: 使用 release keystore');
+      session.log.push(`[shell] 签名: ${resolvedSignProfile.label} release keystore`);
     } else {
       throw new Error('APK signing failed: apksigner not available');
     }
@@ -5680,6 +5731,8 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
   const retryLimit = 2;
   session.options = {
     reinforceMode: normalizedMode,
+    signProfile: resolvedSignProfile.id,
+    signProfileLabel: resolvedSignProfile.label,
     onlySelfCode,
     selfCodeTemplate,
     selfCodePrefixes,
