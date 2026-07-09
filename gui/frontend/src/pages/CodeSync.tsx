@@ -11,6 +11,7 @@ import {
   FolderOpenOutlined,
   FileTextOutlined,
 } from '@ant-design/icons';
+import type { Key } from 'rc-tree/lib/interface';
 import axios from 'axios';
 import './CodeSync.css';
 
@@ -33,47 +34,61 @@ interface SyncLog {
   detail?: string;
 }
 
+/**
+ * 从选中路径列表中去除被祖先路径覆盖的子路径，避免 rsync 重复同步。
+ * 例如选中 ['src/components', 'src/components/Button.tsx']，只保留 ['src/components']。
+ */
+function getMinimalPaths(paths: string[]): string[] {
+  const sorted = [...paths].sort();
+  const result: string[] = [];
+  for (const p of sorted) {
+    if (!result.some((r) => p.startsWith(r + '/'))) {
+      result.push(p);
+    }
+  }
+  return result;
+}
+
 const CodeSync: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [projects, setProjects] = useState<{ name: string; path: string }[]>([]);
   const [sourceProject, setSourceProject] = useState<string>('');
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
-  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [checkedKeys, setCheckedKeys] = useState<string[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   const [targetProjects, setTargetProjects] = useState<string[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [syncComplete, setSyncComplete] = useState(false);
-  const eventSourceRef = useRef<EventSource | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // 加载项目列表
+  // 加载项目列表，仅在组件挂载时执行一次
   const loadProjects = useCallback(async () => {
     try {
       const { data } = await axios.get('/api/code-sync/projects');
       if (data.success) {
         setProjects(data.projects);
-        // 默认选中第一个项目作为源项目
-        if (data.projects.length > 0 && !sourceProject) {
-          setSourceProject(data.projects[0].path);
-        }
+        // 默认选中第一个项目作为源项目（使用函数式更新避免依赖 sourceProject）
+        setSourceProject((prev) => {
+          if (!prev && data.projects.length > 0) return data.projects[0].path;
+          return prev;
+        });
       }
-    } catch (e) {
+    } catch {
       message.error('加载项目列表失败');
     }
-  }, [sourceProject]);
+  }, []);
 
   useEffect(() => {
     loadProjects();
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-    };
   }, [loadProjects]);
+
+  // 组件卸载时取消正在进行的同步请求
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   // 加载文件树
   const loadTree = useCallback(async (projectPath: string) => {
@@ -88,11 +103,11 @@ const CodeSync: React.FC = () => {
         // 默认展开一级
         const initialExpanded = data.tree.map((node: TreeNode) => node.key);
         setExpandedKeys(initialExpanded);
-        setSelectedKeys([]);
+        setCheckedKeys([]);
         setSyncComplete(false);
         setLogs([]);
       }
-    } catch (e) {
+    } catch {
       message.error('加载文件树失败');
     } finally {
       setLoading(false);
@@ -111,7 +126,7 @@ const CodeSync: React.FC = () => {
     .map((p) => p.path);
 
   const handleSync = async () => {
-    if (selectedKeys.length === 0) {
+    if (checkedKeys.length === 0) {
       message.warning('请至少选择一个文件或文件夹');
       return;
     }
@@ -124,15 +139,25 @@ const CodeSync: React.FC = () => {
     setSyncComplete(false);
     setLogs([]);
 
-    // 使用 EventSource 接收 SSE 流
+    // 用本地变量追踪是否收到 finish 事件，避免读取到过期的 React state
+    let finished = false;
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    // 去除被父路径覆盖的子路径，避免 rsync 重复执行
+    const minimalKeys = getMinimalPaths(checkedKeys);
+
     const params = new URLSearchParams({
       source: sourceProject,
       targets: targetProjects.join(','),
-      selected: selectedKeys.join(','),
+      selected: minimalKeys.join(','),
     });
 
     try {
-      const response = await fetch(`/api/code-sync/sync?${params.toString()}`);
+      const response = await fetch(`/api/code-sync/sync?${params.toString()}`, {
+        signal: controller.signal,
+      });
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -159,29 +184,31 @@ const CodeSync: React.FC = () => {
             try {
               const log: SyncLog = JSON.parse(line.slice(6));
               setLogs((prev) => [...prev, log]);
-            } catch (e) {
+              if (log.type === 'finish') {
+                finished = true;
+              }
+            } catch {
               // 忽略解析错误
             }
           }
         }
       }
 
-      // 检查最后一条日志
-      const lastLog = logs[logs.length - 1];
-      if (lastLog?.type === 'finish') {
+      if (finished) {
         setSyncComplete(true);
         message.success('同步完成');
       }
     } catch (e) {
-      message.error(`同步失败: ${e.message}`);
-      setLogs((prev) => [...prev, { type: 'error', message: `连接中断: ${e.message}` }]);
+      if ((e as Error).name !== 'AbortError') {
+        message.error(`同步失败: ${(e as Error).message}`);
+        setLogs((prev) => [...prev, { type: 'error', message: `连接中断: ${(e as Error).message}` }]);
+      }
     } finally {
       setSyncing(false);
+      abortControllerRef.current = null;
     }
   };
 
-  // 检查是否有错误日志
-  // 检查是否有错误日志
   const hasErrors = logs.some((l) => l.type === 'error');
 
   // 渲染树节点图标
@@ -227,12 +254,13 @@ const CodeSync: React.FC = () => {
               <Text strong>文件选择</Text>
               <Spin spinning={loading}>
                 <Tree.DirectoryTree
+                  checkable
                   treeData={treeData}
-                  selectedKeys={selectedKeys}
+                  checkedKeys={checkedKeys}
                   expandedKeys={expandedKeys}
-                  onSelect={(_, info) => {
-                    // 只允许单选（文件夹或文件）
-                    setSelectedKeys(info.selectedKeys);
+                  onCheck={(keys) => {
+                    const keyList = Array.isArray(keys) ? keys : (keys as { checked: Key[]; halfChecked: Key[] }).checked;
+                    setCheckedKeys(keyList as string[]);
                   }}
                   onExpand={(keys) => setExpandedKeys(keys)}
                   showIcon
@@ -282,10 +310,10 @@ const CodeSync: React.FC = () => {
                   icon={<SyncOutlined />}
                   onClick={handleSync}
                   loading={syncing}
-                  disabled={selectedKeys.length === 0 || targetProjects.length === 0}
+                  disabled={checkedKeys.length === 0 || targetProjects.length === 0}
                   size="large"
                 >
-                  确认同步 ({selectedKeys.length} 项 → {targetProjects.length} 个项目)
+                  确认同步 ({getMinimalPaths(checkedKeys).length} 项 → {targetProjects.length} 个项目)
                 </Button>
               </div>
 
