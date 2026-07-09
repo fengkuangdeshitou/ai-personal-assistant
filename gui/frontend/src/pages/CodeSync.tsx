@@ -9,7 +9,6 @@ import {
   CloseCircleOutlined,
   WarningOutlined,
   FolderOpenOutlined,
-  FileTextOutlined,
 } from '@ant-design/icons';
 import type { Key } from 'rc-tree/lib/interface';
 import axios from 'axios';
@@ -211,14 +210,6 @@ const CodeSync: React.FC = () => {
 
   const hasErrors = logs.some((l) => l.type === 'error');
 
-  // 渲染树节点图标
-  const renderTreeIcon = (node: TreeNode) => {
-    if (node.isDir) {
-      return <FolderOpenOutlined style={{ color: '#faad14' }} />;
-    }
-    return <FileTextOutlined style={{ color: '#1890ff' }} />;
-  };
-
   return (
     <div className="code-sync-page">
       <Title level={4}>
@@ -262,9 +253,8 @@ const CodeSync: React.FC = () => {
                     const keyList = Array.isArray(keys) ? keys : (keys as { checked: Key[]; halfChecked: Key[] }).checked;
                     setCheckedKeys(keyList as string[]);
                   }}
-                  onExpand={(keys) => setExpandedKeys(keys)}
+                  onExpand={(keys) => setExpandedKeys(keys as string[])}
                   showIcon
-                  icon={renderTreeIcon}
                   blockNode
                 />
               </Spin>
