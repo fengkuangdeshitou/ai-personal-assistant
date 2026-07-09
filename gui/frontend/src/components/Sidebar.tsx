@@ -13,6 +13,7 @@ import {
   MobileOutlined,
   SwapOutlined,
   SafetyCertificateOutlined,
+  CodeOutlined,
 } from '@ant-design/icons';
 import './Sidebar.css';
 
@@ -71,6 +72,11 @@ const Sidebar: React.FC<SidebarProps> = () => {
       key: '/apk-reinforce',
       icon: <SafetyCertificateOutlined />,
       label: 'APK加固',
+    },
+    {
+      key: '/code-sync',
+      icon: <CodeOutlined />,
+      label: '代码同步',
     },
     {
       key: '/timeline',

@@ -14,6 +14,7 @@ import SeafileManager from './pages/SeafileManager';
 import IpaViewer from './pages/IpaViewer';
 import SdkReplacer from './pages/SdkReplacer';
 import ApkReinforce from './pages/ApkReinforce';
+import CodeSync from './pages/CodeSync';
 import './App.css';
 
 const { Content } = Layout;
@@ -39,6 +40,7 @@ function App() {
                   <Route path="/ipa-viewer" element={<IpaViewer />} />
                   <Route path="/sdk-replacer" element={<SdkReplacer />} />
                   <Route path="/apk-reinforce" element={<ApkReinforce />} />
+                  <Route path="/code-sync" element={<CodeSync />} />
                   <Route path="/settings" element={<Settings />} />
                 </Routes>
               </Content>

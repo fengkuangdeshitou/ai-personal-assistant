@@ -6400,6 +6400,218 @@ app.post('/api/server/restart', (_req, res) => {
   setTimeout(() => process.exit(0), 300);
 });
 
+// ── 代码同步 ──────────────────────────────────────────────────────────
+
+// 固定排除规则（永不同步的文件/目录）
+const SYNC_EXCLUDES = [
+  '.git', 'node_modules', 'build', '.DS_Store',
+  '.env', '.env.local', '*.local',
+  '.vscode', '.idea',
+  '*.log', 'logs',
+  'dist', '.next',
+];
+
+// 获取项目目录下可同步的文件树（排除固定规则）
+app.get('/api/code-sync/tree', (req, res) => {
+  const projectPath = req.query.path;
+  if (!projectPath) {
+    return res.status(400).json({ success: false, error: 'Missing path' });
+  }
+  if (!fs.existsSync(projectPath)) {
+    return res.status(404).json({ success: false, error: '目录不存在' });
+  }
+
+  const tree = [];
+  const excludePatterns = [
+    /^\.git($|\/)/,
+    /^node_modules($|\/)/,
+    /^build($|\/)/,
+    /\.DS_Store$/,
+    /^\.env($|\.)/,
+    /\.local$/,
+    /^\.vscode($|\/)/,
+    /^\.idea($|\/)/,
+    /\.log$/,
+    /^logs($|\/)/,
+    /^dist($|\/)/,
+    /^\.next($|\/)/,
+  ];
+
+  function shouldExclude(relativePath) {
+    for (const pat of excludePatterns) {
+      if (pat.test(relativePath)) return true;
+    }
+    return false;
+  }
+
+  function walk(dir, relativeBase) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const children = [];
+    for (const entry of entries.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    })) {
+      const relPath = relativeBase ? `${relativeBase}/${entry.name}` : entry.name;
+      if (shouldExclude(relPath)) continue;
+
+      if (entry.isDirectory()) {
+        const subDir = path.join(dir, entry.name);
+        children.push({
+          key: relPath,
+          title: entry.name,
+          isDir: true,
+          children: walk(subDir, relPath),
+        });
+      } else {
+        children.push({
+          key: relPath,
+          title: entry.name,
+          isDir: false,
+        });
+      }
+    }
+    return children;
+  }
+
+  tree.push(...walk(projectPath, ''));
+  res.json({ success: true, tree });
+});
+
+// 列出所有可同步的项目（/Users/maiyou001/Project 下的 git 项目）
+app.get('/api/code-sync/projects', (_req, res) => {
+  const entries = [];
+  try {
+    const names = fs.readdirSync(DEFAULT_DIR, { withFileTypes: true });
+    for (const d of names) {
+      if (!d.isDirectory()) continue;
+      const p = path.join(DEFAULT_DIR, d.name);
+      const gitDir = path.join(p, '.git');
+      if (fs.existsSync(gitDir) && fs.lstatSync(gitDir).isDirectory()) {
+        entries.push({ name: d.name, path: p });
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+  res.json({ success: true, projects: entries });
+});
+
+// 执行同步（SSE 流式返回进度）
+app.get('/api/code-sync/sync', async (req, res) => {
+  try {
+    const { source, targets, selected, excludes } = req.query;
+    if (!source || !targets || !selected) {
+      return res.status(400).json({ success: false, error: '缺少必要参数' });
+    }
+
+    const targetPaths = targets.split(',').map(t => decodeURIComponent(t)).filter(Boolean);
+    const selectedPaths = selected.split(',').map(s => decodeURIComponent(s)).filter(Boolean);
+
+    // 设置 SSE 响应头
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const send = (data) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    send({ type: 'start', message: '开始同步...', source, targets: targetPaths, files: selectedPaths.length });
+
+    // 构建 rsync 排除参数
+    const allExcludes = [...SYNC_EXCLUDES];
+    if (excludes) {
+      excludes.split(',').forEach(e => { if (e.trim()) allExcludes.push(e.trim()); });
+    }
+    const excludeArgs = allExcludes.flatMap(ex => ['--exclude=' + ex]);
+
+    // 逐个目标同步
+    for (const dest of targetPaths) {
+      send({ type: 'info', message: `同步到: ${dest}` });
+
+      if (!fs.existsSync(dest)) {
+        send({ type: 'error', target: dest, message: `目标路径不存在: ${dest}` });
+        continue;
+      }
+
+      // 检查源文件是否存在
+      const validSelected = [];
+      for (const sel of selectedPaths) {
+        const srcFull = path.join(source, sel);
+        if (fs.existsSync(srcFull)) {
+          validSelected.push(sel);
+        } else {
+          send({ type: 'warn', file: sel, message: `源文件不存在，跳过: ${sel}` });
+        }
+      }
+
+      if (validSelected.length === 0) {
+        send({ type: 'warn', target: dest, message: '没有有效的同步文件' });
+        continue;
+      }
+
+      // 构建 rsync 命令：对每个选中的文件/目录分别同步
+      for (const sel of validSelected) {
+        const srcFull = path.join(source, sel);
+        const destFull = path.join(dest, sel);
+
+        // 确保目标目录存在
+        const destDir = path.dirname(destFull);
+        if (!fs.existsSync(destDir)) {
+          fs.mkdirSync(destDir, { recursive: true });
+        }
+
+        try {
+          // 使用 rsync -av 同步单个文件或目录
+          const { spawn } = await import('child_process');
+          // 目录用 trailing slash，文件不用
+          const srcSuffix = fs.statSync(srcFull).isDirectory() ? '/' : '';
+          const dstSuffix = fs.statSync(srcFull).isDirectory() ? '/' : '';
+          const rsync = spawn('rsync', ['-av', '--delete', ...excludeArgs, `${srcFull}${srcSuffix}`, `${destFull}${dstSuffix}`], {
+            cwd: source,
+          });
+
+          let output = '';
+          rsync.stdout.on('data', (data) => {
+            output += data.toString();
+          });
+          rsync.stderr.on('data', (data) => {
+            output += data.toString();
+          });
+
+          await new Promise((resolve, reject) => {
+            rsync.on('close', (code) => {
+              if (code === 0) {
+                send({ type: 'progress', file: sel, target: dest, status: 'ok' });
+                resolve();
+              } else {
+                send({ type: 'error', file: sel, target: dest, message: `rsync 失败 (code: ${code})`, detail: output });
+                reject(new Error(output));
+              }
+            });
+            rsync.on('error', (err) => {
+              send({ type: 'error', file: sel, target: dest, message: `执行失败: ${err.message}` });
+              reject(err);
+            });
+          });
+        } catch (err) {
+          send({ type: 'error', file: sel, target: dest, message: err.message });
+        }
+      }
+
+      send({ type: 'complete', target: dest, message: `${dest} 同步完成` });
+    }
+
+    send({ type: 'finish', message: '✅ 全部同步完成' });
+    res.end();
+
+  } catch (e) {
+    res.write(`data: ${JSON.stringify({ type: 'error', message: e.message })}\n\n`);
+    res.end();
+  }
+});
+
 // ───────────────────────────────────────────────────────────────────
 
 app.listen(PORT, '0.0.0.0', () => {
