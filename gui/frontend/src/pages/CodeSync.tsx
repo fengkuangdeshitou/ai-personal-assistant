@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Tree, Button, message, Card, Space, Alert, Select,
+  Tree, Button, message, Card, Space, Alert,
   Tag, Spin, Typography, Collapse,
 } from 'antd';
 import {
@@ -16,6 +16,10 @@ import './CodeSync.css';
 
 const { Title, Text } = Typography;
 const { Panel } = Collapse;
+
+// 固定的源项目和同步目标项目名称
+const SOURCE_PROJECT_NAME = 'react-agent-website';
+const TARGET_PROJECT_NAMES = ['games-52-play-web', 'hg-bookmark'];
 
 interface TreeNode {
   key: string;
@@ -50,28 +54,37 @@ function getMinimalPaths(paths: string[]): string[] {
 
 const CodeSync: React.FC = () => {
   const [loading, setLoading] = useState(false);
-  const [projects, setProjects] = useState<{ name: string; path: string }[]>([]);
   const [sourceProject, setSourceProject] = useState<string>('');
+  const [targetProjects, setTargetProjects] = useState<string[]>([]);
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
   const [checkedKeys, setCheckedKeys] = useState<string[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
-  const [targetProjects, setTargetProjects] = useState<string[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [syncComplete, setSyncComplete] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // 加载项目列表，仅在组件挂载时执行一次
+  // 加载项目列表，从中解析出固定源项目和目标项目的完整路径
   const loadProjects = useCallback(async () => {
     try {
       const { data } = await axios.get('/api/code-sync/projects');
       if (data.success) {
-        setProjects(data.projects);
-        // 默认选中第一个项目作为源项目（使用函数式更新避免依赖 sourceProject）
-        setSourceProject((prev) => {
-          if (!prev && data.projects.length > 0) return data.projects[0].path;
-          return prev;
-        });
+        const projects: { name: string; path: string }[] = data.projects;
+
+        const src = projects.find((p) => p.name === SOURCE_PROJECT_NAME);
+        if (!src) {
+          message.error(`未找到源项目: ${SOURCE_PROJECT_NAME}`);
+          return;
+        }
+        setSourceProject(src.path);
+
+        const targets = TARGET_PROJECT_NAMES.map((name) => {
+          const found = projects.find((p) => p.name === name);
+          if (!found) message.warning(`未找到目标项目: ${name}`);
+          return found?.path ?? '';
+        }).filter(Boolean);
+
+        setTargetProjects(targets);
       }
     } catch {
       message.error('加载项目列表失败');
@@ -99,7 +112,6 @@ const CodeSync: React.FC = () => {
       });
       if (data.success) {
         setTreeData(data.tree);
-        // 默认展开一级
         const initialExpanded = data.tree.map((node: TreeNode) => node.key);
         setExpandedKeys(initialExpanded);
         setCheckedKeys([]);
@@ -119,18 +131,13 @@ const CodeSync: React.FC = () => {
     }
   }, [sourceProject, loadTree]);
 
-  // 同步目标选择
-  const allTargetPaths = projects
-    .filter((p) => p.path !== sourceProject)
-    .map((p) => p.path);
-
   const handleSync = async () => {
     if (checkedKeys.length === 0) {
       message.warning('请至少选择一个文件或文件夹');
       return;
     }
     if (targetProjects.length === 0) {
-      message.warning('请至少选择一个同步目标');
+      message.warning('目标项目未就绪，请检查项目配置');
       return;
     }
 
@@ -138,13 +145,11 @@ const CodeSync: React.FC = () => {
     setSyncComplete(false);
     setLogs([]);
 
-    // 用本地变量追踪是否收到 finish 事件，避免读取到过期的 React state
     let finished = false;
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    // 去除被父路径覆盖的子路径，避免 rsync 重复执行
     const minimalKeys = getMinimalPaths(checkedKeys);
 
     const params = new URLSearchParams({
@@ -174,9 +179,8 @@ const CodeSync: React.FC = () => {
 
         buffer += decoder.decode(value, { stream: true });
 
-        // 解析 SSE 格式
         const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // 保留不完整行
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
@@ -216,28 +220,30 @@ const CodeSync: React.FC = () => {
         <SyncOutlined spin={syncing} /> 代码同步
       </Title>
       <Text type="secondary">
-        从源项目勾选需要同步的文件/文件夹，选择目标项目后执行同步
+        从源项目勾选需要同步的文件/文件夹，点击同步后自动同步到目标项目
       </Text>
 
       <Space direction="vertical" size="large" style={{ width: '100%', marginTop: 16 }}>
-        {/* 源项目选择 */}
-        <Card size="small" title="源项目">
-          <Select
-            value={sourceProject}
-            onChange={(val) => setSourceProject(val)}
-            style={{ width: '100%' }}
-            placeholder="选择源项目"
-            loading={!projects.length}
-          >
-            {projects.map((p) => (
-              <Select.Option key={p.path} value={p.path}>
-                {p.name} ({p.path})
-              </Select.Option>
-            ))}
-          </Select>
+        {/* 固定的项目配置信息 */}
+        <Card size="small" title="同步配置">
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <div>
+              <Text type="secondary">源项目：</Text>
+              <Tag color="blue">{SOURCE_PROJECT_NAME}</Tag>
+              {sourceProject && (
+                <Text type="secondary" style={{ fontSize: 12 }}>{sourceProject}</Text>
+              )}
+            </div>
+            <div>
+              <Text type="secondary">同步目标：</Text>
+              {TARGET_PROJECT_NAMES.map((name) => (
+                <Tag key={name} color="green">{name}</Tag>
+              ))}
+            </div>
+          </Space>
         </Card>
 
-        {/* 文件选择 + 同步目标 */}
+        {/* 文件选择 + 同步操作 */}
         <Card size="small" title="选择同步内容">
           <div className="code-sync-body">
             {/* 左侧：文件树 */}
@@ -260,39 +266,8 @@ const CodeSync: React.FC = () => {
               </Spin>
             </div>
 
-            {/* 右侧：同步目标 + 进度 */}
+            {/* 右侧：同步操作 + 进度 */}
             <div className="code-sync-target-panel">
-              {/* 同步目标 */}
-              <div className="code-sync-targets">
-                <Text strong>同步目标</Text>
-                <div className="target-checkboxes">
-                  {allTargetPaths.map((targetPath) => {
-                    const targetName = projects.find((p) => p.path === targetPath)?.name || targetPath;
-                    return (
-                      <label key={targetPath} className="target-item">
-                        <input
-                          type="checkbox"
-                          checked={targetProjects.includes(targetPath)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setTargetProjects([...targetProjects, targetPath]);
-                            } else {
-                              setTargetProjects(targetProjects.filter((t) => t !== targetPath));
-                            }
-                          }}
-                        />
-                        <span>
-                          {targetName}
-                          <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-                            ({targetPath})
-                          </Text>
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-
               {/* 同步按钮 */}
               <div className="code-sync-actions">
                 <Button
@@ -303,7 +278,7 @@ const CodeSync: React.FC = () => {
                   disabled={checkedKeys.length === 0 || targetProjects.length === 0}
                   size="large"
                 >
-                  确认同步 ({getMinimalPaths(checkedKeys).length} 项 → {targetProjects.length} 个项目)
+                  确认同步 ({getMinimalPaths(checkedKeys).length} 项 → {TARGET_PROJECT_NAMES.length} 个项目)
                 </Button>
               </div>
 
