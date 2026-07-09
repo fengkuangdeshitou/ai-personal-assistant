@@ -6411,13 +6411,34 @@ const SYNC_EXCLUDES = [
   'dist', '.next',
 ];
 
+/**
+ * 验证路径必须位于 DEFAULT_DIR 下，防止路径遍历攻击。
+ * 返回 resolved 后的绝对路径；不合法则抛出错误。
+ */
+function assertUnderAllowedDir(inputPath) {
+  const resolved = path.resolve(inputPath);
+  const allowedBase = path.resolve(DEFAULT_DIR);
+  if (resolved !== allowedBase && !resolved.startsWith(allowedBase + path.sep)) {
+    throw new Error(`路径不在允许范围内: ${inputPath}`);
+  }
+  return resolved;
+}
+
 // 获取项目目录下可同步的文件树（排除固定规则）
 app.get('/api/code-sync/tree', (req, res) => {
   const projectPath = req.query.path;
   if (!projectPath) {
     return res.status(400).json({ success: false, error: 'Missing path' });
   }
-  if (!fs.existsSync(projectPath)) {
+
+  let safePath;
+  try {
+    safePath = assertUnderAllowedDir(projectPath);
+  } catch (e) {
+    return res.status(403).json({ success: false, error: e.message });
+  }
+
+  if (!fs.existsSync(safePath)) {
     return res.status(404).json({ success: false, error: '目录不存在' });
   }
 
@@ -6474,7 +6495,7 @@ app.get('/api/code-sync/tree', (req, res) => {
     return children;
   }
 
-  tree.push(...walk(projectPath, ''));
+  tree.push(...walk(safePath, ''));
   res.json({ success: true, tree });
 });
 
@@ -6505,8 +6526,26 @@ app.get('/api/code-sync/sync', async (req, res) => {
       return res.status(400).json({ success: false, error: '缺少必要参数' });
     }
 
+    // 验证源路径合法性
+    let safeSource;
+    try {
+      safeSource = assertUnderAllowedDir(source);
+    } catch (e) {
+      return res.status(403).json({ success: false, error: e.message });
+    }
+
     const targetPaths = targets.split(',').map(t => decodeURIComponent(t)).filter(Boolean);
     const selectedPaths = selected.split(',').map(s => decodeURIComponent(s)).filter(Boolean);
+
+    // 验证所有目标路径合法性
+    const safeTargetPaths = [];
+    for (const t of targetPaths) {
+      try {
+        safeTargetPaths.push(assertUnderAllowedDir(t));
+      } catch (e) {
+        return res.status(403).json({ success: false, error: e.message });
+      }
+    }
 
     // 设置 SSE 响应头
     res.setHeader('Content-Type', 'text/event-stream');
@@ -6517,9 +6556,9 @@ app.get('/api/code-sync/sync', async (req, res) => {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    send({ type: 'start', message: '开始同步...', source, targets: targetPaths, files: selectedPaths.length });
+    send({ type: 'start', message: '开始同步...', source: safeSource, targets: safeTargetPaths, files: selectedPaths.length });
 
-    // 构建 rsync 排除参数
+    // 构建 rsync 排除参数（不使用 --delete，避免意外删除目标项目中的独有文件）
     const allExcludes = [...SYNC_EXCLUDES];
     if (excludes) {
       excludes.split(',').forEach(e => { if (e.trim()) allExcludes.push(e.trim()); });
@@ -6527,7 +6566,7 @@ app.get('/api/code-sync/sync', async (req, res) => {
     const excludeArgs = allExcludes.flatMap(ex => ['--exclude=' + ex]);
 
     // 逐个目标同步
-    for (const dest of targetPaths) {
+    for (const dest of safeTargetPaths) {
       send({ type: 'info', message: `同步到: ${dest}` });
 
       if (!fs.existsSync(dest)) {
@@ -6538,7 +6577,7 @@ app.get('/api/code-sync/sync', async (req, res) => {
       // 检查源文件是否存在
       const validSelected = [];
       for (const sel of selectedPaths) {
-        const srcFull = path.join(source, sel);
+        const srcFull = path.join(safeSource, sel);
         if (fs.existsSync(srcFull)) {
           validSelected.push(sel);
         } else {
@@ -6553,7 +6592,7 @@ app.get('/api/code-sync/sync', async (req, res) => {
 
       // 构建 rsync 命令：对每个选中的文件/目录分别同步
       for (const sel of validSelected) {
-        const srcFull = path.join(source, sel);
+        const srcFull = path.join(safeSource, sel);
         const destFull = path.join(dest, sel);
 
         // 确保目标目录存在
@@ -6563,13 +6602,11 @@ app.get('/api/code-sync/sync', async (req, res) => {
         }
 
         try {
-          // 使用 rsync -av 同步单个文件或目录
-          const { spawn } = await import('child_process');
           // 目录用 trailing slash，文件不用
           const srcSuffix = fs.statSync(srcFull).isDirectory() ? '/' : '';
           const dstSuffix = fs.statSync(srcFull).isDirectory() ? '/' : '';
-          const rsync = spawn('rsync', ['-av', '--delete', ...excludeArgs, `${srcFull}${srcSuffix}`, `${destFull}${dstSuffix}`], {
-            cwd: source,
+          const rsync = spawn('rsync', ['-av', ...excludeArgs, `${srcFull}${srcSuffix}`, `${destFull}${dstSuffix}`], {
+            cwd: safeSource,
           });
 
           let output = '';
