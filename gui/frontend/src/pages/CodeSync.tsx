@@ -194,21 +194,6 @@ const TargetTree = React.memo(({
 }) => {
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
 
-  useEffect(() => {
-    if (treeData.length === 0) return;
-    const keys: string[] = [];
-    function collect(nodes: RawTreeNode[]) {
-      for (const node of nodes) {
-        if (node.isDir) {
-          keys.push(node.key);
-          if (node.children) collect(node.children);
-        }
-      }
-    }
-    collect(treeData);
-    setExpandedKeys(keys);
-  }, [treeData]);
-
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
       <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
