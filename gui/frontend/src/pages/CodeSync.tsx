@@ -143,7 +143,20 @@ function computeGitStatusMap(
   return result;
 }
 
-const CodeSync: React.FC = () => {
+/** 递归收集所有目录节点的 key，确保树刷新后全部展开 */
+function collectAllDirKeys(nodes: RawTreeNode[]): string[] {
+  const keys: string[] = [];
+  function walk(node: RawTreeNode) {
+    if (node.isDir) {
+      keys.push(node.key);
+      for (const child of node.children ?? []) walk(child);
+    }
+  }
+  for (const node of nodes) walk(node);
+  return keys;
+}
+
+
   const [loading, setLoading] = useState(false);
   const [gitLoading, setGitLoading] = useState(false);
   const [sourceProject, setSourceProject] = useState<string>('');
@@ -223,13 +236,15 @@ const CodeSync: React.FC = () => {
           ...prev,
           [projectPath]: buildAntTree(data.tree, {}),
         }));
+        // 展开所有目录，确保新同步的文件不被折叠隐藏
         setTargetExpandedKeys((prev) => ({
           ...prev,
-          [projectPath]: data.tree.map((n: RawTreeNode) => n.key),
+          [projectPath]: collectAllDirKeys(data.tree),
         }));
       }
-    } catch {
-      // 目标树加载失败不阻断主流程
+    } catch (e) {
+      console.error('目标项目树加载失败:', projectPath, e);
+      message.warning(`目标项目文件树加载失败: ${projectPath.split('/').pop()}`);
     } finally {
       setTargetTreeLoading((prev) => ({ ...prev, [projectPath]: false }));
     }
@@ -474,9 +489,17 @@ const CodeSync: React.FC = () => {
               const name = TARGET_PROJECT_NAMES[idx] ?? tp.split('/').pop();
               return (
                 <div key={tp} style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ marginBottom: 8, fontWeight: 600 }}>
-                    <Tag color="green">{name}</Tag>
-                    <Text type="secondary" style={{ fontSize: 11 }}>（目标，只读）</Text>
+                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>
+                      <Tag color="green">{name}</Tag>
+                      <Text type="secondary" style={{ fontSize: 11 }}>（目标，只读）</Text>
+                    </span>
+                    <Button
+                      size="small"
+                      icon={<ReloadOutlined spin={!!targetTreeLoading[tp]} />}
+                      onClick={() => loadTargetTree(tp)}
+                      disabled={!!targetTreeLoading[tp]}
+                    />
                   </div>
                   <Spin spinning={!!targetTreeLoading[tp]}>
                     <div style={{ maxHeight: 480, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 4, padding: '4px 0' }}>
