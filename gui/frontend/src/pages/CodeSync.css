@@ -1,0 +1,135 @@
+.code-sync-page {
+  padding: 8px 0;
+}
+
+.code-sync-body {
+  display: flex;
+  gap: 24px;
+  min-height: 400px;
+}
+
+/* 左侧文件树面板 */
+.code-sync-tree-panel {
+  flex: 1;
+  min-width: 300px;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 12px;
+  max-height: 520px;
+  overflow-y: auto;
+  background: #fafafa;
+}
+
+.code-sync-tree-panel > strong {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+/* 右侧同步目标面板 */
+.code-sync-target-panel {
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 同步目标区域 */
+.code-sync-targets {
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fafafa;
+}
+
+.code-sync-targets > strong {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+.target-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.target-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 4px;
+  transition: background 0.2s;
+  font-size: 13px;
+}
+
+.target-item:hover {
+  background: #e6f7ff;
+}
+
+.target-item input[type="checkbox"] {
+  flex-shrink: 0;
+}
+
+/* 同步按钮区域 */
+.code-sync-actions {
+  display: flex;
+  justify-content: center;
+}
+
+.code-sync-actions .ant-btn {
+  min-width: 280px;
+}
+
+/* 同步日志区域 */
+.code-sync-logs {
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fafafa;
+  flex: 1;
+  min-height: 0;
+}
+
+.code-sync-logs > strong {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+/* 折叠面板样式优化 */
+.code-sync-collapse {
+  border: none !important;
+  background: transparent !important;
+}
+
+.code-sync-collapse .ant-collapse-item {
+  border: 1px solid #f0f0f0 !important;
+  border-radius: 4px !important;
+  margin-bottom: 6px !important;
+  background: #fff;
+}
+
+.code-sync-collapse .ant-collapse-header {
+  padding: 6px 12px !important;
+  font-size: 13px;
+}
+
+/* 滚动条美化 */
+.code-sync-tree-panel::-webkit-scrollbar,
+.code-sync-logs::-webkit-scrollbar {
+  width: 6px;
+}
+
+.code-sync-tree-panel::-webkit-scrollbar-thumb,
+.code-sync-logs::-webkit-scrollbar-thumb {
+  background: #d9d9d9;
+  border-radius: 3px;
+}
+
+.code-sync-tree-panel::-webkit-scrollbar-thumb:hover,
+.code-sync-logs::-webkit-scrollbar-thumb:hover {
+  background: #bfbfbf;
+}
