@@ -157,6 +157,7 @@ function collectAllDirKeys(nodes: RawTreeNode[]): string[] {
 }
 
 
+const CodeSync: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [gitLoading, setGitLoading] = useState(false);
   const [sourceProject, setSourceProject] = useState<string>('');
