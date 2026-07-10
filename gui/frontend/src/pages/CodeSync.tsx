@@ -188,7 +188,7 @@ const TargetTree = React.memo(({
 }: {
   projectPath: string;
   name: string;
-  treeData: RawTreeNode[];
+  treeData: AntTreeNode[];
   loading: boolean;
   loadTargetTree: (path: string) => void;
 }) => {
@@ -239,7 +239,7 @@ function collectAllDirKeys(nodes: RawTreeNode[]): string[] {
 }
 
 
-const EMPTY_RAW_TREE: RawTreeNode[] = [];
+const EMPTY_ANT_TREE: AntTreeNode[] = [];
 
 const CodeSync: React.FC = () => {
   const [loading, setLoading] = useState(false);
@@ -250,7 +250,7 @@ const CodeSync: React.FC = () => {
   const statusMapRef = useRef<Record<string, GitFileStatus | 'changed'>>({});
   const [antTreeData, setAntTreeData] = useState<AntTreeNode[]>([]);
   // 目标项目文件树 key=项目路径
-  const [targetTreeData, setTargetTreeData] = useState<Record<string, RawTreeNode[]>>({});
+  const [targetTreeData, setTargetTreeData] = useState<Record<string, AntTreeNode[]>>({});
   const [targetTreeLoading, setTargetTreeLoading] = useState<Record<string, boolean>>({});
   const [checkedKeys, setCheckedKeys] = useState<string[]>([]);
   const [gitChangedCount, setGitChangedCount] = useState(0);
@@ -308,15 +308,23 @@ const CodeSync: React.FC = () => {
   useEffect(() => { loadProjects(); }, [loadProjects]);
   useEffect(() => { return () => { abortControllerRef.current?.abort(); }; }, []);
 
-  /** 加载单个目标项目的文件树（只读展示） */
+  /** 加载单个目标项目的文件树，同时拉取 git 状态注入标记 */
   const loadTargetTree = useCallback(async (projectPath: string) => {
     setTargetTreeLoading((prev) => ({ ...prev, [projectPath]: true }));
     try {
-      const { data } = await axios.get('/api/code-sync/tree', { params: { path: projectPath } });
-      if (data.success) {
-        // 目标树不需要 git 状态标签，直接用原始数据，避免 ReactNode 包装带来的 diff 开销
-        setTargetTreeData((prev) => ({ ...prev, [projectPath]: data.tree }));
-        // 展开逻辑交由 TargetTree 内部 useEffect 处理
+      const [treeRes, gitRes] = await Promise.all([
+        axios.get('/api/code-sync/tree', { params: { path: projectPath } }),
+        axios.get('/api/code-sync/git-status', { params: { path: projectPath } }).catch(() => ({ data: { success: true, status: {} } })),
+      ]);
+      if (treeRes.data.success) {
+        const rawTree: RawTreeNode[] = treeRes.data.tree;
+        const statusMap = gitRes.data.success
+          ? computeGitStatusMap(gitRes.data.status, rawTree)
+          : {};
+        setTargetTreeData((prev) => ({
+          ...prev,
+          [projectPath]: buildAntTree(rawTree, statusMap),
+        }));
       }
     } catch (e) {
       console.error('目标项目树加载失败:', projectPath, e);
@@ -554,7 +562,7 @@ const CodeSync: React.FC = () => {
                 key={tp}
                 projectPath={tp}
                 name={TARGET_PROJECT_NAMES[idx] ?? tp.split('/').pop() ?? tp}
-                treeData={targetTreeData[tp] ?? EMPTY_RAW_TREE}
+                treeData={targetTreeData[tp] ?? EMPTY_ANT_TREE}
                 loading={!!targetTreeLoading[tp]}
                 loadTargetTree={loadTargetTree}
               />
