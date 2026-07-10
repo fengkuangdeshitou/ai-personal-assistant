@@ -184,23 +184,22 @@ const TargetTree = React.memo(({
   name,
   treeData,
   loading,
-  onRefresh,
+  loadTargetTree,
 }: {
   projectPath: string;
   name: string;
-  treeData: AntTreeNode[];
+  treeData: RawTreeNode[];
   loading: boolean;
-  onRefresh: () => void;
+  loadTargetTree: (path: string) => void;
 }) => {
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
 
-  // treeData 更新时（首次加载或同步后刷新）展开所有目录
   useEffect(() => {
     if (treeData.length === 0) return;
     const keys: string[] = [];
-    function collect(nodes: AntTreeNode[]) {
+    function collect(nodes: RawTreeNode[]) {
       for (const node of nodes) {
-        if (!node.isLeaf) {
+        if (node.isDir) {
           keys.push(node.key);
           if (node.children) collect(node.children);
         }
@@ -220,19 +219,20 @@ const TargetTree = React.memo(({
         <Button
           size="small"
           icon={<ReloadOutlined spin={loading} />}
-          onClick={onRefresh}
+          onClick={() => loadTargetTree(projectPath)}
           disabled={loading}
         />
       </div>
       <Spin spinning={loading}>
-        <div style={{ maxHeight: 480, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 4, padding: '4px 0' }}>
+        <div style={{ border: '1px solid #f0f0f0', borderRadius: 4 }}>
           <Tree.DirectoryTree
-            treeData={treeData}
+            virtual
+            height={480}
+            treeData={treeData as any}
             expandedKeys={expandedKeys}
             onExpand={(keys) => setExpandedKeys(keys as string[])}
             showIcon
             blockNode
-            virtual
           />
         </div>
       </Spin>
@@ -254,6 +254,8 @@ function collectAllDirKeys(nodes: RawTreeNode[]): string[] {
 }
 
 
+const EMPTY_RAW_TREE: RawTreeNode[] = [];
+
 const CodeSync: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [gitLoading, setGitLoading] = useState(false);
@@ -263,7 +265,7 @@ const CodeSync: React.FC = () => {
   const statusMapRef = useRef<Record<string, GitFileStatus | 'changed'>>({});
   const [antTreeData, setAntTreeData] = useState<AntTreeNode[]>([]);
   // 目标项目文件树 key=项目路径
-  const [targetTreeData, setTargetTreeData] = useState<Record<string, AntTreeNode[]>>({});
+  const [targetTreeData, setTargetTreeData] = useState<Record<string, RawTreeNode[]>>({});
   const [targetTreeLoading, setTargetTreeLoading] = useState<Record<string, boolean>>({});
   const [checkedKeys, setCheckedKeys] = useState<string[]>([]);
   const [gitChangedCount, setGitChangedCount] = useState(0);
@@ -327,10 +329,8 @@ const CodeSync: React.FC = () => {
     try {
       const { data } = await axios.get('/api/code-sync/tree', { params: { path: projectPath } });
       if (data.success) {
-        setTargetTreeData((prev) => ({
-          ...prev,
-          [projectPath]: buildAntTree(data.tree, {}),
-        }));
+        // 目标树不需要 git 状态标签，直接用原始数据，避免 ReactNode 包装带来的 diff 开销
+        setTargetTreeData((prev) => ({ ...prev, [projectPath]: data.tree }));
         // 展开逻辑交由 TargetTree 内部 useEffect 处理
       }
     } catch (e) {
@@ -569,9 +569,9 @@ const CodeSync: React.FC = () => {
                 key={tp}
                 projectPath={tp}
                 name={TARGET_PROJECT_NAMES[idx] ?? tp.split('/').pop() ?? tp}
-                treeData={targetTreeData[tp] ?? []}
+                treeData={targetTreeData[tp] ?? EMPTY_RAW_TREE}
                 loading={!!targetTreeLoading[tp]}
-                onRefresh={() => loadTargetTree(tp)}
+                loadTargetTree={loadTargetTree}
               />
             ))}
           </div>
