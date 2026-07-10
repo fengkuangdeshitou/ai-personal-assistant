@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Tree, Button, message, Card, Space, Alert,
-  Tag, Spin, Typography, Collapse,
+  Tag, Spin, Typography, Collapse, Modal, List,
 } from 'antd';
 import {
   SyncOutlined,
@@ -158,6 +158,8 @@ const CodeSync: React.FC = () => {
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   const [gitChangedCount, setGitChangedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
+  const [confirmVisible, setConfirmVisible] = useState(false);
+  const [pendingKeys, setPendingKeys] = useState<string[]>([]);
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [syncComplete, setSyncComplete] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -242,9 +244,18 @@ const CodeSync: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [antTreeData.length, sourceProject]);
 
-  const handleSync = async () => {
+  /** 点击"确认同步"按钮：先预检，再弹确认框 */
+  const handleSyncClick = () => {
     if (checkedKeys.length === 0) { message.warning('请至少选择一个文件或文件夹'); return; }
     if (targetProjects.length === 0) { message.warning('目标项目未就绪'); return; }
+    const minimal = getMinimalPaths(checkedKeys);
+    setPendingKeys(minimal);
+    setConfirmVisible(true);
+  };
+
+  /** 确认后执行实际同步 */
+  const handleSync = async () => {
+    setConfirmVisible(false);
 
     setSyncing(true);
     setSyncComplete(false);
@@ -257,7 +268,7 @@ const CodeSync: React.FC = () => {
     const params = new URLSearchParams({
       source: sourceProject,
       targets: targetProjects.join(','),
-      selected: getMinimalPaths(checkedKeys).join(','),
+      selected: pendingKeys.join(','),
     });
 
     try {
@@ -417,7 +428,7 @@ const CodeSync: React.FC = () => {
                 <Button
                   type="primary"
                   icon={<SyncOutlined />}
-                  onClick={handleSync}
+                  onClick={handleSyncClick}
                   loading={syncing}
                   disabled={checkedKeys.length === 0 || targetProjects.length === 0}
                   size="large"
@@ -475,6 +486,45 @@ const CodeSync: React.FC = () => {
           </div>
         </Card>
       </Space>
+
+      {/* 同步路径确认弹窗 */}
+      <Modal
+        title={<span><SyncOutlined /> 确认同步路径</span>}
+        open={confirmVisible}
+        onOk={handleSync}
+        onCancel={() => setConfirmVisible(false)}
+        okText="确认同步"
+        cancelText="取消"
+        width={600}
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Text>以下文件/文件夹将按<Text strong>相同的相对路径</Text>同步到目标项目：</Text>
+        </div>
+        <List
+          size="small"
+          bordered
+          style={{ maxHeight: 300, overflowY: 'auto', marginBottom: 16 }}
+          dataSource={pendingKeys}
+          renderItem={(key) => (
+            <List.Item style={{ padding: '4px 12px' }}>
+              <Space>
+                <Tag color="blue" style={{ fontFamily: 'monospace' }}>{key}</Tag>
+                <Text type="secondary">→</Text>
+                {TARGET_PROJECT_NAMES.map((name) => (
+                  <Tag key={name} color="green" style={{ fontFamily: 'monospace' }}>
+                    {name}/{key}
+                  </Tag>
+                ))}
+              </Space>
+            </List.Item>
+          )}
+        />
+        <Alert
+          type="info"
+          showIcon
+          message="目标项目中不存在的中间目录将自动创建，已存在的同名文件将被覆盖。"
+        />
+      </Modal>
     </div>
   );
 };
