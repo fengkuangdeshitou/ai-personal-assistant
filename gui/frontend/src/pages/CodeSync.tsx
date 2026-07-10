@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Tree, Button, message, Card, Space, Alert,
-  Tag, Spin, Typography, Collapse,
+  Tag, Spin, Typography, Collapse, Badge,
 } from 'antd';
 import {
   SyncOutlined,
@@ -9,6 +9,7 @@ import {
   CloseCircleOutlined,
   WarningOutlined,
   FolderOpenOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import type { Key } from 'rc-tree/lib/interface';
 import axios from 'axios';
@@ -20,6 +21,8 @@ const { Panel } = Collapse;
 // 固定的源项目和同步目标项目名称
 const SOURCE_PROJECT_NAME = 'react-agent-website';
 const TARGET_PROJECT_NAMES = ['games-52-play-web', 'hg-bookmark'];
+
+type GitFileStatus = 'new' | 'modified' | 'deleted';
 
 interface TreeNode {
   key: string;
@@ -39,7 +42,6 @@ interface SyncLog {
 
 /**
  * 从选中路径列表中去除被祖先路径覆盖的子路径，避免 rsync 重复同步。
- * 例如选中 ['src/components', 'src/components/Button.tsx']，只保留 ['src/components']。
  */
 function getMinimalPaths(paths: string[]): string[] {
   const sorted = [...paths].sort();
@@ -52,17 +54,97 @@ function getMinimalPaths(paths: string[]): string[] {
   return result;
 }
 
+/**
+ * 将文件级别的 git 状态向上传递到父目录。
+ * 目录状态优先级：new > modified > deleted。
+ * 同时统计每个目录下的变更文件数量。
+ */
+function buildGitStatusWithDirs(
+  fileStatusMap: Record<string, GitFileStatus>,
+  treeData: TreeNode[],
+): {
+  statusMap: Record<string, GitFileStatus | 'changed'>;
+  countMap: Record<string, number>;
+} {
+  const statusMap: Record<string, GitFileStatus | 'changed'> = { ...fileStatusMap };
+  const countMap: Record<string, number> = {};
+
+  const PRIORITY: Record<string, number> = { new: 3, modified: 2, deleted: 1, changed: 0 };
+
+  function processNode(node: TreeNode): number {
+    if (!node.isDir) {
+      return fileStatusMap[node.key] ? 1 : 0;
+    }
+    let changedCount = 0;
+    let highestStatus: GitFileStatus | 'changed' | null = null;
+
+    for (const child of node.children ?? []) {
+      changedCount += processNode(child);
+      const childStatus = statusMap[child.key];
+      if (childStatus) {
+        if (highestStatus === null || PRIORITY[childStatus] > PRIORITY[highestStatus]) {
+          highestStatus = childStatus;
+        }
+      }
+    }
+
+    if (changedCount > 0) {
+      countMap[node.key] = changedCount;
+      statusMap[node.key] = highestStatus ?? 'changed';
+    }
+    return changedCount;
+  }
+
+  for (const node of treeData) {
+    processNode(node);
+  }
+
+  return { statusMap, countMap };
+}
+
+const STATUS_TAG: Record<string, { color: string; label: string }> = {
+  new:      { color: '#52c41a', label: '新' },
+  modified: { color: '#fa8c16', label: '改' },
+  deleted:  { color: '#ff4d4f', label: '删' },
+  changed:  { color: '#1890ff', label: '•' },
+};
+
 const CodeSync: React.FC = () => {
   const [loading, setLoading] = useState(false);
+  const [gitLoading, setGitLoading] = useState(false);
   const [sourceProject, setSourceProject] = useState<string>('');
   const [targetProjects, setTargetProjects] = useState<string[]>([]);
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
   const [checkedKeys, setCheckedKeys] = useState<string[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [gitStatusMap, setGitStatusMap] = useState<Record<string, GitFileStatus | 'changed'>>({});
+  const [gitCountMap, setGitCountMap] = useState<Record<string, number>>({});
   const [syncing, setSyncing] = useState(false);
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [syncComplete, setSyncComplete] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // 用 ref 缓存 treeData 以便 loadGitStatus 中使用
+  const treeDataRef = useRef<TreeNode[]>([]);
+
+  // 加载 git 状态
+  const loadGitStatus = useCallback(async (projectPath: string) => {
+    if (!projectPath) return;
+    setGitLoading(true);
+    try {
+      const { data } = await axios.get('/api/code-sync/git-status', {
+        params: { path: projectPath },
+      });
+      if (data.success) {
+        const { statusMap, countMap } = buildGitStatusWithDirs(data.status, treeDataRef.current);
+        setGitStatusMap(statusMap);
+        setGitCountMap(countMap);
+      }
+    } catch {
+      // git 状态加载失败不影响主流程
+    } finally {
+      setGitLoading(false);
+    }
+  }, []);
 
   // 加载项目列表，从中解析出固定源项目和目标项目的完整路径
   const loadProjects = useCallback(async () => {
@@ -102,7 +184,7 @@ const CodeSync: React.FC = () => {
     };
   }, []);
 
-  // 加载文件树
+  // 加载文件树，加载完成后立即拉取 git 状态
   const loadTree = useCallback(async (projectPath: string) => {
     if (!projectPath) return;
     setLoading(true);
@@ -111,6 +193,7 @@ const CodeSync: React.FC = () => {
         params: { path: projectPath },
       });
       if (data.success) {
+        treeDataRef.current = data.tree;
         setTreeData(data.tree);
         const initialExpanded = data.tree.map((node: TreeNode) => node.key);
         setExpandedKeys(initialExpanded);
@@ -127,9 +210,9 @@ const CodeSync: React.FC = () => {
 
   useEffect(() => {
     if (sourceProject) {
-      loadTree(sourceProject);
+      loadTree(sourceProject).then(() => loadGitStatus(sourceProject));
     }
-  }, [sourceProject, loadTree]);
+  }, [sourceProject, loadTree, loadGitStatus]);
 
   const handleSync = async () => {
     if (checkedKeys.length === 0) {
@@ -200,6 +283,8 @@ const CodeSync: React.FC = () => {
       if (finished) {
         setSyncComplete(true);
         message.success('同步完成');
+        // 同步完成后刷新 git 状态
+        loadGitStatus(sourceProject);
       }
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
@@ -213,6 +298,41 @@ const CodeSync: React.FC = () => {
   };
 
   const hasErrors = logs.some((l) => l.type === 'error');
+
+  // 渲染带 git 状态标签的树节点标题
+  const titleRender = (node: TreeNode) => {
+    const status = gitStatusMap[node.key];
+    const count = gitCountMap[node.key];
+    const tag = status ? STATUS_TAG[status] : null;
+
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span>{node.title}</span>
+        {tag && node.isDir && count != null && (
+          <Badge
+            count={count}
+            size="small"
+            style={{ backgroundColor: tag.color, fontSize: 10, minWidth: 16, height: 16, lineHeight: '16px' }}
+          />
+        )}
+        {tag && !node.isDir && (
+          <span
+            style={{
+              fontSize: 10,
+              color: '#fff',
+              backgroundColor: tag.color,
+              borderRadius: 3,
+              padding: '0 4px',
+              lineHeight: '16px',
+              display: 'inline-block',
+            }}
+          >
+            {tag.label}
+          </span>
+        )}
+      </span>
+    );
+  };
 
   return (
     <div className="code-sync-page">
@@ -240,11 +360,30 @@ const CodeSync: React.FC = () => {
                 <Tag key={name} color="green">{name}</Tag>
               ))}
             </div>
+            <Space size={12} style={{ marginTop: 4 }}>
+              <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, backgroundColor: '#52c41a', marginRight: 4 }} />新文件</span>
+              <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, backgroundColor: '#fa8c16', marginRight: 4 }} />有改动</span>
+              <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, backgroundColor: '#ff4d4f', marginRight: 4 }} />已删除</span>
+              <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, backgroundColor: '#1890ff', marginRight: 4 }} />目录有变更</span>
+            </Space>
           </Space>
         </Card>
 
         {/* 文件选择 + 同步操作 */}
-        <Card size="small" title="选择同步内容">
+        <Card
+          size="small"
+          title="选择同步内容"
+          extra={
+            <Button
+              size="small"
+              icon={<ReloadOutlined spin={gitLoading} />}
+              onClick={() => loadGitStatus(sourceProject)}
+              disabled={!sourceProject || gitLoading}
+            >
+              刷新 Git 状态
+            </Button>
+          }
+        >
           <div className="code-sync-body">
             {/* 左侧：文件树 */}
             <div className="code-sync-tree-panel">
@@ -255,6 +394,7 @@ const CodeSync: React.FC = () => {
                   treeData={treeData}
                   checkedKeys={checkedKeys}
                   expandedKeys={expandedKeys}
+                  titleRender={(node) => titleRender(node as unknown as TreeNode)}
                   onCheck={(keys) => {
                     const keyList = Array.isArray(keys) ? keys : (keys as { checked: Key[]; halfChecked: Key[] }).checked;
                     setCheckedKeys(keyList as string[]);

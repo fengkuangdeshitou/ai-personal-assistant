@@ -6499,6 +6499,57 @@ app.get('/api/code-sync/tree', (req, res) => {
   res.json({ success: true, tree });
 });
 
+// 获取项目 git 状态（新文件 / 有改动的文件）
+app.get('/api/code-sync/git-status', (req, res) => {
+  const projectPath = req.query.path;
+  if (!projectPath) {
+    return res.status(400).json({ success: false, error: 'Missing path' });
+  }
+
+  let safePath;
+  try {
+    safePath = assertUnderAllowedDir(projectPath);
+  } catch (e) {
+    return res.status(403).json({ success: false, error: e.message });
+  }
+
+  if (!fs.existsSync(safePath)) {
+    return res.status(404).json({ success: false, error: '目录不存在' });
+  }
+
+  try {
+    const output = execSync('git status --porcelain', { cwd: safePath, encoding: 'utf8', timeout: 10000 });
+    const statusMap = {};
+
+    for (const line of output.split('\n')) {
+      if (!line.trim()) continue;
+      const xy = line.substring(0, 2);
+      let filePath = line.substring(3).trim();
+
+      // 重命名格式：R  old -> new，取新文件名
+      if (xy[0] === 'R' || xy[1] === 'R') {
+        const arrowIdx = filePath.indexOf(' -> ');
+        if (arrowIdx !== -1) filePath = filePath.substring(arrowIdx + 4).trim();
+      }
+
+      if (!filePath) continue;
+
+      if (xy === '??' || xy[0] === 'A' || xy[1] === 'A') {
+        statusMap[filePath] = 'new';
+      } else if (xy[0] === 'D' || xy[1] === 'D') {
+        statusMap[filePath] = 'deleted';
+      } else {
+        statusMap[filePath] = 'modified';
+      }
+    }
+
+    res.json({ success: true, status: statusMap });
+  } catch (e) {
+    // 非 git 仓库或 git 不可用时返回空状态，不报错
+    res.json({ success: true, status: {} });
+  }
+});
+
 // 列出所有可同步的项目（/Users/maiyou001/Project 下的 git 项目）
 app.get('/api/code-sync/projects', (_req, res) => {
   const entries = [];
