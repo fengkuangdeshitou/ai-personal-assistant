@@ -148,14 +148,16 @@ const CodeSync: React.FC = () => {
   const [gitLoading, setGitLoading] = useState(false);
   const [sourceProject, setSourceProject] = useState<string>('');
   const [targetProjects, setTargetProjects] = useState<string[]>([]);
-  // 保留原始节点数据供逻辑计算
   const rawTreeRef = useRef<RawTreeNode[]>([]);
-  // 保留最新的 git 状态 map，供快捷全选使用
   const statusMapRef = useRef<Record<string, GitFileStatus | 'changed'>>({});
-  // 渲染用节点数据（ReactNode title）
   const [antTreeData, setAntTreeData] = useState<AntTreeNode[]>([]);
+  // 目标项目文件树 key=项目路径
+  const [targetTreeData, setTargetTreeData] = useState<Record<string, AntTreeNode[]>>({});
+  const [targetTreeLoading, setTargetTreeLoading] = useState<Record<string, boolean>>({});
   const [checkedKeys, setCheckedKeys] = useState<string[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  // 目标树展开状态 key=项目路径
+  const [targetExpandedKeys, setTargetExpandedKeys] = useState<Record<string, string[]>>({});
   const [gitChangedCount, setGitChangedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
@@ -210,6 +212,32 @@ const CodeSync: React.FC = () => {
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
   useEffect(() => { return () => { abortControllerRef.current?.abort(); }; }, []);
+
+  /** 加载单个目标项目的文件树（只读展示） */
+  const loadTargetTree = useCallback(async (projectPath: string) => {
+    setTargetTreeLoading((prev) => ({ ...prev, [projectPath]: true }));
+    try {
+      const { data } = await axios.get('/api/code-sync/tree', { params: { path: projectPath } });
+      if (data.success) {
+        setTargetTreeData((prev) => ({
+          ...prev,
+          [projectPath]: buildAntTree(data.tree, {}),
+        }));
+        setTargetExpandedKeys((prev) => ({
+          ...prev,
+          [projectPath]: data.tree.map((n: RawTreeNode) => n.key),
+        }));
+      }
+    } catch {
+      // 目标树加载失败不阻断主流程
+    } finally {
+      setTargetTreeLoading((prev) => ({ ...prev, [projectPath]: false }));
+    }
+  }, []);
+
+  useEffect(() => {
+    targetProjects.forEach((p) => loadTargetTree(p));
+  }, [targetProjects, loadTargetTree]);
 
   const loadTree = useCallback(async (projectPath: string) => {
     if (!projectPath) return;
@@ -301,6 +329,8 @@ const CodeSync: React.FC = () => {
         setSyncComplete(true);
         message.success('同步完成');
         refreshGitStatus(sourceProject);
+        // 同步完成后刷新目标项目文件树
+        targetProjects.forEach((p) => loadTargetTree(p));
       }
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
@@ -351,8 +381,22 @@ const CodeSync: React.FC = () => {
       <Text type="secondary">从源项目勾选需要同步的文件/文件夹，点击同步后自动同步到目标项目</Text>
 
       <Space direction="vertical" size="large" style={{ width: '100%', marginTop: 16 }}>
-        {/* 同步配置 */}
-        <Card size="small" title="同步配置">
+        {/* 同步配置 — 右侧放确认同步按钮 */}
+        <Card
+          size="small"
+          title="同步配置"
+          extra={
+            <Button
+              type="primary"
+              icon={<SyncOutlined />}
+              onClick={handleSyncClick}
+              loading={syncing}
+              disabled={checkedKeys.length === 0 || targetProjects.length === 0}
+            >
+              确认同步 ({getMinimalPaths(checkedKeys).length} 项 → {TARGET_PROJECT_NAMES.length} 个项目)
+            </Button>
+          }
+        >
           <Space direction="vertical" style={{ width: '100%' }}>
             <div>
               <Text type="secondary">源项目：</Text>
@@ -377,15 +421,13 @@ const CodeSync: React.FC = () => {
           </Space>
         </Card>
 
-        {/* 文件选择 + 同步操作 */}
+        {/* 选择同步内容 — 并排展示 3 棵文件树 */}
         <Card
           size="small"
           title={
             <Space>
               选择同步内容
-              {gitChangedCount > 0 && (
-                <Tag color="orange">{gitChangedCount} 个文件有变更</Tag>
-              )}
+              {gitChangedCount > 0 && <Tag color="orange">{gitChangedCount} 个文件有变更</Tag>}
             </Space>
           }
           extra={
@@ -399,44 +441,64 @@ const CodeSync: React.FC = () => {
             </Button>
           }
         >
-          <div className="code-sync-body">
-            {/* 左侧：文件树 */}
-            <div className="code-sync-tree-panel">
-              <Text strong>文件选择</Text>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+            {/* 源项目树 — 可勾选 */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ marginBottom: 8, fontWeight: 600 }}>
+                <Tag color="blue">{SOURCE_PROJECT_NAME}</Tag>
+                <Text type="secondary" style={{ fontSize: 11 }}>（勾选要同步的内容）</Text>
+              </div>
               <Spin spinning={loading}>
-                <Tree.DirectoryTree
-                  checkable
-                  treeData={antTreeData}
-                  checkedKeys={checkedKeys}
-                  expandedKeys={expandedKeys}
-                  onCheck={(keys) => {
-                    const keyList = Array.isArray(keys)
-                      ? keys
-                      : (keys as { checked: Key[]; halfChecked: Key[] }).checked;
-                    setCheckedKeys(keyList as string[]);
-                  }}
-                  onExpand={(keys) => setExpandedKeys(keys as string[])}
-                  showIcon
-                  blockNode
-                />
+                <div style={{ maxHeight: 480, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 4, padding: '4px 0' }}>
+                  <Tree.DirectoryTree
+                    checkable
+                    treeData={antTreeData}
+                    checkedKeys={checkedKeys}
+                    expandedKeys={expandedKeys}
+                    onCheck={(keys) => {
+                      const keyList = Array.isArray(keys)
+                        ? keys
+                        : (keys as { checked: Key[]; halfChecked: Key[] }).checked;
+                      setCheckedKeys(keyList as string[]);
+                    }}
+                    onExpand={(keys) => setExpandedKeys(keys as string[])}
+                    showIcon
+                    blockNode
+                  />
+                </div>
               </Spin>
             </div>
 
-            {/* 右侧：同步操作 + 进度 */}
-            <div className="code-sync-target-panel">
-              <div className="code-sync-actions">
-                <Button
-                  type="primary"
-                  icon={<SyncOutlined />}
-                  onClick={handleSyncClick}
-                  loading={syncing}
-                  disabled={checkedKeys.length === 0 || targetProjects.length === 0}
-                  size="large"
-                >
-                  确认同步 ({getMinimalPaths(checkedKeys).length} 项 → {TARGET_PROJECT_NAMES.length} 个项目)
-                </Button>
-              </div>
+            {/* 目标项目树 — 只读 */}
+            {targetProjects.map((tp, idx) => {
+              const name = TARGET_PROJECT_NAMES[idx] ?? tp.split('/').pop();
+              return (
+                <div key={tp} style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ marginBottom: 8, fontWeight: 600 }}>
+                    <Tag color="green">{name}</Tag>
+                    <Text type="secondary" style={{ fontSize: 11 }}>（目标，只读）</Text>
+                  </div>
+                  <Spin spinning={!!targetTreeLoading[tp]}>
+                    <div style={{ maxHeight: 480, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 4, padding: '4px 0' }}>
+                      <Tree.DirectoryTree
+                        treeData={targetTreeData[tp] ?? []}
+                        expandedKeys={targetExpandedKeys[tp] ?? []}
+                        onExpand={(keys) =>
+                          setTargetExpandedKeys((prev) => ({ ...prev, [tp]: keys as string[] }))
+                        }
+                        showIcon
+                        blockNode
+                      />
+                    </div>
+                  </Spin>
+                </div>
+              );
+            })}
+          </div>
 
+          {/* 同步日志 & 结果 */}
+          {(logs.length > 0 || syncComplete || hasErrors) && (
+            <div style={{ marginTop: 16 }}>
               {logs.length > 0 && (
                 <div className="code-sync-logs">
                   <Text strong>同步日志</Text>
@@ -445,13 +507,13 @@ const CodeSync: React.FC = () => {
                       let icon = null;
                       let color = '';
                       switch (log.type) {
-                        case 'start':    icon = <SyncOutlined />;         color = '#1890ff'; break;
-                        case 'info':     icon = <FolderOpenOutlined />;   color = '#52c41a'; break;
-                        case 'progress': icon = <CheckCircleOutlined />;  color = '#52c41a'; break;
-                        case 'warn':     icon = <WarningOutlined />;      color = '#faad14'; break;
-                        case 'error':    icon = <CloseCircleOutlined />;  color = '#ff4d4f'; break;
-                        case 'complete': icon = <CheckCircleOutlined />;  color = '#52c41a'; break;
-                        case 'finish':   icon = <CheckCircleOutlined />;  color = '#52c41a'; break;
+                        case 'start':    icon = <SyncOutlined />;        color = '#1890ff'; break;
+                        case 'info':     icon = <FolderOpenOutlined />;  color = '#52c41a'; break;
+                        case 'progress': icon = <CheckCircleOutlined />; color = '#52c41a'; break;
+                        case 'warn':     icon = <WarningOutlined />;     color = '#faad14'; break;
+                        case 'error':    icon = <CloseCircleOutlined />; color = '#ff4d4f'; break;
+                        case 'complete': icon = <CheckCircleOutlined />; color = '#52c41a'; break;
+                        case 'finish':   icon = <CheckCircleOutlined />; color = '#52c41a'; break;
                         default: break;
                       }
                       return (
@@ -475,15 +537,14 @@ const CodeSync: React.FC = () => {
                   </Collapse>
                 </div>
               )}
-
               {syncComplete && !hasErrors && (
-                <Alert message="同步完成" description="所有文件已成功同步到目标项目" type="success" showIcon closable />
+                <Alert message="同步完成" description="所有文件已成功同步到目标项目" type="success" showIcon closable style={{ marginTop: 8 }} />
               )}
               {hasErrors && (
-                <Alert message="同步完成（有错误）" description="部分文件同步失败，请查看上方日志" type="error" showIcon closable />
+                <Alert message="同步完成（有错误）" description="部分文件同步失败，请查看上方日志" type="error" showIcon closable style={{ marginTop: 8 }} />
               )}
             </div>
-          </div>
+          )}
         </Card>
       </Space>
 
