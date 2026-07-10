@@ -143,6 +143,68 @@ function computeGitStatusMap(
   return result;
 }
 
+/** 目标项目文件树（只读）—— 独立组件，expandedKeys 内部管理，避免触发父组件重渲染 */
+const TargetTree = React.memo(({
+  projectPath,
+  name,
+  treeData,
+  loading,
+  onRefresh,
+}: {
+  projectPath: string;
+  name: string;
+  treeData: AntTreeNode[];
+  loading: boolean;
+  onRefresh: () => void;
+}) => {
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+
+  // treeData 更新时（首次加载或同步后刷新）展开所有目录
+  useEffect(() => {
+    if (treeData.length === 0) return;
+    const keys: string[] = [];
+    function collect(nodes: AntTreeNode[]) {
+      for (const node of nodes) {
+        if (!node.isLeaf) {
+          keys.push(node.key);
+          if (node.children) collect(node.children);
+        }
+      }
+    }
+    collect(treeData);
+    setExpandedKeys(keys);
+  }, [treeData]);
+
+  return (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span>
+          <Tag color="green">{name}</Tag>
+          <Text type="secondary" style={{ fontSize: 11 }}>（目标，只读）</Text>
+        </span>
+        <Button
+          size="small"
+          icon={<ReloadOutlined spin={loading} />}
+          onClick={onRefresh}
+          disabled={loading}
+        />
+      </div>
+      <Spin spinning={loading}>
+        <div style={{ maxHeight: 480, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 4, padding: '4px 0' }}>
+          <Tree.DirectoryTree
+            treeData={treeData}
+            expandedKeys={expandedKeys}
+            onExpand={(keys) => setExpandedKeys(keys as string[])}
+            showIcon
+            blockNode
+            virtual
+          />
+        </div>
+      </Spin>
+    </div>
+  );
+});
+
 /** 递归收集所有目录节点的 key，确保树刷新后全部展开 */
 function collectAllDirKeys(nodes: RawTreeNode[]): string[] {
   const keys: string[] = [];
@@ -170,8 +232,6 @@ const CodeSync: React.FC = () => {
   const [targetTreeLoading, setTargetTreeLoading] = useState<Record<string, boolean>>({});
   const [checkedKeys, setCheckedKeys] = useState<string[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
-  // 目标树展开状态 key=项目路径
-  const [targetExpandedKeys, setTargetExpandedKeys] = useState<Record<string, string[]>>({});
   const [gitChangedCount, setGitChangedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
@@ -237,11 +297,7 @@ const CodeSync: React.FC = () => {
           ...prev,
           [projectPath]: buildAntTree(data.tree, {}),
         }));
-        // 展开所有目录，确保新同步的文件不被折叠隐藏
-        setTargetExpandedKeys((prev) => ({
-          ...prev,
-          [projectPath]: collectAllDirKeys(data.tree),
-        }));
+        // 展开逻辑交由 TargetTree 内部 useEffect 处理
       }
     } catch (e) {
       console.error('目标项目树加载失败:', projectPath, e);
@@ -485,39 +541,17 @@ const CodeSync: React.FC = () => {
               </Spin>
             </div>
 
-            {/* 目标项目树 — 只读 */}
-            {targetProjects.map((tp, idx) => {
-              const name = TARGET_PROJECT_NAMES[idx] ?? tp.split('/').pop();
-              return (
-                <div key={tp} style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>
-                      <Tag color="green">{name}</Tag>
-                      <Text type="secondary" style={{ fontSize: 11 }}>（目标，只读）</Text>
-                    </span>
-                    <Button
-                      size="small"
-                      icon={<ReloadOutlined spin={!!targetTreeLoading[tp]} />}
-                      onClick={() => loadTargetTree(tp)}
-                      disabled={!!targetTreeLoading[tp]}
-                    />
-                  </div>
-                  <Spin spinning={!!targetTreeLoading[tp]}>
-                    <div style={{ maxHeight: 480, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 4, padding: '4px 0' }}>
-                      <Tree.DirectoryTree
-                        treeData={targetTreeData[tp] ?? []}
-                        expandedKeys={targetExpandedKeys[tp] ?? []}
-                        onExpand={(keys) =>
-                          setTargetExpandedKeys((prev) => ({ ...prev, [tp]: keys as string[] }))
-                        }
-                        showIcon
-                        blockNode
-                      />
-                    </div>
-                  </Spin>
-                </div>
-              );
-            })}
+            {/* 目标项目树 — 只读，使用独立 memo 组件避免父组件重渲染 */}
+            {targetProjects.map((tp, idx) => (
+              <TargetTree
+                key={tp}
+                projectPath={tp}
+                name={TARGET_PROJECT_NAMES[idx] ?? tp.split('/').pop() ?? tp}
+                treeData={targetTreeData[tp] ?? []}
+                loading={!!targetTreeLoading[tp]}
+                onRefresh={() => loadTargetTree(tp)}
+              />
+            ))}
           </div>
 
           {/* 同步日志 & 结果 */}
