@@ -304,7 +304,7 @@ const CodeSync: React.FC = () => {
   const hasErrors = logs.some((l) => l.type === 'error');
 
   // 渲染带 git 状态标签的树节点标题
-  const titleRender = useCallback((node: Record<string, unknown>) => {
+  const renderNodeTitle = useCallback((node: Record<string, unknown>) => {
     const key = node.key as string;
     const title = node.title as string;
     const isDir = node.isDir as boolean;
@@ -401,7 +401,7 @@ const CodeSync: React.FC = () => {
                   treeData={treeData}
                   checkedKeys={checkedKeys}
                   expandedKeys={expandedKeys}
-                  titleRender={(node) => titleRender(node as Record<string, unknown>)}
+                  titleRender={(node) => renderNodeTitle(node as Record<string, unknown>)}
                   onCheck={(keys) => {
                     const keyList = Array.isArray(keys) ? keys : (keys as { checked: Key[]; halfChecked: Key[] }).checked;
                     setCheckedKeys(keyList as string[]);
