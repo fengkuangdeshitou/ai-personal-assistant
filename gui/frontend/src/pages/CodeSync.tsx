@@ -143,7 +143,42 @@ function computeGitStatusMap(
   return result;
 }
 
-/** 目标项目文件树（只读）—— 独立组件，expandedKeys 内部管理，避免触发父组件重渲染 */
+/** 源项目文件树（可勾选）—— 独立 memo 组件，expandedKeys 内部管理 */
+const SourceTree = React.memo(({
+  treeData,
+  checkedKeys,
+  onCheck,
+}: {
+  treeData: AntTreeNode[];
+  checkedKeys: string[];
+  onCheck: (keys: string[]) => void;
+}) => {
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (treeData.length === 0) return;
+    setExpandedKeys(treeData.map((n) => n.key));
+  }, [treeData]);
+
+  return (
+    <Tree.DirectoryTree
+      checkable
+      virtual
+      treeData={treeData}
+      checkedKeys={checkedKeys}
+      expandedKeys={expandedKeys}
+      onCheck={(keys) => {
+        const keyList = Array.isArray(keys)
+          ? keys
+          : (keys as { checked: Key[]; halfChecked: Key[] }).checked;
+        onCheck(keyList as string[]);
+      }}
+      onExpand={(keys) => setExpandedKeys(keys as string[])}
+      showIcon
+      blockNode
+    />
+  );
+});
 const TargetTree = React.memo(({
   projectPath,
   name,
@@ -231,7 +266,6 @@ const CodeSync: React.FC = () => {
   const [targetTreeData, setTargetTreeData] = useState<Record<string, AntTreeNode[]>>({});
   const [targetTreeLoading, setTargetTreeLoading] = useState<Record<string, boolean>>({});
   const [checkedKeys, setCheckedKeys] = useState<string[]>([]);
-  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   const [gitChangedCount, setGitChangedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
@@ -318,9 +352,7 @@ const CodeSync: React.FC = () => {
       const { data } = await axios.get('/api/code-sync/tree', { params: { path: projectPath } });
       if (data.success) {
         rawTreeRef.current = data.tree;
-        // 先用纯文字版渲染，随后 refreshGitStatus 会带标记重建
         setAntTreeData(buildAntTree(data.tree, {}));
-        setExpandedKeys(data.tree.map((n: RawTreeNode) => n.key));
         setCheckedKeys([]);
         setSyncComplete(false);
         setLogs([]);
@@ -522,20 +554,10 @@ const CodeSync: React.FC = () => {
               </div>
               <Spin spinning={loading}>
                 <div style={{ maxHeight: 480, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 4, padding: '4px 0' }}>
-                  <Tree.DirectoryTree
-                    checkable
+                  <SourceTree
                     treeData={antTreeData}
                     checkedKeys={checkedKeys}
-                    expandedKeys={expandedKeys}
-                    onCheck={(keys) => {
-                      const keyList = Array.isArray(keys)
-                        ? keys
-                        : (keys as { checked: Key[]; halfChecked: Key[] }).checked;
-                      setCheckedKeys(keyList as string[]);
-                    }}
-                    onExpand={(keys) => setExpandedKeys(keys as string[])}
-                    showIcon
-                    blockNode
+                    onCheck={setCheckedKeys}
                   />
                 </div>
               </Spin>
