@@ -323,8 +323,15 @@ const CodeSync: React.FC = () => {
       message.info(`没有状态为"${status === 'new' ? '新增' : status === 'modified' ? '改动' : '删除'}"的文件`);
       return;
     }
-    setCheckedKeys(keys);
-    message.success(`已选中 ${keys.length} 个文件`);
+    // 判断当前是否已全选该状态的文件，是则取消，否则全选
+    const allSelected = keys.every((k) => checkedKeys.includes(k));
+    if (allSelected) {
+      setCheckedKeys((prev) => prev.filter((k) => !keys.includes(k)));
+      message.info(`已取消选中 ${keys.length} 个文件`);
+    } else {
+      setCheckedKeys((prev) => Array.from(new Set([...prev, ...keys])));
+      message.success(`已选中 ${keys.length} 个文件`);
+    }
   }
 
   return (
