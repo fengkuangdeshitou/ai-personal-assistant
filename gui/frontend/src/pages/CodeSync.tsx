@@ -148,8 +148,10 @@ const CodeSync: React.FC = () => {
   const [gitLoading, setGitLoading] = useState(false);
   const [sourceProject, setSourceProject] = useState<string>('');
   const [targetProjects, setTargetProjects] = useState<string[]>([]);
-  // 原始节点数据（string title），用于计算逻辑
+  // 保留原始节点数据供逻辑计算
   const rawTreeRef = useRef<RawTreeNode[]>([]);
+  // 保留最新的 git 状态 map，供快捷全选使用
+  const statusMapRef = useRef<Record<string, GitFileStatus | 'changed'>>({});
   // 渲染用节点数据（ReactNode title）
   const [antTreeData, setAntTreeData] = useState<AntTreeNode[]>([]);
   const [checkedKeys, setCheckedKeys] = useState<string[]>([]);
@@ -170,6 +172,7 @@ const CodeSync: React.FC = () => {
       });
       if (data.success) {
         const statusMap = computeGitStatusMap(data.status, rawTreeRef.current);
+        statusMapRef.current = statusMap;
         const changedFiles = Object.values(data.status as Record<string, GitFileStatus>).length;
         setGitChangedCount(changedFiles);
         setAntTreeData(buildAntTree(rawTreeRef.current, statusMap));
@@ -301,6 +304,29 @@ const CodeSync: React.FC = () => {
 
   const hasErrors = logs.some((l) => l.type === 'error');
 
+  /** 从原始树中收集所有指定状态的文件 key */
+  function collectKeysByStatus(nodes: RawTreeNode[], status: GitFileStatus): string[] {
+    const result: string[] = [];
+    function walk(node: RawTreeNode) {
+      if (!node.isDir && statusMapRef.current[node.key] === status) {
+        result.push(node.key);
+      }
+      for (const child of node.children ?? []) walk(child);
+    }
+    for (const node of nodes) walk(node);
+    return result;
+  }
+
+  function selectByStatus(status: GitFileStatus) {
+    const keys = collectKeysByStatus(rawTreeRef.current, status);
+    if (keys.length === 0) {
+      message.info(`没有状态为"${status === 'new' ? '新增' : status === 'modified' ? '改动' : '删除'}"的文件`);
+      return;
+    }
+    setCheckedKeys(keys);
+    message.success(`已选中 ${keys.length} 个文件`);
+  }
+
   return (
     <div className="code-sync-page">
       <Title level={4}><SyncOutlined spin={syncing} /> 代码同步</Title>
@@ -320,9 +346,15 @@ const CodeSync: React.FC = () => {
               {TARGET_PROJECT_NAMES.map((n) => <Tag key={n} color="green">{n}</Tag>)}
             </div>
             <Space size={16} style={{ marginTop: 4 }}>
-              <GitStatusBadge status="new" /><Text style={{ fontSize: 12 }}>新增文件</Text>
-              <GitStatusBadge status="modified" /><Text style={{ fontSize: 12 }}>有改动</Text>
-              <GitStatusBadge status="deleted" /><Text style={{ fontSize: 12 }}>已删除</Text>
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => selectByStatus('new')}>
+                <GitStatusBadge status="new" /><Text style={{ fontSize: 12, marginLeft: 4 }}>新增文件（点击全选）</Text>
+              </Button>
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => selectByStatus('modified')}>
+                <GitStatusBadge status="modified" /><Text style={{ fontSize: 12, marginLeft: 4 }}>有改动（点击全选）</Text>
+              </Button>
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => selectByStatus('deleted')}>
+                <GitStatusBadge status="deleted" /><Text style={{ fontSize: 12, marginLeft: 4 }}>已删除（点击全选）</Text>
+              </Button>
             </Space>
           </Space>
         </Card>
