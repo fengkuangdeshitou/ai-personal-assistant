@@ -3979,8 +3979,18 @@ app.post('/api/apk/reinforce', async (req, res) => {
   fs.mkdirSync(sessionDir, { recursive: true });
 
   const apkBaseName = path.basename(apkPath, '.apk');
+  // 文件上传时以 `{timestamp}-{hex}-{原名}` 格式存储，提取原始名称
+  const apkOriginalName = (() => {
+    const m = apkBaseName.match(/^\d+-[0-9a-f]+-(.+)$/);
+    return m ? m[1] : apkBaseName;
+  })();
+  const now = new Date();
+  const timeStr = [now.getHours(), now.getMinutes(), now.getSeconds()]
+    .map((n) => String(n).padStart(2, '0'))
+    .join('-'); // 文件名不使用冒号，用连字符代替
+  const outputFileName = `${apkOriginalName}-reinforce-${timeStr}.apk`;
   const inputApk = path.join(sessionDir, `${apkBaseName}.apk`);
-  const outputApk = path.join(sessionDir, `${apkBaseName}-reinforced.apk`);
+  const outputApk = path.join(sessionDir, outputFileName);
   fs.copyFileSync(apkPath, inputApk);
 
   // ── 立即创建 session 并返回响应，后续所有工作异步执行 ──
@@ -3990,7 +4000,7 @@ app.post('/api/apk/reinforce', async (req, res) => {
     progress: 0,
     log: [],
     outputPath: outputApk,
-    outputName: `${apkBaseName}-reinforced.apk`,
+    outputName: outputFileName,
     proc: null,
     timing: {
       mode: normalizedMode,
