@@ -412,8 +412,18 @@ const ApkReinforce: React.FC = () => {
         } else {
           const items = await fetchHistory(true);
           const hasRunning = items.some(item => item.status === 'running');
-          setReinforcing(hasRunning);
           if (data.status === 'done') localStorage.removeItem('apkReinforceSessionId');
+          if (hasRunning) {
+            // 当前 session 结束，还有其他 session 仍在运行，切换到下一个继续 poll
+            const nextRunning = items.find(item => item.status === 'running' && item.sessionId !== sid);
+            if (nextRunning) {
+              startPolling(nextRunning.sessionId);
+            } else {
+              setReinforcing(false);
+            }
+          } else {
+            setReinforcing(false);
+          }
         }
       } catch (e: any) {
         pollErrorRef.current += 1;
