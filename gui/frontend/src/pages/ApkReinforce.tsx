@@ -139,7 +139,8 @@ const ApkReinforce: React.FC = () => {
   const logEndRef = useRef<HTMLDivElement>(null);
   // 用 ref 存剩余队列，避免 startPolling 闭包读到过期 state
   const pendingQueueRef = useRef<ApkItem[]>([]);
-  // 用 ref 保存最新的函数引用，避免 poll 闭包捕获过期版本
+  // 记录本次批量加固的原始顺序，用于保持表格顺序不变
+  const [currentBatch, setCurrentBatch] = useState<ApkItem[]>([]);
   const submitAndPollRef = useRef<((target: ApkItem) => Promise<void>) | null>(null);
   const fetchHistoryRef = useRef<((silent?: boolean, force?: boolean) => Promise<ReinforceHistoryItem[]>) | null>(null);
 
@@ -395,9 +396,9 @@ const ApkReinforce: React.FC = () => {
     setPickError('');
 
     const targets = apkItems.length > 0 ? apkItems : [{ path: apkPath, name: apkName }];
-    // 只提交第一个，其余保留在 apkItems 中显示为"待加固"
     const [first, ...rest] = targets;
     pendingQueueRef.current = rest;
+    setCurrentBatch(targets);   // 保存原始顺序
     setApkItems(rest);
     if (apkItems.length === 0) { setApkPath(''); setApkName(''); }
 
@@ -426,6 +427,7 @@ const ApkReinforce: React.FC = () => {
             submitAndPollRef.current!(next);
           } else {
             setApkItems([]);
+            setCurrentBatch([]);
             setReinforcing(false);
           }
         }
@@ -524,11 +526,14 @@ const ApkReinforce: React.FC = () => {
     progress: 0,
   }));
 
-  const historyTableData: ReinforceHistoryItem[] = [
-    // 1. 当前正在加固的项（最优先显示）
-    ...(sessionId && session
-      ? [
-        {
+  // 按 currentBatch 原始顺序构建当前批次的行，历史记录追加在后面
+  const batchRows: ReinforceHistoryItem[] = currentBatch.map((item) => {
+    // 优先从 session（当前运行）匹配
+    if (session && sessionId) {
+      const inputName = (session as any).inputName as string | undefined;
+      const matchByInput = inputName && (inputName === item.name || inputName === `${item.name}.apk` || item.name.startsWith(inputName.replace(/\.apk$/, '')));
+      if (matchByInput) {
+        return {
           ts: new Date().toISOString(),
           sessionId,
           status: session.status,
@@ -537,19 +542,57 @@ const ApkReinforce: React.FC = () => {
           outputName: session.outputName,
           inputName: (session as any).inputName,
           progress: session.progress,
-          timing: {
-            totalMs: session.timing?.totalMs,
-            retries: session.timing?.retries,
-          },
+          timing: { totalMs: session.timing?.totalMs, retries: session.timing?.retries },
           options: { reinforceMode: session.timing?.mode },
-        },
-      ]
-      : []),
-    // 2. 待加固队列（按提交顺序）
-    ...pendingItems,
-    // 3. 历史已完成记录（排除当前 session）
-    ...historyItems.filter(item => item.sessionId !== sessionId),
-  ];
+        } as ReinforceHistoryItem;
+      }
+    }
+    // 从已完成历史记录匹配
+    const histMatch = historyItems.find(h => {
+      const hn = (h as any).inputName as string | undefined;
+      return hn && (hn === item.name || hn === `${item.name}.apk` || item.name.startsWith(hn.replace(/\.apk$/, '')));
+    });
+    if (histMatch) return histMatch;
+    // 还在待加固队列中
+    return {
+      ts: new Date().toISOString(),
+      sessionId: `__pending__${item.name}`,
+      status: 'pending' as const,
+      stage: 'queued',
+      outputName: item.name,
+      inputName: item.name,
+      progress: 0,
+    } as ReinforceHistoryItem;
+  });
+
+  const historyTableData: ReinforceHistoryItem[] = currentBatch.length > 0
+    ? [
+      ...batchRows,
+      // 不属于本批次的历史记录追加在后面
+      ...historyItems.filter(h =>
+        !currentBatch.some(b => {
+          const hn = (h as any).inputName as string | undefined;
+          return hn && (hn === b.name || hn === `${b.name}.apk` || b.name.startsWith(hn.replace(/\.apk$/, '')));
+        }) && h.sessionId !== sessionId
+      ),
+    ]
+    : [
+      ...(sessionId && session
+        ? [{
+          ts: new Date().toISOString(),
+          sessionId,
+          status: session.status,
+          stage: session.stage,
+          error: session.error,
+          outputName: session.outputName,
+          inputName: (session as any).inputName,
+          progress: session.progress,
+          timing: { totalMs: session.timing?.totalMs },
+          options: { reinforceMode: session.timing?.mode },
+        } as ReinforceHistoryItem]
+        : []),
+      ...historyItems.filter(h => h.sessionId !== sessionId),
+    ];
 
   return (
     <div style={{ padding: '24px 16px', width: '100%' }}>
