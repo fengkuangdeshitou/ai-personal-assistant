@@ -137,6 +137,8 @@ const ApkReinforce: React.FC = () => {
   const pollTickRef = useRef(0);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
+  // 用 ref 存剩余队列，避免 startPolling 闭包读到过期 state
+  const pendingQueueRef = useRef<ApkItem[]>([]);
 
   const fetchJsonWithTimeout = async (url: string, init?: RequestInit, timeoutMs = 10000) => {
     const controller = new AbortController();
@@ -340,60 +342,61 @@ const ApkReinforce: React.FC = () => {
     }
   }, []);
 
+  // 提交单个 APK 并开始 poll
+  const submitAndPoll = async (target: ApkItem) => {
+    try {
+      const res = await fetch(apiUrl('/api/apk/reinforce'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apkPath: target.path,
+          ndkPath: envStatus?.ndk,
+          apksignerPath: envStatus?.apksigner,
+          protectAll: true,
+          reinforceMode,
+          signProfile,
+          enableStage2Inject: true,
+          enableStage2RuntimeLoad: true,
+          enableStage3StripClasses2: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.sessionId) {
+        throw new Error(data.error || '提交失败');
+      }
+      setSessionId(data.sessionId);
+      localStorage.setItem('apkReinforceSessionId', data.sessionId);
+      await fetchHistory(true, true);
+      startPolling(data.sessionId);
+    } catch (e: any) {
+      const errText = e?.message || '未知错误';
+      setPickError(`${target.name} 加固启动失败：${errText}`);
+      // 本项失败，继续尝试队列中下一个
+      const next = pendingQueueRef.current.shift();
+      if (next) {
+        setApkItems([...pendingQueueRef.current]);
+        submitAndPoll(next);
+      } else {
+        setApkItems([]);
+        setReinforcing(false);
+      }
+    }
+  };
+
   const handleReinforce = async () => {
     if (!apkPath && apkItems.length === 0) return;
     setReinforcing(true);
     setSession(null);
     setPickError('');
+
     const targets = apkItems.length > 0 ? apkItems : [{ path: apkPath, name: apkName }];
-    try {
-      // 所有任务同时启动（Promise.all 并发请求）
-      const results = await Promise.all(
-        targets.map(async (target) => {
-          const res = await fetch(apiUrl('/api/apk/reinforce'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              apkPath: target.path,
-              ndkPath: envStatus?.ndk,
-              apksignerPath: envStatus?.apksigner,
-              protectAll: true,
-              reinforceMode,
-              signProfile,
-              enableStage2Inject: true,
-              enableStage2RuntimeLoad: true,
-              enableStage3StripClasses2: true,
-            }),
-          });
-          const data = await res.json();
-          return { ...data, _httpOk: res.ok, _name: target.name };
-        }),
-      );
-      const failures = results.filter(d => !d._httpOk || !d.success || !d.sessionId);
-      const firstSession = results.find(d => d.success && d.sessionId);
-      if (!firstSession) {
-        const errMsg = failures
-          .map(d => `${d._name}: ${d.error || '提交失败'}`)
-          .join('；') || '加固任务提交失败';
-        throw new Error(errMsg);
-      }
-      setSessionId(firstSession.sessionId);
-      localStorage.setItem('apkReinforceSessionId', firstSession.sessionId);
-      startPolling(firstSession.sessionId);
-      if (failures.length > 0) {
-        setPickError(`部分任务提交失败：${failures.map(d => d._name).join('、')}`);
-      }
-      // 任务已提交到后端，清空本地待加固队列，避免加固完成后"待加固"条目残留
-      setApkItems([]);
-      setApkPath('');
-      setApkName('');
-      await fetchHistory(true, true);
-    } catch (e: any) {
-      setReinforcing(false);
-      const errText = e?.message || '未知错误';
-      setPickError(`加固启动失败：${errText}`);
-      setSession({ status: 'error', progress: 0, log: [], outputName: '', error: errText });
-    }
+    // 只提交第一个，其余保留在 apkItems 中显示为"待加固"
+    const [first, ...rest] = targets;
+    pendingQueueRef.current = rest;
+    setApkItems(rest);
+    if (apkItems.length === 0) { setApkPath(''); setApkName(''); }
+
+    await submitAndPoll(first);
   };
 
   const startPolling = (sid: string) => {
@@ -410,18 +413,16 @@ const ApkReinforce: React.FC = () => {
           if (pollTickRef.current % 5 === 0) fetchHistory(true);
           pollRef.current = setTimeout(poll, 2000);
         } else {
-          const items = await fetchHistory(true);
-          const hasRunning = items.some(item => item.status === 'running');
+          await fetchHistory(true);
           if (data.status === 'done') localStorage.removeItem('apkReinforceSessionId');
-          if (hasRunning) {
-            // 当前 session 结束，还有其他 session 仍在运行，切换到下一个继续 poll
-            const nextRunning = items.find(item => item.status === 'running' && item.sessionId !== sid);
-            if (nextRunning) {
-              startPolling(nextRunning.sessionId);
-            } else {
-              setReinforcing(false);
-            }
+          // 从本地队列取下一个 APK，不依赖 history 的 running 状态
+          const next = pendingQueueRef.current.shift();
+          if (next) {
+            setApkItems([...pendingQueueRef.current]);
+            setSession(null);
+            submitAndPoll(next);
           } else {
+            setApkItems([]);
             setReinforcing(false);
           }
         }
@@ -510,17 +511,15 @@ const ApkReinforce: React.FC = () => {
     done: '完成',
     error: '失败',
   };
-  // 队列项（已拖入但尚未点击开始加固）
-  const pendingItems: ReinforceHistoryItem[] = (!reinforcing && apkItems.length > 0)
-    ? apkItems.map((item, i) => ({
-      ts: new Date().toISOString(),
-      sessionId: `__pending__${i}__${item.name}`,
-      status: 'pending' as const,
-      stage: 'queued',
-      outputName: item.name,
-      progress: 0,
-    }))
-    : [];
+  // 待加固队列：reinforcing 期间也显示，让用户看到剩余等待项
+  const pendingItems: ReinforceHistoryItem[] = apkItems.map((item, i) => ({
+    ts: new Date().toISOString(),
+    sessionId: `__pending__${i}__${item.name}`,
+    status: 'pending' as const,
+    stage: 'queued',
+    outputName: item.name,
+    progress: 0,
+  }));
 
   const historyTableData: ReinforceHistoryItem[] = [
     ...pendingItems,
