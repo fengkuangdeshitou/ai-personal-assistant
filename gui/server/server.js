@@ -4003,6 +4003,12 @@ app.post('/api/apk/reinforce', async (req, res) => {
     outputName: outputFileName,
     inputName: `${apkOriginalName}.apk`,
     proc: null,
+    // 在 session 创建时即写入 signProfile，确保历史接口任意时刻都能返回正确值
+    options: {
+      reinforceMode: normalizedMode,
+      signProfile: resolvedSignProfile.id,
+      signProfileLabel: resolvedSignProfile.label,
+    },
     timing: {
       mode: normalizedMode,
       createdAt: Date.now(),

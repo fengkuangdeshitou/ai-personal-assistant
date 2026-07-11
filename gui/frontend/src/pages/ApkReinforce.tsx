@@ -604,10 +604,19 @@ const ApkReinforce: React.FC = () => {
       ...historyItems.filter(h => h.sessionId !== sessionId),
     ];
 
-  // 各渠道已完成数量（依赖 historyTableData，必须在其之后定义）
+  // 各渠道已完成数量：从 historyItems 直接统计（不依赖 session state 时序）
   const channelDoneCounts = CHANNEL_DEFS.reduce<Record<string, number>>((acc, ch) => {
-    acc[ch.key] = historyTableData.filter(
-      r => r.status === 'done' && r.outputName && r.options?.signProfile === ch.key
+    acc[ch.key] = [
+      ...historyItems,
+      // 也统计当前 session（若已完成）
+      ...(session && sessionId && session.status === 'done' && session.options?.signProfile
+        ? [{ status: 'done', outputName: session.outputName, options: session.options, sessionId }]
+        : []),
+    ].filter(
+      (r, i, arr) => arr.findIndex(x => x.sessionId === r.sessionId) === i // 去重
+        && r.status === 'done'
+        && r.outputName
+        && (r as any).options?.signProfile === ch.key
     ).length;
     return acc;
   }, {});
