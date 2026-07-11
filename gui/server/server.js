@@ -6384,11 +6384,33 @@ app.post('/api/apk/reinforce-history/clear', (_req, res) => {
     if (fs.existsSync(APK_REINFORCE_RUN_LOG)) {
       fs.rmSync(APK_REINFORCE_RUN_LOG, { force: true });
     }
+
     // 清理已结束会话，保留进行中会话
+    const runningSessionDirs = new Set();
     for (const [sessionId, session] of reinforceSessions.entries()) {
-      if (session?.status === 'running') continue;
+      if (session?.status === 'running') {
+        runningSessionDirs.add(sessionId);
+        continue;
+      }
       reinforceSessions.delete(sessionId);
     }
+
+    // 删除已结束会话的工作目录（.tmp/apk-reinforce/{sessionId}）
+    if (fs.existsSync(APK_SESSION_DIR)) {
+      for (const entry of fs.readdirSync(APK_SESSION_DIR, { withFileTypes: true })) {
+        if (entry.isDirectory() && !runningSessionDirs.has(entry.name)) {
+          fs.rmSync(path.join(APK_SESSION_DIR, entry.name), { recursive: true, force: true });
+        }
+      }
+    }
+
+    // 删除上传目录中的所有文件（.tmp/apk-uploads），进行中任务使用的是已复制到 sessionDir 的副本
+    if (fs.existsSync(apkUploadDir)) {
+      for (const entry of fs.readdirSync(apkUploadDir, { withFileTypes: true })) {
+        fs.rmSync(path.join(apkUploadDir, entry.name), { recursive: true, force: true });
+      }
+    }
+
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
