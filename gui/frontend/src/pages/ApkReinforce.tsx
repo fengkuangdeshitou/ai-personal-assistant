@@ -2,7 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Card, Button, Typography, Space, Alert,
   Tooltip, Badge, Row, Col, Table, Modal, Select, message,
+  Dropdown,
 } from 'antd';
+import type { MenuProps } from 'antd';
 import {
   SafetyCertificateOutlined, CheckCircleOutlined, CloseCircleOutlined,
   LoadingOutlined, DownloadOutlined, SyncOutlined,
@@ -464,6 +466,36 @@ const ApkReinforce: React.FC = () => {
     }
   };
 
+  const [batchDownloadChannel, setBatchDownloadChannel] = useState<string>('');
+  const [batchDownloadModalOpen, setBatchDownloadModalOpen] = useState(false);
+
+  const CHANNELS: MenuProps['items'] = [
+    { key: '咪噜', label: '咪噜' },
+    { key: '52玩', label: '52玩' },
+    { key: '游小宝', label: '游小宝' },
+  ];
+
+  const handleBatchDownloadConfirm = async () => {
+    setBatchDownloadModalOpen(false);
+    const doneItems = historyTableData.filter(r => r.status === 'done' && r.outputName && r.sessionId);
+    if (doneItems.length === 0) {
+      message.warning('暂无已完成的加固记录可下载');
+      return;
+    }
+    // 逐个触发下载，间隔 300ms 避免浏览器拦截
+    for (let i = 0; i < doneItems.length; i++) {
+      const item = doneItems[i];
+      await new Promise(resolve => setTimeout(resolve, i === 0 ? 0 : 300));
+      const a = document.createElement('a');
+      a.href = apiUrl(`/api/apk/download-reinforced/${item.sessionId}?filename=${encodeURIComponent(item.outputName!)}`);
+      a.download = item.outputName!;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+    message.success(`开始下载 ${doneItems.length} 个文件`);
+  };
+
   const handleClearHistory = async () => {
     Modal.confirm({
       title: '确认清空加固历史？',
@@ -912,22 +944,18 @@ const ApkReinforce: React.FC = () => {
         size="small"
         extra={
           <Space size={4}>
-            <Button
-              size="small"
-              onClick={async () => {
-                try {
-                  const res = await fetch(apiUrl('/api/apk/open-reinforced-folder'), { method: 'POST' });
-                  const data = await res.json();
-                  if (data.count === 0) {
-                    message.warning('暂无加固记录，请先完成至少一次加固任务');
-                  }
-                } catch (e: any) {
-                  message.error(`打开失败：${e?.message}`);
-                }
+            <Dropdown
+              menu={{
+                items: CHANNELS,
+                onClick: ({ key }) => {
+                  setBatchDownloadChannel(key);
+                  setBatchDownloadModalOpen(true);
+                },
               }}
+              trigger={['click']}
             >
-              导出
-            </Button>
+              <Button size="small">批量下载 ▾</Button>
+            </Dropdown>
             <Button size="small" danger onClick={handleClearHistory}>清空</Button>
           </Space>
         }
@@ -1013,6 +1041,26 @@ const ApkReinforce: React.FC = () => {
           ]}
         />
       </Card>
+
+      {/* 批量下载确认弹框 */}
+      <Modal
+        title="批量下载确认"
+        open={batchDownloadModalOpen}
+        onOk={handleBatchDownloadConfirm}
+        onCancel={() => setBatchDownloadModalOpen(false)}
+        okText="确认下载"
+        cancelText="取消"
+      >
+        <p>
+          渠道：<strong>{batchDownloadChannel}</strong>
+        </p>
+        <p>
+          将下载 <strong>{historyTableData.filter(r => r.status === 'done' && r.outputName).length}</strong> 个已完成的加固 APK
+        </p>
+        {historyTableData.filter(r => r.status === 'done' && r.outputName).length === 0 && (
+          <Alert type="warning" showIcon message="暂无已完成的加固记录" />
+        )}
+      </Modal>
 
     </div>
   );
