@@ -4957,6 +4957,9 @@ APP_ABI := armeabi-v7a arm64-v8a
     new-instance v0, Ldalvik/system/DexClassLoader;
     invoke-direct {v0, v1, v2, v3, v4}, Ldalvik/system/DexClassLoader;-><init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V
     sput-object v0, L${stage2Path}/Stage2PayloadLoader;->sPayloadClassLoader:Ljava/lang/ClassLoader;
+    # 预加载已知的第三方 JNI 库，绕过 DexClassLoader native search path 限制
+    # 解决 android-gif-drawable 等 JNI 库在 DexClassLoader 上下文中静默失败的问题
+    invoke-static {p0, v3}, L${stage2Path}/Stage2PayloadLoader;->preloadNativeLibraries(Landroid/content/Context;Ljava/lang/String;)V
     invoke-static {p0, v0}, L${stage2Path}/Stage2PayloadLoader;->installGlobalClassLoader(Landroid/content/Context;Ljava/lang/ClassLoader;)V
     :try_end
     .catch Ljava/lang/Throwable; {:try_start .. :try_end} :catch_all
@@ -5093,7 +5096,47 @@ APP_ABI := armeabi-v7a arm64-v8a
     return-void
 .end method
 
-.method public static createDelegate(Ljava/lang/String;Landroid/content/Context;)Landroid/app/Application;
+# 预加载 nativeLibraryDir 下所有 .so，解决 DexClassLoader 上下文中
+# System.loadLibrary 找不到第三方 JNI 库（如 libpl_droidsonroids_gif.so）的问题
+.method public static preloadNativeLibraries(Landroid/content/Context;Ljava/lang/String;)V
+    .locals 6
+    :pre_try_start
+    new-instance v0, Ljava/io/File;
+    invoke-direct {v0, p1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v0}, Ljava/io/File;->listFiles()[Ljava/io/File;
+    move-result-object v1
+    if-eqz v1, :pre_done
+    array-length v2, v1
+    const/4 v3, 0x0
+    :pre_loop
+    if-ge v3, v2, :pre_done
+    aget-object v4, v1, v3
+    invoke-virtual {v4}, Ljava/io/File;->getName()Ljava/lang/String;
+    move-result-object v5
+    const-string v0, ".so"
+    invoke-virtual {v5, v0}, Ljava/lang/String;->endsWith(Ljava/lang/String;)Z
+    move-result v0
+    if-eqz v0, :pre_next
+    invoke-virtual {v4}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v0
+    :load_try_start
+    invoke-static {v0}, Ljava/lang/System;->load(Ljava/lang/String;)V
+    :load_try_end
+    .catch Ljava/lang/Throwable; {:load_try_start .. :load_try_end} :load_catch
+    goto :pre_next
+    :load_catch
+    move-exception v0
+    :pre_next
+    add-int/lit8 v3, v3, 0x1
+    goto :pre_loop
+    :pre_done
+    :pre_try_end
+    .catch Ljava/lang/Throwable; {:pre_try_start .. :pre_try_end} :pre_catch_all
+    return-void
+    :pre_catch_all
+    move-exception v0
+    return-void
+.end method
     .locals 8
     const/4 v0, 0x0
     :try_start
