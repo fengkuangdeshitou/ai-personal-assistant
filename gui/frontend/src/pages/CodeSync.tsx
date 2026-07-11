@@ -225,18 +225,6 @@ const TargetTree = React.memo(({
   );
 });
 
-/** 递归收集所有目录节点的 key，确保树刷新后全部展开 */
-function collectAllDirKeys(nodes: RawTreeNode[]): string[] {
-  const keys: string[] = [];
-  function walk(node: RawTreeNode) {
-    if (node.isDir) {
-      keys.push(node.key);
-      for (const child of node.children ?? []) walk(child);
-    }
-  }
-  for (const node of nodes) walk(node);
-  return keys;
-}
 
 
 const EMPTY_ANT_TREE: AntTreeNode[] = [];
