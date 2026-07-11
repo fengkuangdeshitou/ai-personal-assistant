@@ -868,7 +868,11 @@ const ApkReinforce: React.FC = () => {
               size="small"
               onClick={async () => {
                 try {
-                  await fetch(apiUrl('/api/apk/open-reinforced-folder'), { method: 'POST' });
+                  const res = await fetch(apiUrl('/api/apk/open-reinforced-folder'), { method: 'POST' });
+                  const data = await res.json();
+                  if (data.count === 0) {
+                    message.warning('暂无加固记录，请先完成至少一次加固任务');
+                  }
                 } catch (e: any) {
                   message.error(`打开失败：${e?.message}`);
                 }

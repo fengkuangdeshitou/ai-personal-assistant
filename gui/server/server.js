@@ -6440,14 +6440,14 @@ app.post('/api/apk/open-reinforced-folder', (_req, res) => {
     }
 
     // 2. 扫描磁盘上的 APK_SESSION_DIR，补充内存中没有的历史文件
-    //    输出 APK 的文件名包含 -reinforce- 特征字符串
+    //    输出 APK 文件名包含 -reinforce（含 -reinforced 旧格式）特征
     if (fs.existsSync(APK_SESSION_DIR)) {
       for (const sessionEntry of fs.readdirSync(APK_SESSION_DIR, { withFileTypes: true })) {
         if (!sessionEntry.isDirectory()) continue;
         const sessionPath = path.join(APK_SESSION_DIR, sessionEntry.name);
         for (const fileEntry of fs.readdirSync(sessionPath, { withFileTypes: true })) {
-          if (!fileEntry.isFile()) continue;
-          if (fileEntry.name.includes('-reinforce-') && fileEntry.name.endsWith('.apk')) {
+          if (!fileEntry.isFile() || !fileEntry.name.endsWith('.apk')) continue;
+          if (fileEntry.name.includes('-reinforce')) {
             const src = path.join(sessionPath, fileEntry.name);
             const dest = path.join(exportDir, fileEntry.name);
             try { fs.copyFileSync(src, dest); } catch (_) {}
@@ -6456,13 +6456,15 @@ app.post('/api/apk/open-reinforced-folder', (_req, res) => {
       }
     }
 
+    const exportedFiles = fs.readdirSync(exportDir).filter(f => f.endsWith('.apk'));
+
     // 用系统命令打开文件夹（macOS: open, Linux: xdg-open）
     const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
     exec(`${cmd} "${exportDir}"`, (err) => {
       if (err) console.warn('[open-reinforced-folder]', err.message);
     });
 
-    res.json({ success: true, path: exportDir });
+    res.json({ success: true, path: exportDir, count: exportedFiles.length });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
