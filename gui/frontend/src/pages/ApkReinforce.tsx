@@ -49,14 +49,11 @@ interface ReinforceHistoryItem {
   error?: string | null;
   outputName?: string;
   inputName?: string;
+  options?: { reinforceMode?: string; signProfile?: string; signProfileLabel?: string; selfCodeTemplate?: string; [k: string]: unknown };
   progress?: number;
   timing?: {
     totalMs?: number;
     retries?: number;
-  };
-  options?: {
-    selfCodeTemplate?: string;
-    reinforceMode?: string;
   };
 }
 
@@ -469,20 +466,57 @@ const ApkReinforce: React.FC = () => {
   const [batchDownloadChannel, setBatchDownloadChannel] = useState<string>('');
   const [batchDownloadModalOpen, setBatchDownloadModalOpen] = useState(false);
 
-  const CHANNELS: MenuProps['items'] = [
-    { key: '咪噜', label: '咪噜' },
-    { key: '52玩', label: '52玩' },
-    { key: '游小宝', label: '游小宝' },
+  // 渠道定义：key = signProfile ID，label = 显示名
+  const CHANNEL_DEFS = [
+    { key: 'milu',        label: '咪噜' },
+    { key: 'wan52',       label: '52玩' },
+    { key: 'youxiaobao',  label: '游小宝' },
   ];
+
+  // 各渠道已完成的 APK 数量
+  const channelDoneCounts = CHANNEL_DEFS.reduce<Record<string, number>>((acc, ch) => {
+    acc[ch.key] = historyTableData.filter(
+      r => r.status === 'done' && r.outputName && r.options?.signProfile === ch.key
+    ).length;
+    return acc;
+  }, {});
+
+  const CHANNELS: MenuProps['items'] = CHANNEL_DEFS.map(ch => {
+    const count = channelDoneCounts[ch.key] ?? 0;
+    const hasItems = count > 0;
+    return {
+      key: ch.key,
+      disabled: !hasItems,
+      label: (
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontWeight: hasItems ? 600 : 400, color: hasItems ? '#1677ff' : undefined }}>
+            {ch.label}
+          </span>
+          <span style={{
+            fontSize: 11,
+            background: hasItems ? '#e6f4ff' : '#f5f5f5',
+            color: hasItems ? '#1677ff' : '#aaa',
+            borderRadius: 10,
+            padding: '0 6px',
+          }}>
+            {count} 个
+          </span>
+        </span>
+      ),
+    };
+  });
 
   const handleBatchDownloadConfirm = async () => {
     setBatchDownloadModalOpen(false);
-    const doneItems = historyTableData.filter(r => r.status === 'done' && r.outputName && r.sessionId);
+    const channelDef = CHANNEL_DEFS.find(c => c.key === batchDownloadChannel);
+    const doneItems = historyTableData.filter(
+      r => r.status === 'done' && r.outputName && r.sessionId &&
+           r.options?.signProfile === batchDownloadChannel
+    );
     if (doneItems.length === 0) {
-      message.warning('暂无已完成的加固记录可下载');
+      message.warning(`${channelDef?.label ?? batchDownloadChannel} 暂无已完成的加固记录`);
       return;
     }
-    // 逐个触发下载，间隔 300ms 避免浏览器拦截
     for (let i = 0; i < doneItems.length; i++) {
       const item = doneItems[i];
       await new Promise(resolve => setTimeout(resolve, i === 0 ? 0 : 300));
@@ -493,7 +527,7 @@ const ApkReinforce: React.FC = () => {
       a.click();
       document.body.removeChild(a);
     }
-    message.success(`开始下载 ${doneItems.length} 个文件`);
+    message.success(`开始下载 ${doneItems.length} 个文件（${channelDef?.label}）`);
   };
 
   const handleClearHistory = async () => {
@@ -1050,15 +1084,16 @@ const ApkReinforce: React.FC = () => {
         onCancel={() => setBatchDownloadModalOpen(false)}
         okText="确认下载"
         cancelText="取消"
+        okButtonProps={{ disabled: (channelDoneCounts[batchDownloadChannel] ?? 0) === 0 }}
       >
         <p>
-          渠道：<strong>{batchDownloadChannel}</strong>
+          渠道：<strong>{CHANNEL_DEFS.find(c => c.key === batchDownloadChannel)?.label}</strong>
         </p>
         <p>
-          将下载 <strong>{historyTableData.filter(r => r.status === 'done' && r.outputName).length}</strong> 个已完成的加固 APK
+          将下载 <strong>{channelDoneCounts[batchDownloadChannel] ?? 0}</strong> 个已完成的加固 APK
         </p>
-        {historyTableData.filter(r => r.status === 'done' && r.outputName).length === 0 && (
-          <Alert type="warning" showIcon message="暂无已完成的加固记录" />
+        {(channelDoneCounts[batchDownloadChannel] ?? 0) === 0 && (
+          <Alert type="warning" showIcon message="该渠道暂无已完成的加固记录" />
         )}
       </Modal>
 
