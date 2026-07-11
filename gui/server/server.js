@@ -5653,15 +5653,13 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
     }
 
     if (resolvedApksigner && hasReleaseSigning) {
-      // V1: 兼容 Android < 7.0（JAR signing）
-      // V2: Android 7.0+，且 Android 12+ 强制要求（targetSdkVersion >= 30 时 V1-only 无法安装）
-      // V3: Android 9.0+（Key Rotation）
-      // V4: 部分 ROM 支持不完整，关闭
+      // targetSdkVersion=29，V1（JAR signing）在所有 Android 版本可安装
+      // V2 强制要求仅针对 targetSdkVersion >= 30
       await execAsync(
         `"${resolvedApksigner}" sign` +
         ` --v1-signing-enabled true` +
-        ` --v2-signing-enabled true` +
-        ` --v3-signing-enabled true` +
+        ` --v2-signing-enabled false` +
+        ` --v3-signing-enabled false` +
         ` --v4-signing-enabled false` +
         ` --ks "${resolvedReleaseKeystorePath}"` +
         ` --ks-key-alias "${resolvedReleaseKeyAlias}"` +
@@ -5669,7 +5667,7 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
         ` --key-pass pass:${resolvedReleaseKeyPass}` +
         ` "${outputApk}"`
       );
-      session.log.push(`[shell] 签名完成: ${resolvedSignProfile.label} (V1+V2+V3)`);
+      session.log.push(`[shell] 签名完成: ${resolvedSignProfile.label} (V1-only, targetSdk=29)`);
     } else {
       throw new Error('APK signing failed: apksigner not available');
     }
