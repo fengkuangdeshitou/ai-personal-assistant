@@ -4116,7 +4116,7 @@ app.post('/api/apk/reinforce', async (req, res) => {
       session.log.push(`[shell] stage2 bootstrap: Manifest 解析跳过（${String(e.message || e).split('\n')[0]}）`);
     }
 
-    // U4: 壳包名随机化 — 仅对 Stage2PayloadLoader 随机化包名，壳 Application 使用原始类名
+    // U4: 壳包名随机化 — 每次加固基于包名+随机盐派生唯一路径，防止固定特征被扫描
     {
       const pkgSeed = crypto.createHash('sha1')
         .update((manifestPackage || 'default') + crypto.randomBytes(4).toString('hex'))
@@ -4126,11 +4126,8 @@ app.post('/api/apk/reinforce', async (req, res) => {
       const seg2 = safeIdent(pkgSeed.slice(6, 10));
       shellStage2Package = `com.${seg1}.${seg2}`;
       shellLoaderFqcn = `${shellStage2Package}.${shellLoaderClassName}`;
-      // 壳 Application 使用原始 Application 类名，避免类名替换引发兼容性问题
-      // createDelegate 仍通过 DexClassLoader 加载 payload 中的真实业务 Application
-      shellAppFqcn = originalApplication || `${shellStage2Package}.${shellAppClassName}`;
+      shellAppFqcn = `${shellStage2Package}.${shellAppClassName}`;
       session.log.push(`[shell] 壳包名随机化: ${shellStage2Package}`);
-      session.log.push(`[shell] 壳 Application: ${shellAppFqcn}`);
     }
 
     try {
@@ -4341,10 +4338,15 @@ console.log('OK:' + payload.length);
       const currentNameMatch = appTagMatch?.[0]?.match(/android:name="([^"]+)"/);
       let currentAppName = currentNameMatch?.[1] || originalApplication || '';
       if (currentAppName.startsWith('.')) currentAppName = `${pkg}${currentAppName}`;
-      // 不替换 android:name，保留原始 Application 类名，避免 ClassCastException 等兼容性问题
-      // 只关闭 debuggable
+      const shellAppClass = shellAppFqcn;
       if (appTagMatch) {
         let newAppTag = appTagMatch[0];
+        if (/android:name="[^"]*"/.test(newAppTag)) {
+          newAppTag = newAppTag.replace(/android:name="[^"]*"/, `android:name="${shellAppClass}"`);
+        } else {
+          newAppTag = newAppTag.replace('<application', `<application android:name="${shellAppClass}"`);
+        }
+        // P0: 强制关闭 debuggable，防止调试注入与内存抓取
         if (/android:debuggable="[^"]*"/.test(newAppTag)) {
           newAppTag = newAppTag.replace(/android:debuggable="[^"]*"/, 'android:debuggable="false"');
         } else {
@@ -5476,8 +5478,7 @@ APP_ABI := armeabi-v7a arm64-v8a
 
       fs.writeFileSync(path.join(smaliDir, 'Stage2PayloadLoader.smali'), loaderSmali, 'utf8');
 
-      // 壳 Application 使用原始 Application 类名（shellAppFqcn = originalApplication）
-      // 这样加固后 context.getApplicationContext() 仍返回原始类名，避免 ClassCastException 等兼容性问题
+      // 壳 Application 使用随机包名下的 Stage2ShellApplication，避免与 payload 中的原始 Application 重名造成重复类问题
       const shellAppPath = shellAppFqcn.replace(/\./g, '/');
       const shellAppSmaliDir = path.join(injectDir, smaliRoot, ...shellAppFqcn.split('.').slice(0, -1));
       fs.mkdirSync(shellAppSmaliDir, { recursive: true });
