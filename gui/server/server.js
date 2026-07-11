@@ -6360,6 +6360,22 @@ app.get('/api/apk/reinforce-status/:sessionId', (req, res) => {
   });
 });
 
+/**
+ * 当 options.signProfile 缺失时，从 logTail 提取签名配置。
+ * 日志格式：[shell] 签名配置: 咪噜 (milu)
+ */
+function enrichOptionsFromLog(item) {
+  if (item.options?.signProfile) return item;
+  const log = Array.isArray(item.logTail) ? item.logTail : [];
+  for (const line of log) {
+    const m = line.match(/\[shell\]\s+签名配置:\s+.+?\s+\(([a-zA-Z0-9_]+)\)/);
+    if (m) {
+      return { ...item, options: { ...(item.options || {}), signProfile: m[1] } };
+    }
+  }
+  return item;
+}
+
 // 查询历史加固耗时日志（用于复盘瓶颈）
 app.get('/api/apk/reinforce-history', (req, res) => {
   const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 30));
@@ -6377,7 +6393,7 @@ app.get('/api/apk/reinforce-history', (req, res) => {
     logTail: Array.isArray(session.log) ? session.log.slice(-80) : [],
   }));
   if (!fs.existsSync(APK_REINFORCE_RUN_LOG)) {
-    return res.json({ success: true, items: runningItems.slice(-limit).reverse() });
+    return res.json({ success: true, items: runningItems.slice(-limit).reverse().map(enrichOptionsFromLog) });
   }
   try {
     const lines = fs.readFileSync(APK_REINFORCE_RUN_LOG, 'utf8')
@@ -6393,7 +6409,8 @@ app.get('/api/apk/reinforce-history', (req, res) => {
     });
     const items = [...mergedBySession.values()]
       .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
-      .slice(0, limit);
+      .slice(0, limit)
+      .map(enrichOptionsFromLog);
     res.json({ success: true, items });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
