@@ -5494,6 +5494,9 @@ APP_ABI := armeabi-v7a arm64-v8a
         try { fs.appendFileSync(stage2LogFile, `\n[error]\n${stage2Err}\n`, 'utf8'); } catch (_) {}
         session.log.push(`[shell] stage2 注入失败，完整日志: ${stage2ErrFile}`);
         session.log.push(`[shell] stage2 灰度完整日志: ${stage2LogFile}`);
+        // 把 apktool 关键错误行显示在终端日志里，方便直接定位
+        const errLines = stage2Err.split('\n').filter(l => l.includes('ERROR') || l.includes('error') || l.includes('FATAL') || l.includes('Exception') || l.includes('smali'));
+        errLines.slice(0, 5).forEach(l => session.log.push(`[shell] apktool: ${l.trim()}`));
         session.log.push(`[shell] stage2 注入摘要: ${stage2Err.split('\n')[0]}`);
         throw new Error(`stage2 inject failed: ${stage2Err.split('\n')[0]}`);
       }
