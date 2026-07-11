@@ -4955,6 +4955,7 @@ APP_ABI := armeabi-v7a arm64-v8a
     invoke-direct {v0, v1, v2, v3, v4}, Ldalvik/system/DexClassLoader;-><init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V
     sput-object v0, L${stage2Path}/Stage2PayloadLoader;->sPayloadClassLoader:Ljava/lang/ClassLoader;
     invoke-static {p0, v0}, L${stage2Path}/Stage2PayloadLoader;->installGlobalClassLoader(Landroid/content/Context;Ljava/lang/ClassLoader;)V
+    invoke-static {p0}, L${stage2Path}/Stage2PayloadLoader;->preloadNativeLibs(Landroid/content/Context;)V
     :try_end
     .catch Ljava/lang/Throwable; {:try_start .. :try_end} :catch_all
     goto :ret
@@ -4963,6 +4964,50 @@ APP_ABI := armeabi-v7a arm64-v8a
     const-string v1, "install"
     invoke-static {p0, v1, v0}, L${stage2Path}/Stage2PayloadLoader;->logException(Landroid/content/Context;Ljava/lang/String;Ljava/lang/Throwable;)V
     :ret
+    return-void
+.end method
+
+.method private static preloadNativeLibs(Landroid/content/Context;)V
+    .locals 6
+    :pn_try
+    invoke-virtual {p0}, Landroid/content/Context;->getApplicationInfo()Landroid/content/pm/ApplicationInfo;
+    move-result-object v0
+    iget-object v1, v0, Landroid/content/pm/ApplicationInfo;->nativeLibraryDir:Ljava/lang/String;
+    if-eqz v1, :pn_done
+    new-instance v0, Ljava/io/File;
+    invoke-direct {v0, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v0}, Ljava/io/File;->listFiles()[Ljava/io/File;
+    move-result-object v0
+    if-eqz v0, :pn_done
+    array-length v1, v0
+    const/4 v2, 0x0
+    const-string v4, ".so"
+    :pn_loop
+    if-ge v2, v1, :pn_done
+    aget-object v3, v0, v2
+    invoke-virtual {v3}, Ljava/io/File;->getName()Ljava/lang/String;
+    move-result-object v5
+    invoke-virtual {v5, v4}, Ljava/lang/String;->endsWith(Ljava/lang/String;)Z
+    move-result v5
+    if-eqz v5, :pn_next
+    invoke-virtual {v3}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v3
+    :pn_load_try
+    invoke-static {v3}, Ljava/lang/System;->load(Ljava/lang/String;)V
+    :pn_load_end
+    .catch Ljava/lang/Throwable; {:pn_load_try .. :pn_load_end} :pn_load_catch
+    goto :pn_next
+    :pn_load_catch
+    move-exception v3
+    :pn_next
+    add-int/lit8 v2, v2, 0x1
+    goto :pn_loop
+    :pn_done
+    :pn_try_end
+    .catch Ljava/lang/Throwable; {:pn_try .. :pn_try_end} :pn_catch
+    return-void
+    :pn_catch
+    move-exception v0
     return-void
 .end method
 
