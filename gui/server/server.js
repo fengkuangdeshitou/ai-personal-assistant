@@ -3736,9 +3736,9 @@ function persistReinforceRunLog(sessionId, session) {
     stage: session.stage,
     error: session.error || null,
     outputName: session.outputName,
+    inputName: session.inputName || null,
     options: session.options || {},
     timing: session.timing || {},
-    // 仅保留尾部日志，避免文件膨胀
     logTail: Array.isArray(session.log) ? session.log.slice(-80) : [],
   };
   try {
@@ -4001,7 +4001,14 @@ app.post('/api/apk/reinforce', async (req, res) => {
     log: [],
     outputPath: outputApk,
     outputName: outputFileName,
+    inputName: `${apkOriginalName}.apk`,
     proc: null,
+    // 在 session 创建时即写入 signProfile，确保历史接口任意时刻都能返回正确值
+    options: {
+      reinforceMode: normalizedMode,
+      signProfile: resolvedSignProfile.id,
+      signProfileLabel: resolvedSignProfile.label,
+    },
     timing: {
       mode: normalizedMode,
       createdAt: Date.now(),
@@ -5634,16 +5641,32 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
       throw new Error('release signing required: provide keystorePath/keyAlias/keystorePass/keyPass');
     }
 
-    if (zipalignPath && fs.existsSync(zipalignPath)) {
-      await execAsync(`"${zipalignPath}" -p -f 4 "${shellUnsignedApk}" "${outputApk}"`);
-    } else {
+    // zipalign：先对齐再签名，zipalign 不可用时尝试从 PATH 查找
+    const zipalignCmd = zipalignPath || 'zipalign';
+    try {
+      await execAsync(`"${zipalignCmd}" -p -f 4 "${shellUnsignedApk}" "${outputApk}"`);
+      session.log.push('[shell] zipalign 对齐完成');
+    } catch (e) {
+      // zipalign 不可用时直接复制（签名仍会执行，但对齐缺失在部分设备可能影响安装）
       fs.copyFileSync(shellUnsignedApk, outputApk);
+      session.log.push('[shell] ⚠️ zipalign 不可用，已跳过对齐（建议安装 Android Build Tools）');
     }
+
     if (resolvedApksigner && hasReleaseSigning) {
+      // 固定使用 V1（JAR signing），兼容所有 Android 版本
       await execAsync(
-        `"${resolvedApksigner}" sign --ks "${resolvedReleaseKeystorePath}" --ks-key-alias "${resolvedReleaseKeyAlias}" --ks-pass pass:${resolvedReleaseKeystorePass} --key-pass pass:${resolvedReleaseKeyPass} "${outputApk}"`
+        `"${resolvedApksigner}" sign` +
+        ` --v1-signing-enabled true` +
+        ` --v2-signing-enabled false` +
+        ` --v3-signing-enabled false` +
+        ` --v4-signing-enabled false` +
+        ` --ks "${resolvedReleaseKeystorePath}"` +
+        ` --ks-key-alias "${resolvedReleaseKeyAlias}"` +
+        ` --ks-pass pass:${resolvedReleaseKeystorePass}` +
+        ` --key-pass pass:${resolvedReleaseKeyPass}` +
+        ` "${outputApk}"`
       );
-      session.log.push(`[shell] 签名: ${resolvedSignProfile.label} release keystore`);
+      session.log.push(`[shell] 签名完成: ${resolvedSignProfile.label} (V1-only)`);
     } else {
       throw new Error('APK signing failed: apksigner not available');
     }
@@ -6251,7 +6274,7 @@ print('OK:' + str(len(missing)))
           // 签名
           if (hasDebugKeystore && resolvedApksigner) {
             await execAsync(
-              `"${resolvedApksigner}" sign --ks "${debugKeystore}" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "${alignedApk}"`
+              `"${resolvedApksigner}" sign --v1-signing-enabled true --v2-signing-enabled false --v3-signing-enabled false --v4-signing-enabled false --ks "${debugKeystore}" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "${alignedApk}"`
             );
           }
           fs.copyFileSync(alignedApk, outputApk);
@@ -6330,10 +6353,28 @@ app.get('/api/apk/reinforce-status/:sessionId', (req, res) => {
     progress: session.progress,
     log: session.log.slice(-logLimit),
     outputName: session.outputName,
+    inputName: session.inputName || null,
     error: session.error,
     timing: session.timing,
+    options: session.options || {},
   });
 });
+
+/**
+ * 当 options.signProfile 缺失时，从 logTail 提取签名配置。
+ * 日志格式：[shell] 签名配置: 咪噜 (milu)
+ */
+function enrichOptionsFromLog(item) {
+  if (item.options?.signProfile) return item;
+  const log = Array.isArray(item.logTail) ? item.logTail : [];
+  for (const line of log) {
+    const m = line.match(/\[shell\]\s+签名配置:\s+.+?\s+\(([a-zA-Z0-9_]+)\)/);
+    if (m) {
+      return { ...item, options: { ...(item.options || {}), signProfile: m[1] } };
+    }
+  }
+  return item;
+}
 
 // 查询历史加固耗时日志（用于复盘瓶颈）
 app.get('/api/apk/reinforce-history', (req, res) => {
@@ -6345,13 +6386,14 @@ app.get('/api/apk/reinforce-history', (req, res) => {
     stage: session.stage,
     error: session.error || null,
     outputName: session.outputName,
+    inputName: session.inputName || null,
     progress: session.progress,
     options: session.options || {},
     timing: session.timing || {},
     logTail: Array.isArray(session.log) ? session.log.slice(-80) : [],
   }));
   if (!fs.existsSync(APK_REINFORCE_RUN_LOG)) {
-    return res.json({ success: true, items: runningItems.slice(-limit).reverse() });
+    return res.json({ success: true, items: runningItems.slice(-limit).reverse().map(enrichOptionsFromLog) });
   }
   try {
     const lines = fs.readFileSync(APK_REINFORCE_RUN_LOG, 'utf8')
@@ -6367,7 +6409,8 @@ app.get('/api/apk/reinforce-history', (req, res) => {
     });
     const items = [...mergedBySession.values()]
       .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
-      .slice(0, limit);
+      .slice(0, limit)
+      .map(enrichOptionsFromLog);
     res.json({ success: true, items });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -6381,26 +6424,124 @@ app.post('/api/apk/reinforce-history/clear', (_req, res) => {
     if (fs.existsSync(APK_REINFORCE_RUN_LOG)) {
       fs.rmSync(APK_REINFORCE_RUN_LOG, { force: true });
     }
+
     // 清理已结束会话，保留进行中会话
+    const runningSessionDirs = new Set();
     for (const [sessionId, session] of reinforceSessions.entries()) {
-      if (session?.status === 'running') continue;
+      if (session?.status === 'running') {
+        runningSessionDirs.add(sessionId);
+        continue;
+      }
       reinforceSessions.delete(sessionId);
     }
+
+    // 删除已结束会话的工作目录（.tmp/apk-reinforce/{sessionId}）
+    if (fs.existsSync(APK_SESSION_DIR)) {
+      for (const entry of fs.readdirSync(APK_SESSION_DIR, { withFileTypes: true })) {
+        if (entry.isDirectory() && !runningSessionDirs.has(entry.name)) {
+          fs.rmSync(path.join(APK_SESSION_DIR, entry.name), { recursive: true, force: true });
+        }
+      }
+    }
+
+    // 删除上传目录中的所有文件（.tmp/apk-uploads），进行中任务使用的是已复制到 sessionDir 的副本
+    if (fs.existsSync(apkUploadDir)) {
+      for (const entry of fs.readdirSync(apkUploadDir, { withFileTypes: true })) {
+        fs.rmSync(path.join(apkUploadDir, entry.name), { recursive: true, force: true });
+      }
+    }
+
+    // 清空导出目录
+    const exportDir = path.join(__dirname, '.tmp', 'apk-exports');
+    if (fs.existsSync(exportDir)) {
+      for (const entry of fs.readdirSync(exportDir, { withFileTypes: true })) {
+        fs.rmSync(path.join(exportDir, entry.name), { recursive: true, force: true });
+      }
+    }
+
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// 下载加固后 APK
-app.get('/api/apk/download-reinforced/:sessionId', (req, res) => {
-  const session = reinforceSessions.get(req.params.sessionId);
-  if (!session || session.status !== 'done' || !fs.existsSync(session.outputPath)) {
-    return res.status(404).json({ success: false, error: '文件不存在或加固未完成' });
+// 打开加固输出文件夹（收集所有已完成 session 的输出 APK 到统一目录后打开）
+app.post('/api/apk/open-reinforced-folder', (_req, res) => {
+  try {
+    const exportDir = path.join(__dirname, '.tmp', 'apk-exports');
+    if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true });
+
+    // 1. 从内存 session Map 中复制已完成的输出 APK
+    for (const session of reinforceSessions.values()) {
+      if (session.status === 'done' && session.outputPath && fs.existsSync(session.outputPath)) {
+        const dest = path.join(exportDir, path.basename(session.outputPath));
+        try { fs.copyFileSync(session.outputPath, dest); } catch (_) {}
+      }
+    }
+
+    // 2. 扫描磁盘上的 APK_SESSION_DIR，补充内存中没有的历史文件
+    //    输出 APK 文件名包含 -reinforce（含 -reinforced 旧格式）特征
+    if (fs.existsSync(APK_SESSION_DIR)) {
+      for (const sessionEntry of fs.readdirSync(APK_SESSION_DIR, { withFileTypes: true })) {
+        if (!sessionEntry.isDirectory()) continue;
+        const sessionPath = path.join(APK_SESSION_DIR, sessionEntry.name);
+        for (const fileEntry of fs.readdirSync(sessionPath, { withFileTypes: true })) {
+          if (!fileEntry.isFile() || !fileEntry.name.endsWith('.apk')) continue;
+          if (fileEntry.name.includes('-reinforce')) {
+            const src = path.join(sessionPath, fileEntry.name);
+            const dest = path.join(exportDir, fileEntry.name);
+            try { fs.copyFileSync(src, dest); } catch (_) {}
+          }
+        }
+      }
+    }
+
+    const exportedFiles = fs.readdirSync(exportDir).filter(f => f.endsWith('.apk'));
+
+    // 用系统命令打开文件夹（macOS: open, Linux: xdg-open）
+    const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
+    exec(`${cmd} "${exportDir}"`, (err) => {
+      if (err) console.warn('[open-reinforced-folder]', err.message);
+    });
+
+    res.json({ success: true, path: exportDir, count: exportedFiles.length });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
-  const filename = req.query.filename || session.outputName;
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(String(filename))}"`);
-  res.sendFile(session.outputPath);
+});
+
+
+app.get('/api/apk/download-reinforced/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const filenameParam = req.query.filename ? String(req.query.filename) : null;
+
+  // 1. 优先从内存 session 查找
+  const session = reinforceSessions.get(sessionId);
+  if (session && session.status === 'done' && session.outputPath && fs.existsSync(session.outputPath)) {
+    const filename = filenameParam || session.outputName;
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(String(filename))}"`);
+    return res.sendFile(session.outputPath);
+  }
+
+  // 2. 内存中没有（服务重启后）则从磁盘 sessionDir 查找
+  const sessionDir = path.join(APK_SESSION_DIR, sessionId);
+  if (fs.existsSync(sessionDir)) {
+    // 找该目录下带 -reinforce 的 APK 文件
+    const apkFiles = fs.readdirSync(sessionDir).filter(
+      f => f.endsWith('.apk') && f.includes('-reinforce')
+    );
+    if (apkFiles.length > 0) {
+      // 优先匹配 filename 参数，否则取第一个
+      const target = filenameParam && apkFiles.includes(filenameParam)
+        ? filenameParam
+        : apkFiles[0];
+      const filePath = path.join(sessionDir, target);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(target)}"`);
+      return res.sendFile(filePath);
+    }
+  }
+
+  return res.status(404).json({ success: false, error: '文件不存在或加固未完成' });
 });
 
 // ── 后端管理 ────────────────────────────────────────────────────────

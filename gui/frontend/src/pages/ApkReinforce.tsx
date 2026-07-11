@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Card, Button, Typography, Space, Alert,
-  Tooltip, Badge, Row, Col, Table, Modal, Select,
+  Tooltip, Badge, Row, Col, Table, Modal, Select, message,
+  Dropdown,
 } from 'antd';
+import type { MenuProps } from 'antd';
 import {
   SafetyCertificateOutlined, CheckCircleOutlined, CloseCircleOutlined,
   LoadingOutlined, DownloadOutlined, SyncOutlined,
@@ -28,6 +30,7 @@ interface ReinforceSession {
   log: string[];
   outputName: string;
   error?: string;
+  options?: { reinforceMode?: string; signProfile?: string; signProfileLabel?: string; [k: string]: unknown };
   timing?: {
     mode?: 'fast' | 'balanced' | 'full';
     queueMs?: number;
@@ -46,14 +49,12 @@ interface ReinforceHistoryItem {
   stage?: string;
   error?: string | null;
   outputName?: string;
+  inputName?: string;
+  options?: { reinforceMode?: string; signProfile?: string; signProfileLabel?: string; selfCodeTemplate?: string; [k: string]: unknown };
   progress?: number;
   timing?: {
     totalMs?: number;
     retries?: number;
-  };
-  options?: {
-    selfCodeTemplate?: string;
-    reinforceMode?: string;
   };
 }
 
@@ -136,6 +137,12 @@ const ApkReinforce: React.FC = () => {
   const pollTickRef = useRef(0);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
+  // 用 ref 存剩余队列，避免 startPolling 闭包读到过期 state
+  const pendingQueueRef = useRef<ApkItem[]>([]);
+  // 记录本次批量加固的原始顺序，用于保持表格顺序不变
+  const [currentBatch, setCurrentBatch] = useState<ApkItem[]>([]);
+  const submitAndPollRef = useRef<((target: ApkItem) => Promise<void>) | null>(null);
+  const fetchHistoryRef = useRef<((silent?: boolean, force?: boolean) => Promise<ReinforceHistoryItem[]>) | null>(null);
 
   const fetchJsonWithTimeout = async (url: string, init?: RequestInit, timeoutMs = 10000) => {
     const controller = new AbortController();
@@ -224,6 +231,7 @@ const ApkReinforce: React.FC = () => {
       if (!silent) setHistoryLoading(false);
     }
   };
+  fetchHistoryRef.current = fetchHistory;
 
   const fetchSignProfiles = async () => {
     try {
@@ -339,60 +347,62 @@ const ApkReinforce: React.FC = () => {
     }
   }, []);
 
+  // 提交单个 APK 并开始 poll
+  const submitAndPoll = async (target: ApkItem) => {
+    try {
+      const res = await fetch(apiUrl('/api/apk/reinforce'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apkPath: target.path,
+          ndkPath: envStatus?.ndk,
+          apksignerPath: envStatus?.apksigner,
+          protectAll: true,
+          reinforceMode,
+          signProfile,
+          enableStage2Inject: true,
+          enableStage2RuntimeLoad: true,
+          enableStage3StripClasses2: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.sessionId) {
+        throw new Error(data.error || '提交失败');
+      }
+      setSessionId(data.sessionId);
+      localStorage.setItem('apkReinforceSessionId', data.sessionId);
+      await fetchHistoryRef.current!(true, true);
+      startPolling(data.sessionId);
+    } catch (e: any) {
+      const errText = e?.message || '未知错误';
+      setPickError(`${target.name} 加固启动失败：${errText}`);
+      const next = pendingQueueRef.current.shift();
+      if (next) {
+        setApkItems([...pendingQueueRef.current]);
+        submitAndPollRef.current!(next);
+      } else {
+        setApkItems([]);
+        setReinforcing(false);
+      }
+    }
+  };
+  // 每次渲染后更新 ref，确保 poll 闭包调用的始终是最新版本
+  submitAndPollRef.current = submitAndPoll;
+
   const handleReinforce = async () => {
     if (!apkPath && apkItems.length === 0) return;
     setReinforcing(true);
     setSession(null);
     setPickError('');
+
     const targets = apkItems.length > 0 ? apkItems : [{ path: apkPath, name: apkName }];
-    try {
-      // 所有任务同时启动（Promise.all 并发请求）
-      const results = await Promise.all(
-        targets.map(async (target) => {
-          const res = await fetch(apiUrl('/api/apk/reinforce'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              apkPath: target.path,
-              ndkPath: envStatus?.ndk,
-              apksignerPath: envStatus?.apksigner,
-              protectAll: true,
-              reinforceMode,
-              signProfile,
-              enableStage2Inject: true,
-              enableStage2RuntimeLoad: true,
-              enableStage3StripClasses2: true,
-            }),
-          });
-          const data = await res.json();
-          return { ...data, _httpOk: res.ok, _name: target.name };
-        }),
-      );
-      const failures = results.filter(d => !d._httpOk || !d.success || !d.sessionId);
-      const firstSession = results.find(d => d.success && d.sessionId);
-      if (!firstSession) {
-        const errMsg = failures
-          .map(d => `${d._name}: ${d.error || '提交失败'}`)
-          .join('；') || '加固任务提交失败';
-        throw new Error(errMsg);
-      }
-      setSessionId(firstSession.sessionId);
-      localStorage.setItem('apkReinforceSessionId', firstSession.sessionId);
-      startPolling(firstSession.sessionId);
-      if (failures.length > 0) {
-        setPickError(`部分任务提交失败：${failures.map(d => d._name).join('、')}`);
-      }
-      // 任务已提交到后端，清空本地待加固队列，避免加固完成后"待加固"条目残留
-      setApkItems([]);
-      setApkPath('');
-      setApkName('');
-      await fetchHistory(true, true);
-    } catch (e: any) {
-      setReinforcing(false);
-      const errText = e?.message || '未知错误';
-      setPickError(`加固启动失败：${errText}`);
-      setSession({ status: 'error', progress: 0, log: [], outputName: '', error: errText });
-    }
+    const [first, ...rest] = targets;
+    pendingQueueRef.current = rest;
+    setCurrentBatch(targets);   // 保存原始顺序
+    setApkItems(rest);
+    if (apkItems.length === 0) { setApkPath(''); setApkName(''); }
+
+    await submitAndPoll(first);
   };
 
   const startPolling = (sid: string) => {
@@ -405,20 +415,27 @@ const ApkReinforce: React.FC = () => {
         pollTickRef.current += 1;
         setSession(data);
         if (data.status === 'running') {
-          // 历史列表是重接口，降频刷新避免占满后端请求队列
-          if (pollTickRef.current % 5 === 0) fetchHistory(true);
+          if (pollTickRef.current % 5 === 0) fetchHistoryRef.current!(true);
           pollRef.current = setTimeout(poll, 2000);
         } else {
-          const items = await fetchHistory(true);
-          const hasRunning = items.some(item => item.status === 'running');
-          setReinforcing(hasRunning);
+          await fetchHistoryRef.current!(true, true); // force=true，跳过缓存，确保 options.signProfile 已更新
           if (data.status === 'done') localStorage.removeItem('apkReinforceSessionId');
+          const next = pendingQueueRef.current.shift();
+          if (next) {
+            setApkItems([...pendingQueueRef.current]);
+            setSession(null);
+            submitAndPollRef.current!(next);
+          } else {
+            setApkItems([]);
+            setCurrentBatch([]);
+            setReinforcing(false);
+          }
         }
       } catch (e: any) {
         pollErrorRef.current += 1;
         if (pollErrorRef.current >= 10) {
           setReinforcing(false);
-          await fetchHistory(true);
+          await fetchHistoryRef.current!(true);
           setSession(prev => prev
             ? { ...prev, status: 'error', error: `网络连接失败（${e.message}），请刷新页面重试` }
             : null,
@@ -446,6 +463,18 @@ const ApkReinforce: React.FC = () => {
       fetchHistory(true);
     }
   };
+
+  const [batchDownloadLoading, setBatchDownloadLoading] = useState(false);
+  const [batchDownloadChannel, setBatchDownloadChannel] = useState<string>('');
+  const [batchDropdownOpen, setBatchDropdownOpen] = useState(false);
+  const [batchDownloadModalOpen, setBatchDownloadModalOpen] = useState(false);
+
+  // 渠道定义放在此处仅作为常量，不依赖 historyTableData
+  const CHANNEL_DEFS = [
+    { key: 'milu',        label: '咪噜' },
+    { key: 'wan52',       label: '52玩' },
+    { key: 'youxiaobao',  label: '游小宝' },
+  ];
 
   const handleClearHistory = async () => {
     Modal.confirm({
@@ -499,40 +528,159 @@ const ApkReinforce: React.FC = () => {
     done: '完成',
     error: '失败',
   };
-  // 队列项（已拖入但尚未点击开始加固）
-  const pendingItems: ReinforceHistoryItem[] = (!reinforcing && apkItems.length > 0)
-    ? apkItems.map((item, i) => ({
-      ts: new Date().toISOString(),
-      sessionId: `__pending__${i}__${item.name}`,
-      status: 'pending' as const,
-      stage: 'queued',
-      outputName: item.name,
-      progress: 0,
-    }))
-    : [];
+  // 待加固队列：reinforcing 期间也显示，让用户看到剩余等待项
+  const pendingItems: ReinforceHistoryItem[] = apkItems.map((item, i) => ({
+    ts: new Date().toISOString(),
+    sessionId: `__pending__${i}__${item.name}`,
+    status: 'pending' as const,
+    stage: 'queued',
+    outputName: item.name,
+    progress: 0,
+  }));
 
-  const historyTableData: ReinforceHistoryItem[] = [
-    ...pendingItems,
-    ...(sessionId && session
-      ? [
-        {
+  // 按 currentBatch 原始顺序构建当前批次的行，历史记录追加在后面
+  const batchRows: ReinforceHistoryItem[] = currentBatch.map((item) => {
+    // 优先从 session（当前运行）匹配
+    if (session && sessionId) {
+      const inputName = (session as any).inputName as string | undefined;
+      const matchByInput = inputName && (inputName === item.name || inputName === `${item.name}.apk` || item.name.startsWith(inputName.replace(/\.apk$/, '')));
+      if (matchByInput) {
+        return {
           ts: new Date().toISOString(),
           sessionId,
           status: session.status,
           stage: session.stage,
           error: session.error,
           outputName: session.outputName,
+          inputName: (session as any).inputName,
           progress: session.progress,
-          timing: {
-            totalMs: session.timing?.totalMs,
-            retries: session.timing?.retries,
-          },
-          options: { reinforceMode: session.timing?.mode },
-        },
-        ...historyItems.filter(item => item.sessionId !== sessionId),
-      ]
-      : historyItems),
-  ];
+          options: session.options,
+          timing: { totalMs: session.timing?.totalMs, retries: session.timing?.retries },
+        } as ReinforceHistoryItem;
+      }
+    }
+    // 从已完成历史记录匹配
+    const histMatch = historyItems.find(h => {
+      const hn = (h as any).inputName as string | undefined;
+      return hn && (hn === item.name || hn === `${item.name}.apk` || item.name.startsWith(hn.replace(/\.apk$/, '')));
+    });
+    if (histMatch) return histMatch;
+    // 还在待加固队列中
+    return {
+      ts: new Date().toISOString(),
+      sessionId: `__pending__${item.name}`,
+      status: 'pending' as const,
+      stage: 'queued',
+      outputName: item.name,
+      inputName: item.name,
+      progress: 0,
+    } as ReinforceHistoryItem;
+  });
+
+  const historyTableData: ReinforceHistoryItem[] = currentBatch.length > 0
+    ? [
+      ...batchRows,
+      // 不属于本批次的历史记录追加在后面
+      ...historyItems.filter(h =>
+        !currentBatch.some(b => {
+          const hn = (h as any).inputName as string | undefined;
+          return hn && (hn === b.name || hn === `${b.name}.apk` || b.name.startsWith(hn.replace(/\.apk$/, '')));
+        }) && h.sessionId !== sessionId
+      ),
+    ]
+    : [
+      ...(sessionId && session
+        ? [{
+          ts: new Date().toISOString(),
+          sessionId,
+          status: session.status,
+          stage: session.stage,
+          error: session.error,
+          outputName: session.outputName,
+          inputName: (session as any).inputName,
+          progress: session.progress,
+          timing: { totalMs: session.timing?.totalMs },
+          options: session.options,
+        } as ReinforceHistoryItem]
+        : []),
+      ...historyItems.filter(h => h.sessionId !== sessionId),
+    ];
+
+  // 各渠道已完成数量（渲染时从当前 historyItems + session 统计）
+  const channelDoneCounts = CHANNEL_DEFS.reduce<Record<string, number>>((acc, ch) => {
+    const all = [
+      ...historyItems,
+      ...(session && sessionId && session.status === 'done' && session.options?.signProfile
+        ? [{ status: 'done' as const, outputName: session.outputName, options: session.options, sessionId }]
+        : []),
+    ];
+    const unique = all.filter((r, i, arr) => arr.findIndex(x => x.sessionId === r.sessionId) === i);
+    acc[ch.key] = unique.filter(
+      r => r.status === 'done' && r.outputName && (r as any).options?.signProfile === ch.key
+    ).length;
+    return acc;
+  }, {});
+
+  // 点击批量下载时强制刷新后端历史，刷新完毕再展开下拉
+  const handleBatchDownloadOpen = async () => {
+    if (batchDownloadLoading) return;
+    setBatchDownloadLoading(true);
+    try {
+      await fetchHistory(false, true); // force=true 跳过缓存
+    } finally {
+      setBatchDownloadLoading(false);
+      setBatchDropdownOpen(true);
+    }
+  };
+
+  const CHANNELS: MenuProps['items'] = CHANNEL_DEFS.map(ch => {
+    const count = channelDoneCounts[ch.key] ?? 0;
+    const hasItems = count > 0;
+    return {
+      key: ch.key,
+      disabled: !hasItems,
+      label: (
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontWeight: hasItems ? 600 : 400, color: hasItems ? '#1677ff' : undefined }}>
+            {ch.label}
+          </span>
+          <span style={{
+            fontSize: 11,
+            background: hasItems ? '#e6f4ff' : '#f5f5f5',
+            color: hasItems ? '#1677ff' : '#aaa',
+            borderRadius: 10,
+            padding: '0 6px',
+          }}>
+            {count} 个
+          </span>
+        </span>
+      ),
+    };
+  });
+
+  const handleBatchDownloadConfirm = async () => {
+    setBatchDownloadModalOpen(false);
+    const channelDef = CHANNEL_DEFS.find(c => c.key === batchDownloadChannel);
+    const doneItems = historyTableData.filter(
+      r => r.status === 'done' && r.outputName && r.sessionId &&
+           r.options?.signProfile === batchDownloadChannel
+    );
+    if (doneItems.length === 0) {
+      message.warning(`${channelDef?.label ?? batchDownloadChannel} 暂无已完成的加固记录`);
+      return;
+    }
+    for (let i = 0; i < doneItems.length; i++) {
+      const item = doneItems[i];
+      await new Promise(resolve => setTimeout(resolve, i === 0 ? 0 : 300));
+      const a = document.createElement('a');
+      a.href = apiUrl(`/api/apk/download-reinforced/${item.sessionId}?filename=${encodeURIComponent(item.outputName!)}`);
+      a.download = item.outputName!;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+    message.success(`开始下载 ${doneItems.length} 个文件（${channelDef?.label}）`);
+  };
 
   return (
     <div style={{ padding: '24px 16px', width: '100%' }}>
@@ -852,7 +1000,27 @@ const ApkReinforce: React.FC = () => {
         size="small"
         extra={
           <Space size={4}>
-            <Button size="small" onClick={() => { void fetchHistory(); }} loading={historyLoading}>刷新</Button>
+            <Dropdown
+              open={batchDropdownOpen}
+              onOpenChange={(v) => { if (!v) setBatchDropdownOpen(false); }}
+              menu={{
+                items: CHANNELS,
+                onClick: ({ key }) => {
+                  setBatchDropdownOpen(false);
+                  setBatchDownloadChannel(key);
+                  setBatchDownloadModalOpen(true);
+                },
+              }}
+              trigger={['click']}
+            >
+              <Button
+                size="small"
+                loading={batchDownloadLoading}
+                onClick={handleBatchDownloadOpen}
+              >
+                批量下载 ▾
+              </Button>
+            </Dropdown>
             <Button size="small" danger onClick={handleClearHistory}>清空</Button>
           </Space>
         }
@@ -874,16 +1042,26 @@ const ApkReinforce: React.FC = () => {
           }}
           columns={[
             {
+              title: '文件',
+              dataIndex: 'inputName',
+              align: 'center',
+              ellipsis: true,
+              render: (v, r) => {
+                const name = v
+                  || r.outputName?.replace(/-reinforce-\d{2}-\d{2}-\d{2}\.apk$/, '.apk')
+                  || '-';
+                return <Text style={{ fontSize: 12 }} title={name}>{name}</Text>;
+              },
+            },
+            {
               title: '时间',
               dataIndex: 'ts',
-              width: 170,
               align: 'center',
               render: (v) => <Text style={{ fontSize: 12 }}>{formatTime(v)}</Text>,
             },
             {
               title: '状态',
               dataIndex: 'status',
-              width: 90,
               align: 'center',
               render: (v) => (
                 <Badge
@@ -893,21 +1071,12 @@ const ApkReinforce: React.FC = () => {
               ),
             },
             {
-              title: '阶段',
-              dataIndex: 'stage',
-              width: 100,
-              align: 'center',
-              render: (v) => <Text style={{ fontSize: 12 }}>{stageLabelMap[v || 'initializing'] || v || '-'}</Text>,
-            },
-            {
               title: '总耗时',
-              width: 100,
               align: 'center',
               render: (_, r) => <Text style={{ fontSize: 12 }}>{formatMs(r.timing?.totalMs)}</Text>,
             },
             {
               title: '进度',
-              width: 90,
               align: 'center',
               render: (_, r) => {
                 const progress = typeof r.progress === 'number'
@@ -919,14 +1088,7 @@ const ApkReinforce: React.FC = () => {
               },
             },
             {
-              title: '重试',
-              width: 70,
-              align: 'center',
-              render: (_, r) => <Text style={{ fontSize: 12 }}>{r.timing?.retries ?? 0}</Text>,
-            },
-            {
               title: '下载',
-              width: 120,
               align: 'center',
               render: (_, r) => (
                 r.status === 'done' && r.outputName
@@ -944,6 +1106,27 @@ const ApkReinforce: React.FC = () => {
           ]}
         />
       </Card>
+
+      {/* 批量下载确认弹框 */}
+      <Modal
+        title="批量下载确认"
+        open={batchDownloadModalOpen}
+        onOk={handleBatchDownloadConfirm}
+        onCancel={() => setBatchDownloadModalOpen(false)}
+        okText="确认下载"
+        cancelText="取消"
+        okButtonProps={{ disabled: (channelDoneCounts[batchDownloadChannel] ?? 0) === 0 }}
+      >
+        <p>
+          渠道：<strong>{CHANNEL_DEFS.find(c => c.key === batchDownloadChannel)?.label}</strong>
+        </p>
+        <p>
+          将下载 <strong>{channelDoneCounts[batchDownloadChannel] ?? 0}</strong> 个已完成的加固 APK
+        </p>
+        {(channelDoneCounts[batchDownloadChannel] ?? 0) === 0 && (
+          <Alert type="warning" showIcon message="该渠道暂无已完成的加固记录" />
+        )}
+      </Modal>
 
     </div>
   );
