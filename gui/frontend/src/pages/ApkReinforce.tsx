@@ -888,9 +888,9 @@ const ApkReinforce: React.FC = () => {
             {
               title: '文件',
               dataIndex: 'inputName',
+              align: 'center',
               ellipsis: true,
               render: (v, r) => {
-                // 优先用 inputName，降级从 outputName 提取
                 const name = v
                   || r.outputName?.replace(/-reinforce-\d{2}-\d{2}-\d{2}\.apk$/, '.apk')
                   || '-';
@@ -900,14 +900,12 @@ const ApkReinforce: React.FC = () => {
             {
               title: '时间',
               dataIndex: 'ts',
-              width: 170,
               align: 'center',
               render: (v) => <Text style={{ fontSize: 12 }}>{formatTime(v)}</Text>,
             },
             {
               title: '状态',
               dataIndex: 'status',
-              width: 90,
               align: 'center',
               render: (v) => (
                 <Badge
@@ -919,19 +917,16 @@ const ApkReinforce: React.FC = () => {
             {
               title: '阶段',
               dataIndex: 'stage',
-              width: 100,
               align: 'center',
               render: (v) => <Text style={{ fontSize: 12 }}>{stageLabelMap[v || 'initializing'] || v || '-'}</Text>,
             },
             {
               title: '总耗时',
-              width: 100,
               align: 'center',
               render: (_, r) => <Text style={{ fontSize: 12 }}>{formatMs(r.timing?.totalMs)}</Text>,
             },
             {
               title: '进度',
-              width: 90,
               align: 'center',
               render: (_, r) => {
                 const progress = typeof r.progress === 'number'
@@ -944,7 +939,6 @@ const ApkReinforce: React.FC = () => {
             },
             {
               title: '下载',
-              width: 120,
               align: 'center',
               render: (_, r) => (
                 r.status === 'done' && r.outputName
