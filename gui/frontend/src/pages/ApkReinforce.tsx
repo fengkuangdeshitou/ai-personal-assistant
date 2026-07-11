@@ -466,69 +466,12 @@ const ApkReinforce: React.FC = () => {
   const [batchDownloadChannel, setBatchDownloadChannel] = useState<string>('');
   const [batchDownloadModalOpen, setBatchDownloadModalOpen] = useState(false);
 
-  // 渠道定义：key = signProfile ID，label = 显示名
+  // 渠道定义放在此处仅作为常量，不依赖 historyTableData
   const CHANNEL_DEFS = [
     { key: 'milu',        label: '咪噜' },
     { key: 'wan52',       label: '52玩' },
     { key: 'youxiaobao',  label: '游小宝' },
   ];
-
-  // 各渠道已完成的 APK 数量
-  const channelDoneCounts = CHANNEL_DEFS.reduce<Record<string, number>>((acc, ch) => {
-    acc[ch.key] = historyTableData.filter(
-      r => r.status === 'done' && r.outputName && r.options?.signProfile === ch.key
-    ).length;
-    return acc;
-  }, {});
-
-  const CHANNELS: MenuProps['items'] = CHANNEL_DEFS.map(ch => {
-    const count = channelDoneCounts[ch.key] ?? 0;
-    const hasItems = count > 0;
-    return {
-      key: ch.key,
-      disabled: !hasItems,
-      label: (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontWeight: hasItems ? 600 : 400, color: hasItems ? '#1677ff' : undefined }}>
-            {ch.label}
-          </span>
-          <span style={{
-            fontSize: 11,
-            background: hasItems ? '#e6f4ff' : '#f5f5f5',
-            color: hasItems ? '#1677ff' : '#aaa',
-            borderRadius: 10,
-            padding: '0 6px',
-          }}>
-            {count} 个
-          </span>
-        </span>
-      ),
-    };
-  });
-
-  const handleBatchDownloadConfirm = async () => {
-    setBatchDownloadModalOpen(false);
-    const channelDef = CHANNEL_DEFS.find(c => c.key === batchDownloadChannel);
-    const doneItems = historyTableData.filter(
-      r => r.status === 'done' && r.outputName && r.sessionId &&
-           r.options?.signProfile === batchDownloadChannel
-    );
-    if (doneItems.length === 0) {
-      message.warning(`${channelDef?.label ?? batchDownloadChannel} 暂无已完成的加固记录`);
-      return;
-    }
-    for (let i = 0; i < doneItems.length; i++) {
-      const item = doneItems[i];
-      await new Promise(resolve => setTimeout(resolve, i === 0 ? 0 : 300));
-      const a = document.createElement('a');
-      a.href = apiUrl(`/api/apk/download-reinforced/${item.sessionId}?filename=${encodeURIComponent(item.outputName!)}`);
-      a.download = item.outputName!;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }
-    message.success(`开始下载 ${doneItems.length} 个文件（${channelDef?.label}）`);
-  };
 
   const handleClearHistory = async () => {
     Modal.confirm({
@@ -659,6 +602,63 @@ const ApkReinforce: React.FC = () => {
         : []),
       ...historyItems.filter(h => h.sessionId !== sessionId),
     ];
+
+  // 各渠道已完成数量（依赖 historyTableData，必须在其之后定义）
+  const channelDoneCounts = CHANNEL_DEFS.reduce<Record<string, number>>((acc, ch) => {
+    acc[ch.key] = historyTableData.filter(
+      r => r.status === 'done' && r.outputName && r.options?.signProfile === ch.key
+    ).length;
+    return acc;
+  }, {});
+
+  const CHANNELS: MenuProps['items'] = CHANNEL_DEFS.map(ch => {
+    const count = channelDoneCounts[ch.key] ?? 0;
+    const hasItems = count > 0;
+    return {
+      key: ch.key,
+      disabled: !hasItems,
+      label: (
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontWeight: hasItems ? 600 : 400, color: hasItems ? '#1677ff' : undefined }}>
+            {ch.label}
+          </span>
+          <span style={{
+            fontSize: 11,
+            background: hasItems ? '#e6f4ff' : '#f5f5f5',
+            color: hasItems ? '#1677ff' : '#aaa',
+            borderRadius: 10,
+            padding: '0 6px',
+          }}>
+            {count} 个
+          </span>
+        </span>
+      ),
+    };
+  });
+
+  const handleBatchDownloadConfirm = async () => {
+    setBatchDownloadModalOpen(false);
+    const channelDef = CHANNEL_DEFS.find(c => c.key === batchDownloadChannel);
+    const doneItems = historyTableData.filter(
+      r => r.status === 'done' && r.outputName && r.sessionId &&
+           r.options?.signProfile === batchDownloadChannel
+    );
+    if (doneItems.length === 0) {
+      message.warning(`${channelDef?.label ?? batchDownloadChannel} 暂无已完成的加固记录`);
+      return;
+    }
+    for (let i = 0; i < doneItems.length; i++) {
+      const item = doneItems[i];
+      await new Promise(resolve => setTimeout(resolve, i === 0 ? 0 : 300));
+      const a = document.createElement('a');
+      a.href = apiUrl(`/api/apk/download-reinforced/${item.sessionId}?filename=${encodeURIComponent(item.outputName!)}`);
+      a.download = item.outputName!;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+    message.success(`开始下载 ${doneItems.length} 个文件（${channelDef?.label}）`);
+  };
 
   return (
     <div style={{ padding: '24px 16px', width: '100%' }}>
