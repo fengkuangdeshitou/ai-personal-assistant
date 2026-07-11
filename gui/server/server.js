@@ -6350,6 +6350,7 @@ app.get('/api/apk/reinforce-status/:sessionId', (req, res) => {
     inputName: session.inputName || null,
     error: session.error,
     timing: session.timing,
+    options: session.options || {},
   });
 });
 

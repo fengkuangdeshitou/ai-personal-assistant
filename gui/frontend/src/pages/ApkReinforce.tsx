@@ -30,6 +30,7 @@ interface ReinforceSession {
   log: string[];
   outputName: string;
   error?: string;
+  options?: { reinforceMode?: string; signProfile?: string; signProfileLabel?: string; [k: string]: unknown };
   timing?: {
     mode?: 'fast' | 'balanced' | 'full';
     queueMs?: number;
@@ -551,8 +552,8 @@ const ApkReinforce: React.FC = () => {
           outputName: session.outputName,
           inputName: (session as any).inputName,
           progress: session.progress,
+          options: session.options,
           timing: { totalMs: session.timing?.totalMs, retries: session.timing?.retries },
-          options: { reinforceMode: session.timing?.mode },
         } as ReinforceHistoryItem;
       }
     }
@@ -597,7 +598,7 @@ const ApkReinforce: React.FC = () => {
           inputName: (session as any).inputName,
           progress: session.progress,
           timing: { totalMs: session.timing?.totalMs },
-          options: { reinforceMode: session.timing?.mode },
+          options: session.options,
         } as ReinforceHistoryItem]
         : []),
       ...historyItems.filter(h => h.sessionId !== sessionId),
