@@ -6431,11 +6431,28 @@ app.post('/api/apk/open-reinforced-folder', (_req, res) => {
     const exportDir = path.join(__dirname, '.tmp', 'apk-exports');
     if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true });
 
-    // 将所有已完成 session 的输出 APK 复制到 exportDir（文件名重复则覆盖）
+    // 1. 从内存 session Map 中复制已完成的输出 APK
     for (const session of reinforceSessions.values()) {
       if (session.status === 'done' && session.outputPath && fs.existsSync(session.outputPath)) {
         const dest = path.join(exportDir, path.basename(session.outputPath));
         try { fs.copyFileSync(session.outputPath, dest); } catch (_) {}
+      }
+    }
+
+    // 2. 扫描磁盘上的 APK_SESSION_DIR，补充内存中没有的历史文件
+    //    输出 APK 的文件名包含 -reinforce- 特征字符串
+    if (fs.existsSync(APK_SESSION_DIR)) {
+      for (const sessionEntry of fs.readdirSync(APK_SESSION_DIR, { withFileTypes: true })) {
+        if (!sessionEntry.isDirectory()) continue;
+        const sessionPath = path.join(APK_SESSION_DIR, sessionEntry.name);
+        for (const fileEntry of fs.readdirSync(sessionPath, { withFileTypes: true })) {
+          if (!fileEntry.isFile()) continue;
+          if (fileEntry.name.includes('-reinforce-') && fileEntry.name.endsWith('.apk')) {
+            const src = path.join(sessionPath, fileEntry.name);
+            const dest = path.join(exportDir, fileEntry.name);
+            try { fs.copyFileSync(src, dest); } catch (_) {}
+          }
+        }
       }
     }
 
