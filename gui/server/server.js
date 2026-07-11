@@ -5647,16 +5647,12 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
     }
 
     if (resolvedApksigner && hasReleaseSigning) {
-      // 显式指定 V1+V2+V3 签名方案，确保兼容 Android 4.x ~ 14+
-      // V1: JAR signing，兼容 Android < 7.0
-      // V2: APK Signature Scheme v2，Android 7.0+
-      // V3: Key Rotation，Android 9.0+
-      // V4: 增量安装，部分系统支持不完整，默认关闭
+      // 固定使用 V1（JAR signing），兼容所有 Android 版本
       await execAsync(
         `"${resolvedApksigner}" sign` +
         ` --v1-signing-enabled true` +
-        ` --v2-signing-enabled true` +
-        ` --v3-signing-enabled true` +
+        ` --v2-signing-enabled false` +
+        ` --v3-signing-enabled false` +
         ` --v4-signing-enabled false` +
         ` --ks "${resolvedReleaseKeystorePath}"` +
         ` --ks-key-alias "${resolvedReleaseKeyAlias}"` +
@@ -5664,7 +5660,7 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
         ` --key-pass pass:${resolvedReleaseKeyPass}` +
         ` "${outputApk}"`
       );
-      session.log.push(`[shell] 签名完成: ${resolvedSignProfile.label} (V1+V2+V3)`);
+      session.log.push(`[shell] 签名完成: ${resolvedSignProfile.label} (V1-only)`);
     } else {
       throw new Error('APK signing failed: apksigner not available');
     }
@@ -6272,7 +6268,7 @@ print('OK:' + str(len(missing)))
           // 签名
           if (hasDebugKeystore && resolvedApksigner) {
             await execAsync(
-              `"${resolvedApksigner}" sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false --ks "${debugKeystore}" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "${alignedApk}"`
+              `"${resolvedApksigner}" sign --v1-signing-enabled true --v2-signing-enabled false --v3-signing-enabled false --v4-signing-enabled false --ks "${debugKeystore}" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "${alignedApk}"`
             );
           }
           fs.copyFileSync(alignedApk, outputApk);
