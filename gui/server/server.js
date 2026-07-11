@@ -4001,6 +4001,7 @@ app.post('/api/apk/reinforce', async (req, res) => {
     log: [],
     outputPath: outputApk,
     outputName: outputFileName,
+    inputName: `${apkOriginalName}.apk`,
     proc: null,
     timing: {
       mode: normalizedMode,
@@ -6330,6 +6331,7 @@ app.get('/api/apk/reinforce-status/:sessionId', (req, res) => {
     progress: session.progress,
     log: session.log.slice(-logLimit),
     outputName: session.outputName,
+    inputName: session.inputName || null,
     error: session.error,
     timing: session.timing,
   });
@@ -6345,6 +6347,7 @@ app.get('/api/apk/reinforce-history', (req, res) => {
     stage: session.stage,
     error: session.error || null,
     outputName: session.outputName,
+    inputName: session.inputName || null,
     progress: session.progress,
     options: session.options || {},
     timing: session.timing || {},

@@ -46,6 +46,7 @@ interface ReinforceHistoryItem {
   stage?: string;
   error?: string | null;
   outputName?: string;
+  inputName?: string;
   progress?: number;
   timing?: {
     totalMs?: number;
@@ -522,6 +523,7 @@ const ApkReinforce: React.FC = () => {
           stage: session.stage,
           error: session.error,
           outputName: session.outputName,
+          inputName: (session as any).inputName,
           progress: session.progress,
           timing: {
             totalMs: session.timing?.totalMs,
@@ -874,6 +876,18 @@ const ApkReinforce: React.FC = () => {
           }}
           columns={[
             {
+              title: '文件',
+              dataIndex: 'inputName',
+              ellipsis: true,
+              render: (v, r) => {
+                // 优先用 inputName，降级从 outputName 提取
+                const name = v
+                  || r.outputName?.replace(/-reinforce-\d{2}-\d{2}-\d{2}\.apk$/, '.apk')
+                  || '-';
+                return <Text style={{ fontSize: 12 }} title={name}>{name}</Text>;
+              },
+            },
+            {
               title: '时间',
               dataIndex: 'ts',
               width: 170,
@@ -917,12 +931,6 @@ const ApkReinforce: React.FC = () => {
                     : undefined;
                 return <Text style={{ fontSize: 12 }}>{typeof progress === 'number' ? `${progress}%` : '-'}</Text>;
               },
-            },
-            {
-              title: '重试',
-              width: 70,
-              align: 'center',
-              render: (_, r) => <Text style={{ fontSize: 12 }}>{r.timing?.retries ?? 0}</Text>,
             },
             {
               title: '下载',
