@@ -525,7 +525,7 @@ const ApkReinforce: React.FC = () => {
   }));
 
   const historyTableData: ReinforceHistoryItem[] = [
-    ...pendingItems,
+    // 1. 当前正在加固的项（最优先显示）
     ...(sessionId && session
       ? [
         {
@@ -543,9 +543,12 @@ const ApkReinforce: React.FC = () => {
           },
           options: { reinforceMode: session.timing?.mode },
         },
-        ...historyItems.filter(item => item.sessionId !== sessionId),
       ]
-      : historyItems),
+      : []),
+    // 2. 待加固队列（按提交顺序）
+    ...pendingItems,
+    // 3. 历史已完成记录（排除当前 session）
+    ...historyItems.filter(item => item.sessionId !== sessionId),
   ];
 
   return (
