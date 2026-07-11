@@ -4949,10 +4949,10 @@ APP_ABI := armeabi-v7a arm64-v8a
     :has_lib_path
     invoke-virtual {p0}, Landroid/content/Context;->getClassLoader()Ljava/lang/ClassLoader;
     move-result-object v4
-    invoke-virtual {v4}, Ljava/lang/ClassLoader;->getParent()Ljava/lang/ClassLoader;
-    move-result-object v10
-    if-eqz v10, :use_old_parent
-    move-object v4, v10
+    # 使用 PathClassLoader 作为 DexClassLoader 的父级（而非 BootClassLoader）
+    # PathClassLoader 已持有 app 的完整 nativeLibraryDir，
+    # 确保业务 DEX 中第三方 JNI 库（如 android-gif-drawable）
+    # 调用 System.loadLibrary() 时能正确找到 .so 文件
     :use_old_parent
     new-instance v0, Ldalvik/system/DexClassLoader;
     invoke-direct {v0, v1, v2, v3, v4}, Ldalvik/system/DexClassLoader;-><init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V
