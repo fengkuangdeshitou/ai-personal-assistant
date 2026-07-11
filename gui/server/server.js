@@ -4116,19 +4116,21 @@ app.post('/api/apk/reinforce', async (req, res) => {
       session.log.push(`[shell] stage2 bootstrap: Manifest 解析跳过（${String(e.message || e).split('\n')[0]}）`);
     }
 
-    // U4: 壳包名随机化 — 每次加固基于包名+随机盐派生唯一路径，防止固定特征被扫描
+    // U4: 壳包名随机化 — 仅对 Stage2PayloadLoader 随机化包名，壳 Application 使用原始类名
     {
       const pkgSeed = crypto.createHash('sha1')
         .update((manifestPackage || 'default') + crypto.randomBytes(4).toString('hex'))
         .digest('hex');
-      // Java 标识符不能以数字开头 — 将首位数字替换为对应字母 (0→a, 1→b, ... 9→j)
       const safeIdent = (s) => s.replace(/^[0-9]/, d => String.fromCharCode(97 + parseInt(d, 10)));
       const seg1 = safeIdent(pkgSeed.slice(0, 6));
       const seg2 = safeIdent(pkgSeed.slice(6, 10));
       shellStage2Package = `com.${seg1}.${seg2}`;
       shellLoaderFqcn = `${shellStage2Package}.${shellLoaderClassName}`;
-      shellAppFqcn = `${shellStage2Package}.${shellAppClassName}`;
+      // 壳 Application 使用原始 Application 类名，避免类名替换引发兼容性问题
+      // createDelegate 仍通过 DexClassLoader 加载 payload 中的真实业务 Application
+      shellAppFqcn = originalApplication || `${shellStage2Package}.${shellAppClassName}`;
       session.log.push(`[shell] 壳包名随机化: ${shellStage2Package}`);
+      session.log.push(`[shell] 壳 Application: ${shellAppFqcn}`);
     }
 
     try {
@@ -4339,15 +4341,10 @@ console.log('OK:' + payload.length);
       const currentNameMatch = appTagMatch?.[0]?.match(/android:name="([^"]+)"/);
       let currentAppName = currentNameMatch?.[1] || originalApplication || '';
       if (currentAppName.startsWith('.')) currentAppName = `${pkg}${currentAppName}`;
-      const shellAppClass = shellAppFqcn;
+      // 不替换 android:name，保留原始 Application 类名，避免 ClassCastException 等兼容性问题
+      // 只关闭 debuggable
       if (appTagMatch) {
         let newAppTag = appTagMatch[0];
-        if (/android:name="[^"]*"/.test(newAppTag)) {
-          newAppTag = newAppTag.replace(/android:name="[^"]*"/, `android:name="${shellAppClass}"`);
-        } else {
-          newAppTag = newAppTag.replace('<application', `<application android:name="${shellAppClass}"`);
-        }
-        // P0: 强制关闭 debuggable，防止调试注入与内存抓取
         if (/android:debuggable="[^"]*"/.test(newAppTag)) {
           newAppTag = newAppTag.replace(/android:debuggable="[^"]*"/, 'android:debuggable="false"');
         } else {
@@ -5434,10 +5431,14 @@ APP_ABI := armeabi-v7a arm64-v8a
 
       fs.writeFileSync(path.join(smaliDir, 'Stage2PayloadLoader.smali'), loaderSmali, 'utf8');
 
-      const shellSmali = `.class public L${stage2Path}/Stage2ShellApplication;
+      // 壳 Application 使用原始 Application 类名（shellAppFqcn = originalApplication）
+      // 这样加固后 context.getApplicationContext() 仍返回原始类名，避免 ClassCastException 等兼容性问题
+      const shellAppPath = shellAppFqcn.replace(/\./g, '/');
+      const shellAppSmaliDir = path.join(injectDir, smaliRoot, ...shellAppFqcn.split('.').slice(0, -1));
+      fs.mkdirSync(shellAppSmaliDir, { recursive: true });
+      const shellAppSimpleName = shellAppFqcn.split('.').pop();
+      const shellSmali = `.class public L${shellAppPath};
 .super Landroid/app/Application;
-
-.field private static final ORIGINAL_APP:Ljava/lang/String; = "${escapedApp}"
 
 .field private mDelegate:Landroid/app/Application;
 
@@ -5465,7 +5466,7 @@ APP_ABI := armeabi-v7a arm64-v8a
     invoke-static {v0, p0}, L${stage2Path}/Stage2PayloadLoader;->createDelegate(Ljava/lang/String;Landroid/content/Context;)Landroid/app/Application;
     move-result-object v2
     if-eqz v2, :done
-    iput-object v2, p0, L${stage2Path}/Stage2ShellApplication;->mDelegate:Landroid/app/Application;
+    iput-object v2, p0, L${shellAppPath};->mDelegate:Landroid/app/Application;
     invoke-virtual {v2}, Landroid/app/Application;->onCreate()V
     :done
     :try_end
@@ -5479,7 +5480,7 @@ APP_ABI := armeabi-v7a arm64-v8a
     return-void
 .end method
 `;
-      fs.writeFileSync(path.join(smaliDir, 'Stage2ShellApplication.smali'), shellSmali, 'utf8');
+      fs.writeFileSync(path.join(shellAppSmaliDir, `${shellAppSimpleName}.smali`), shellSmali, 'utf8');
 
       const buildCmd = `java -jar "${apktoolJar}" b -o "${shellRebuiltApk}" "${injectDir}"`;
       fs.appendFileSync(stage2LogFile, `\n[build.cmd] ${buildCmd}\n`, 'utf8');
