@@ -5089,8 +5089,6 @@ APP_ABI := armeabi-v7a arm64-v8a
     return-void
 .end method
 
-.end method
-
 .method public static createDelegate(Ljava/lang/String;Landroid/content/Context;)Landroid/app/Application;
     .locals 8
     const/4 v0, 0x0
