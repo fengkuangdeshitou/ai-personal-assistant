@@ -5635,16 +5635,36 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
       throw new Error('release signing required: provide keystorePath/keyAlias/keystorePass/keyPass');
     }
 
-    if (zipalignPath && fs.existsSync(zipalignPath)) {
-      await execAsync(`"${zipalignPath}" -p -f 4 "${shellUnsignedApk}" "${outputApk}"`);
-    } else {
+    // zipalign：先对齐再签名，zipalign 不可用时尝试从 PATH 查找
+    const zipalignCmd = zipalignPath || 'zipalign';
+    try {
+      await execAsync(`"${zipalignCmd}" -p -f 4 "${shellUnsignedApk}" "${outputApk}"`);
+      session.log.push('[shell] zipalign 对齐完成');
+    } catch (e) {
+      // zipalign 不可用时直接复制（签名仍会执行，但对齐缺失在部分设备可能影响安装）
       fs.copyFileSync(shellUnsignedApk, outputApk);
+      session.log.push('[shell] ⚠️ zipalign 不可用，已跳过对齐（建议安装 Android Build Tools）');
     }
+
     if (resolvedApksigner && hasReleaseSigning) {
+      // 显式指定 V1+V2+V3 签名方案，确保兼容 Android 4.x ~ 14+
+      // V1: JAR signing，兼容 Android < 7.0
+      // V2: APK Signature Scheme v2，Android 7.0+
+      // V3: Key Rotation，Android 9.0+
+      // V4: 增量安装，部分系统支持不完整，默认关闭
       await execAsync(
-        `"${resolvedApksigner}" sign --ks "${resolvedReleaseKeystorePath}" --ks-key-alias "${resolvedReleaseKeyAlias}" --ks-pass pass:${resolvedReleaseKeystorePass} --key-pass pass:${resolvedReleaseKeyPass} "${outputApk}"`
+        `"${resolvedApksigner}" sign` +
+        ` --v1-signing-enabled true` +
+        ` --v2-signing-enabled true` +
+        ` --v3-signing-enabled true` +
+        ` --v4-signing-enabled false` +
+        ` --ks "${resolvedReleaseKeystorePath}"` +
+        ` --ks-key-alias "${resolvedReleaseKeyAlias}"` +
+        ` --ks-pass pass:${resolvedReleaseKeystorePass}` +
+        ` --key-pass pass:${resolvedReleaseKeyPass}` +
+        ` "${outputApk}"`
       );
-      session.log.push(`[shell] 签名: ${resolvedSignProfile.label} release keystore`);
+      session.log.push(`[shell] 签名完成: ${resolvedSignProfile.label} (V1+V2+V3)`);
     } else {
       throw new Error('APK signing failed: apksigner not available');
     }
@@ -6252,7 +6272,7 @@ print('OK:' + str(len(missing)))
           // 签名
           if (hasDebugKeystore && resolvedApksigner) {
             await execAsync(
-              `"${resolvedApksigner}" sign --ks "${debugKeystore}" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "${alignedApk}"`
+              `"${resolvedApksigner}" sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false --ks "${debugKeystore}" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "${alignedApk}"`
             );
           }
           fs.copyFileSync(alignedApk, outputApk);
