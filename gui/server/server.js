@@ -6512,13 +6512,36 @@ app.post('/api/apk/open-reinforced-folder', (_req, res) => {
 
 
 app.get('/api/apk/download-reinforced/:sessionId', (req, res) => {
-  const session = reinforceSessions.get(req.params.sessionId);
-  if (!session || session.status !== 'done' || !fs.existsSync(session.outputPath)) {
-    return res.status(404).json({ success: false, error: '文件不存在或加固未完成' });
+  const { sessionId } = req.params;
+  const filenameParam = req.query.filename ? String(req.query.filename) : null;
+
+  // 1. 优先从内存 session 查找
+  const session = reinforceSessions.get(sessionId);
+  if (session && session.status === 'done' && session.outputPath && fs.existsSync(session.outputPath)) {
+    const filename = filenameParam || session.outputName;
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(String(filename))}"`);
+    return res.sendFile(session.outputPath);
   }
-  const filename = req.query.filename || session.outputName;
-  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(String(filename))}"`);
-  res.sendFile(session.outputPath);
+
+  // 2. 内存中没有（服务重启后）则从磁盘 sessionDir 查找
+  const sessionDir = path.join(APK_SESSION_DIR, sessionId);
+  if (fs.existsSync(sessionDir)) {
+    // 找该目录下带 -reinforce 的 APK 文件
+    const apkFiles = fs.readdirSync(sessionDir).filter(
+      f => f.endsWith('.apk') && f.includes('-reinforce')
+    );
+    if (apkFiles.length > 0) {
+      // 优先匹配 filename 参数，否则取第一个
+      const target = filenameParam && apkFiles.includes(filenameParam)
+        ? filenameParam
+        : apkFiles[0];
+      const filePath = path.join(sessionDir, target);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(target)}"`);
+      return res.sendFile(filePath);
+    }
+  }
+
+  return res.status(404).json({ success: false, error: '文件不存在或加固未完成' });
 });
 
 // ── 后端管理 ────────────────────────────────────────────────────────
