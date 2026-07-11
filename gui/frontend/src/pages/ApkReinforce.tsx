@@ -418,7 +418,7 @@ const ApkReinforce: React.FC = () => {
           if (pollTickRef.current % 5 === 0) fetchHistoryRef.current!(true);
           pollRef.current = setTimeout(poll, 2000);
         } else {
-          await fetchHistoryRef.current!(true);
+          await fetchHistoryRef.current!(true, true); // force=true，跳过缓存，确保 options.signProfile 已更新
           if (data.status === 'done') localStorage.removeItem('apkReinforceSessionId');
           const next = pendingQueueRef.current.shift();
           if (next) {

@@ -3736,9 +3736,9 @@ function persistReinforceRunLog(sessionId, session) {
     stage: session.stage,
     error: session.error || null,
     outputName: session.outputName,
+    inputName: session.inputName || null,
     options: session.options || {},
     timing: session.timing || {},
-    // 仅保留尾部日志，避免文件膨胀
     logTail: Array.isArray(session.log) ? session.log.slice(-80) : [],
   };
   try {
