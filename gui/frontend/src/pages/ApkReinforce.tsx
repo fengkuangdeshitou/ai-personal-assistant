@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Card, Button, Typography, Space, Alert,
-  Tooltip, Badge, Row, Col, Table, Modal, Select,
+  Tooltip, Badge, Row, Col, Table, Modal, Select, message,
 } from 'antd';
 import {
   SafetyCertificateOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -864,7 +864,18 @@ const ApkReinforce: React.FC = () => {
         size="small"
         extra={
           <Space size={4}>
-            <Button size="small" onClick={() => { void fetchHistory(); }} loading={historyLoading}>刷新</Button>
+            <Button
+              size="small"
+              onClick={async () => {
+                try {
+                  await fetch(apiUrl('/api/apk/open-reinforced-folder'), { method: 'POST' });
+                } catch (e: any) {
+                  message.error(`打开失败：${e?.message}`);
+                }
+              }}
+            >
+              导出
+            </Button>
             <Button size="small" danger onClick={handleClearHistory}>清空</Button>
           </Space>
         }
@@ -913,12 +924,6 @@ const ApkReinforce: React.FC = () => {
                   text={v === 'done' ? '成功' : v === 'error' ? '失败' : v === 'pending' ? '待加固' : '进行中'}
                 />
               ),
-            },
-            {
-              title: '阶段',
-              dataIndex: 'stage',
-              align: 'center',
-              render: (v) => <Text style={{ fontSize: 12 }}>{stageLabelMap[v || 'initializing'] || v || '-'}</Text>,
             },
             {
               title: '总耗时',

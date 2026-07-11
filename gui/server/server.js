@@ -6411,13 +6411,47 @@ app.post('/api/apk/reinforce-history/clear', (_req, res) => {
       }
     }
 
+    // 清空导出目录
+    const exportDir = path.join(__dirname, '.tmp', 'apk-exports');
+    if (fs.existsSync(exportDir)) {
+      for (const entry of fs.readdirSync(exportDir, { withFileTypes: true })) {
+        fs.rmSync(path.join(exportDir, entry.name), { recursive: true, force: true });
+      }
+    }
+
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// 下载加固后 APK
+// 打开加固输出文件夹（收集所有已完成 session 的输出 APK 到统一目录后打开）
+app.post('/api/apk/open-reinforced-folder', (_req, res) => {
+  try {
+    const exportDir = path.join(__dirname, '.tmp', 'apk-exports');
+    if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true });
+
+    // 将所有已完成 session 的输出 APK 复制到 exportDir（文件名重复则覆盖）
+    for (const session of reinforceSessions.values()) {
+      if (session.status === 'done' && session.outputPath && fs.existsSync(session.outputPath)) {
+        const dest = path.join(exportDir, path.basename(session.outputPath));
+        try { fs.copyFileSync(session.outputPath, dest); } catch (_) {}
+      }
+    }
+
+    // 用系统命令打开文件夹（macOS: open, Linux: xdg-open）
+    const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
+    exec(`${cmd} "${exportDir}"`, (err) => {
+      if (err) console.warn('[open-reinforced-folder]', err.message);
+    });
+
+    res.json({ success: true, path: exportDir });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+
 app.get('/api/apk/download-reinforced/:sessionId', (req, res) => {
   const session = reinforceSessions.get(req.params.sessionId);
   if (!session || session.status !== 'done' || !fs.existsSync(session.outputPath)) {
