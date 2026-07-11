@@ -5653,12 +5653,15 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
     }
 
     if (resolvedApksigner && hasReleaseSigning) {
-      // 固定使用 V1（JAR signing），兼容所有 Android 版本
+      // V1: 兼容 Android < 7.0（JAR signing）
+      // V2: Android 7.0+，且 Android 12+ 强制要求（targetSdkVersion >= 30 时 V1-only 无法安装）
+      // V3: Android 9.0+（Key Rotation）
+      // V4: 部分 ROM 支持不完整，关闭
       await execAsync(
         `"${resolvedApksigner}" sign` +
         ` --v1-signing-enabled true` +
-        ` --v2-signing-enabled false` +
-        ` --v3-signing-enabled false` +
+        ` --v2-signing-enabled true` +
+        ` --v3-signing-enabled true` +
         ` --v4-signing-enabled false` +
         ` --ks "${resolvedReleaseKeystorePath}"` +
         ` --ks-key-alias "${resolvedReleaseKeyAlias}"` +
@@ -5666,7 +5669,7 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
         ` --key-pass pass:${resolvedReleaseKeyPass}` +
         ` "${outputApk}"`
       );
-      session.log.push(`[shell] 签名完成: ${resolvedSignProfile.label} (V1-only)`);
+      session.log.push(`[shell] 签名完成: ${resolvedSignProfile.label} (V1+V2+V3)`);
     } else {
       throw new Error('APK signing failed: apksigner not available');
     }
@@ -6274,7 +6277,7 @@ print('OK:' + str(len(missing)))
           // 签名
           if (hasDebugKeystore && resolvedApksigner) {
             await execAsync(
-              `"${resolvedApksigner}" sign --v1-signing-enabled true --v2-signing-enabled false --v3-signing-enabled false --v4-signing-enabled false --ks "${debugKeystore}" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "${alignedApk}"`
+              `"${resolvedApksigner}" sign --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --v4-signing-enabled false --ks "${debugKeystore}" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android "${alignedApk}"`
             );
           }
           fs.copyFileSync(alignedApk, outputApk);
