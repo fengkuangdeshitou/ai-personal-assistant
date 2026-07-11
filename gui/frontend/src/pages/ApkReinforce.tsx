@@ -139,6 +139,9 @@ const ApkReinforce: React.FC = () => {
   const logEndRef = useRef<HTMLDivElement>(null);
   // 用 ref 存剩余队列，避免 startPolling 闭包读到过期 state
   const pendingQueueRef = useRef<ApkItem[]>([]);
+  // 用 ref 保存最新的函数引用，避免 poll 闭包捕获过期版本
+  const submitAndPollRef = useRef<((target: ApkItem) => Promise<void>) | null>(null);
+  const fetchHistoryRef = useRef<((silent?: boolean, force?: boolean) => Promise<ReinforceHistoryItem[]>) | null>(null);
 
   const fetchJsonWithTimeout = async (url: string, init?: RequestInit, timeoutMs = 10000) => {
     const controller = new AbortController();
@@ -227,6 +230,7 @@ const ApkReinforce: React.FC = () => {
       if (!silent) setHistoryLoading(false);
     }
   };
+  fetchHistoryRef.current = fetchHistory;
 
   const fetchSignProfiles = async () => {
     try {
@@ -366,22 +370,23 @@ const ApkReinforce: React.FC = () => {
       }
       setSessionId(data.sessionId);
       localStorage.setItem('apkReinforceSessionId', data.sessionId);
-      await fetchHistory(true, true);
+      await fetchHistoryRef.current!(true, true);
       startPolling(data.sessionId);
     } catch (e: any) {
       const errText = e?.message || '未知错误';
       setPickError(`${target.name} 加固启动失败：${errText}`);
-      // 本项失败，继续尝试队列中下一个
       const next = pendingQueueRef.current.shift();
       if (next) {
         setApkItems([...pendingQueueRef.current]);
-        submitAndPoll(next);
+        submitAndPollRef.current!(next);
       } else {
         setApkItems([]);
         setReinforcing(false);
       }
     }
   };
+  // 每次渲染后更新 ref，确保 poll 闭包调用的始终是最新版本
+  submitAndPollRef.current = submitAndPoll;
 
   const handleReinforce = async () => {
     if (!apkPath && apkItems.length === 0) return;
@@ -409,18 +414,16 @@ const ApkReinforce: React.FC = () => {
         pollTickRef.current += 1;
         setSession(data);
         if (data.status === 'running') {
-          // 历史列表是重接口，降频刷新避免占满后端请求队列
-          if (pollTickRef.current % 5 === 0) fetchHistory(true);
+          if (pollTickRef.current % 5 === 0) fetchHistoryRef.current!(true);
           pollRef.current = setTimeout(poll, 2000);
         } else {
-          await fetchHistory(true);
+          await fetchHistoryRef.current!(true);
           if (data.status === 'done') localStorage.removeItem('apkReinforceSessionId');
-          // 从本地队列取下一个 APK，不依赖 history 的 running 状态
           const next = pendingQueueRef.current.shift();
           if (next) {
             setApkItems([...pendingQueueRef.current]);
             setSession(null);
-            submitAndPoll(next);
+            submitAndPollRef.current!(next);
           } else {
             setApkItems([]);
             setReinforcing(false);
@@ -430,7 +433,7 @@ const ApkReinforce: React.FC = () => {
         pollErrorRef.current += 1;
         if (pollErrorRef.current >= 10) {
           setReinforcing(false);
-          await fetchHistory(true);
+          await fetchHistoryRef.current!(true);
           setSession(prev => prev
             ? { ...prev, status: 'error', error: `网络连接失败（${e.message}），请刷新页面重试` }
             : null,
