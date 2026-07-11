@@ -464,7 +464,9 @@ const ApkReinforce: React.FC = () => {
     }
   };
 
+  const [batchDownloadLoading, setBatchDownloadLoading] = useState(false);
   const [batchDownloadChannel, setBatchDownloadChannel] = useState<string>('');
+  const [batchDropdownOpen, setBatchDropdownOpen] = useState(false);
   const [batchDownloadModalOpen, setBatchDownloadModalOpen] = useState(false);
 
   // 渠道定义放在此处仅作为常量，不依赖 historyTableData
@@ -604,22 +606,32 @@ const ApkReinforce: React.FC = () => {
       ...historyItems.filter(h => h.sessionId !== sessionId),
     ];
 
-  // 各渠道已完成数量：从 historyItems 直接统计（不依赖 session state 时序）
+  // 各渠道已完成数量（渲染时从当前 historyItems + session 统计）
   const channelDoneCounts = CHANNEL_DEFS.reduce<Record<string, number>>((acc, ch) => {
-    acc[ch.key] = [
+    const all = [
       ...historyItems,
-      // 也统计当前 session（若已完成）
       ...(session && sessionId && session.status === 'done' && session.options?.signProfile
-        ? [{ status: 'done', outputName: session.outputName, options: session.options, sessionId }]
+        ? [{ status: 'done' as const, outputName: session.outputName, options: session.options, sessionId }]
         : []),
-    ].filter(
-      (r, i, arr) => arr.findIndex(x => x.sessionId === r.sessionId) === i // 去重
-        && r.status === 'done'
-        && r.outputName
-        && (r as any).options?.signProfile === ch.key
+    ];
+    const unique = all.filter((r, i, arr) => arr.findIndex(x => x.sessionId === r.sessionId) === i);
+    acc[ch.key] = unique.filter(
+      r => r.status === 'done' && r.outputName && (r as any).options?.signProfile === ch.key
     ).length;
     return acc;
   }, {});
+
+  // 点击批量下载时强制刷新后端历史，刷新完毕再展开下拉
+  const handleBatchDownloadOpen = async () => {
+    if (batchDownloadLoading) return;
+    setBatchDownloadLoading(true);
+    try {
+      await fetchHistory(false, true); // force=true 跳过缓存
+    } finally {
+      setBatchDownloadLoading(false);
+      setBatchDropdownOpen(true);
+    }
+  };
 
   const CHANNELS: MenuProps['items'] = CHANNEL_DEFS.map(ch => {
     const count = channelDoneCounts[ch.key] ?? 0;
@@ -989,16 +1001,25 @@ const ApkReinforce: React.FC = () => {
         extra={
           <Space size={4}>
             <Dropdown
+              open={batchDropdownOpen}
+              onOpenChange={(v) => { if (!v) setBatchDropdownOpen(false); }}
               menu={{
                 items: CHANNELS,
                 onClick: ({ key }) => {
+                  setBatchDropdownOpen(false);
                   setBatchDownloadChannel(key);
                   setBatchDownloadModalOpen(true);
                 },
               }}
               trigger={['click']}
             >
-              <Button size="small">批量下载 ▾</Button>
+              <Button
+                size="small"
+                loading={batchDownloadLoading}
+                onClick={handleBatchDownloadOpen}
+              >
+                批量下载 ▾
+              </Button>
             </Dropdown>
             <Button size="small" danger onClick={handleClearHistory}>清空</Button>
           </Space>
