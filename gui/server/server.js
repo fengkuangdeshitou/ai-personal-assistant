@@ -4949,6 +4949,10 @@ APP_ABI := armeabi-v7a arm64-v8a
     :has_lib_path
     invoke-virtual {p0}, Landroid/content/Context;->getClassLoader()Ljava/lang/ClassLoader;
     move-result-object v4
+    invoke-virtual {v4}, Ljava/lang/ClassLoader;->getParent()Ljava/lang/ClassLoader;
+    move-result-object v10
+    if-eqz v10, :use_old_parent
+    move-object v4, v10
     :use_old_parent
     new-instance v0, Ldalvik/system/DexClassLoader;
     invoke-direct {v0, v1, v2, v3, v4}, Ldalvik/system/DexClassLoader;-><init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V
