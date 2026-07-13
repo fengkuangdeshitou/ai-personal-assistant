@@ -237,6 +237,8 @@ const SeafileManager: React.FC = () => {
   const [fixSteps, setFixSteps] = useState<string[]>([]);
   const [capturing, setCapturing] = useState(false);
   const [captureResult, setCaptureResult] = useState<{ lines: string[]; logPath?: string; error?: string } | null>(null);
+  const [debugging, setDebugging] = useState(false);
+  const [debugResult, setDebugResult] = useState<{ steps: string[]; seahubLog: string[]; errors: string[]; logFound: boolean } | null>(null);
 
   // 日志面板：诊断区内联日志 or 底部日志卡片
   const [inlineLogContainer, setInlineLogContainer] = useState<string | null>(null);
@@ -320,6 +322,29 @@ const SeafileManager: React.FC = () => {
       }
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleDebugSeahub = async () => {
+    setDebugging(true);
+    setDebugResult(null);
+    setDiagnoseOpen(true);
+    try {
+      const res = await api.post('/api/seafile/debug-seahub', {}, { timeout: 90000 });
+      setDebugResult(res.data);
+      if (res.data.seahubLog?.length > 0) {
+        setLogCardOpen(true);
+        setLogCardSource('seahub');
+      }
+      if (res.data.logFound) {
+        message.success('已获取 seahub.log，请查看下方错误详情');
+      } else {
+        message.warning('未找到 seahub.log，请查看步骤日志');
+      }
+    } catch (e: any) {
+      message.error(`调试失败：${e?.message || '网络错误'}`);
+    } finally {
+      setDebugging(false);
     }
   };
 
@@ -518,15 +543,14 @@ const SeafileManager: React.FC = () => {
                   修复 MySQL 连接
                 </Button>
               </Tooltip>
-              <Tooltip title="读取 seahub.log，显示 Seahub 启动失败的真实 Python 错误">
+              <Tooltip title="暂停自动重启 → 读取 seahub.log → 恢复重启。用于诊断 Seahub 启动失败的真实 Python 错误（约 30 秒）">
                 <Button
                   icon={<FileTextOutlined />}
                   type="primary"
-                  ghost
-                  loading={capturing}
-                  onClick={handleCaptureSeahubError}
+                  loading={debugging}
+                  onClick={handleDebugSeahub}
                 >
-                  抓取 Seahub 错误
+                  读取 Seahub 错误日志
                 </Button>
               </Tooltip>
               <Button
@@ -543,6 +567,30 @@ const SeafileManager: React.FC = () => {
               </Button>
             </Space>
           </div>
+
+          {/* Seahub 错误日志调试结果 */}
+          {debugResult && (
+            <div style={{ marginTop: 16, border: '1px solid #ff7a45', borderRadius: 6, padding: 12 }}>
+              <Text strong style={{ color: '#d4380d' }}>Seahub 调试结果</Text>
+              {/* 步骤日志 */}
+              <div style={{ background: '#0d1117', borderRadius: 4, padding: '8px 12px', margin: '8px 0', fontFamily: 'monospace', fontSize: 11 }}>
+                {(debugResult.steps || []).map((s, i) => (
+                  <div key={i} style={{ color: s.startsWith('❌') ? '#f85149' : s.startsWith('✅') ? '#3fb950' : '#e6edf3', lineHeight: 1.7 }}>{s}</div>
+                ))}
+              </div>
+              {debugResult.errors?.length > 0 && (
+                <>
+                  <Text strong style={{ color: '#d4380d', fontSize: 13 }}>关键错误（来自 seahub.log）：</Text>
+                  <div style={{ background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 4, padding: '8px 12px', margin: '6px 0', fontFamily: 'monospace', fontSize: 12, maxHeight: 200, overflowY: 'auto' }}>
+                    {debugResult.errors.map((l, i) => <div key={i} style={{ color: '#d4380d' }}>{l}</div>)}
+                  </div>
+                </>
+              )}
+              {!debugResult.logFound && (
+                <Alert type="warning" showIcon style={{ marginTop: 8 }} message="未找到 seahub.log，请在服务器上运行：find ~/seafile -name seahub.log" />
+              )}
+            </div>
+          )}
 
           {/* 诊断结果区域 */}
           {diagnoseOpen && (

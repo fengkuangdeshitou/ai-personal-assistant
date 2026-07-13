@@ -3433,6 +3433,100 @@ app.get('/api/seafile/internal-log', async (req, res) => {
   res.json({ success: false, error: `未找到 ${logName}.log（已搜索 ${SEAFILE_DIR} 下所有路径及容器内部）` });
 });
 
+// 暂停自动重启 → exec 读 seahub.log → 恢复重启
+// 解决容器每次只存活 5 秒、docker exec 时机不可靠的问题
+app.post('/api/seafile/debug-seahub', async (_req, res) => {
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  const compose = (args) => _execSync(`docker compose ${args}`, { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 60000 });
+  const steps = [];
+
+  // 动态找容器名
+  let seafileContainer = 'seafile';
+  try {
+    const psOut = _execSync('docker compose ps -a --format "{{.Service}}|{{.Name}}"', { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 8000 });
+    const line = psOut.split('\n').find(l => /^seafile\|/i.test(l));
+    if (line) seafileContainer = line.split('|')[1].trim();
+  } catch (_) {}
+
+  try {
+    // Step 1: 暂停自动重启，让容器保持存活供调试
+    steps.push(`停止 seafile 并暂时关闭自动重启（容器名: ${seafileContainer}）...`);
+    try { _execSync(`docker update --restart=no "${seafileContainer}"`, { env: ENV, encoding: 'utf8', timeout: 10000 }); } catch (_) {}
+    try { compose('stop seafile'); } catch (_) {}
+
+    // Step 2: 清理 PID 文件
+    steps.push('清理残留 PID 文件...');
+    try {
+      _execSync(`find "${path.join(SEAFILE_DIR, 'data')}" -name "*.pid" -path "*/runtime/*" -delete 2>/dev/null`, { env: ENV, encoding: 'utf8', timeout: 8000 });
+    } catch (_) {}
+
+    // Step 3: 启动容器（无自动重启）
+    steps.push('启动 seafile 容器（调试模式，不自动重启）...');
+    compose('start seafile');
+    await new Promise(r => setTimeout(r, 5000)); // 等待 seahub 尝试启动
+
+    // Step 4: 读取 seahub.log（最长等 20 秒）
+    steps.push('读取 seahub.log（等待 Seahub 产生日志）...');
+    let seahubLog = [];
+    const logPaths = [
+      path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),
+    ];
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) {
+      // 先从宿主机读
+      for (const logPath of logPaths) {
+        if (fs.existsSync(logPath)) {
+          try {
+            const lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
+            if (lines.length > 0) { seahubLog = lines.slice(-100); break; }
+          } catch (_) {}
+        }
+      }
+      if (seahubLog.length > 0) break;
+      // 再尝试 docker exec
+      for (const p of ['/shared/logs/seahub.log', '/opt/seafile/logs/seahub.log']) {
+        try {
+          const out = _execSync(`docker exec "${seafileContainer}" cat "${p}" 2>/dev/null`, { env: ENV, encoding: 'utf8', timeout: 5000 });
+          if (out.trim()) { seahubLog = out.split('\n').filter(Boolean).slice(-100); break; }
+        } catch (_) {}
+      }
+      if (seahubLog.length > 0) break;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // Step 5: 恢复正常自动重启
+    steps.push('恢复 seafile 自动重启策略...');
+    try { _execSync(`docker update --restart=always "${seafileContainer}"`, { env: ENV, encoding: 'utf8', timeout: 10000 }); } catch (_) {}
+    compose('start seafile');
+
+    if (seahubLog.length === 0) {
+      // find 全局搜索
+      try {
+        const found = _execSync(`find "${SEAFILE_DIR}" -name "seahub.log" 2>/dev/null | head -3`, { env: ENV, encoding: 'utf8', timeout: 8000 }).trim();
+        if (found) {
+          const p = found.split('\n')[0];
+          seahubLog = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean).slice(-100);
+          steps.push(`找到日志: ${p}`);
+        }
+      } catch (_) {}
+    }
+
+    const errLines = seahubLog.filter(l => /error|exception|traceback|critical|warning/i.test(l));
+    return res.json({
+      success: true, steps, seahubLog,
+      errors: errLines.slice(-20),
+      logFound: seahubLog.length > 0,
+    });
+  } catch (e) {
+    // 确保恢复重启
+    try { _execSync(`docker update --restart=always "${seafileContainer}"`, { env: ENV, encoding: 'utf8', timeout: 10000 }); } catch (_) {}
+    steps.push(`❌ 失败: ${e.message}`);
+    return res.status(500).json({ success: false, steps, error: e.message });
+  }
+});
+
 // 捕获 seahub.sh 真实启动错误（在容器短暂存活窗口内 exec 执行并抓取输出）
 app.post('/api/seafile/capture-seahub-error', async (_req, res) => {
   const { execSync: _execSync } = await import('child_process');
