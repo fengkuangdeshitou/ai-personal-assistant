@@ -4881,7 +4881,12 @@ for (const item of entries) {
 }
 
 if (payload.length === 0) {
-  throw new Error('no core dex found (classes2+.dex)');
+  throw new Error('no core dex found (classes2+.dex) — 请检查输入 APK：若只有 classes.dex 和 classes2.dex，可能是对已加固 APK 再次加固，请使用原始未加固 APK');
+}
+// 输入 APK 完整性检查：若只找到 1 个业务 DEX，可能是已加固过的 APK 再次输入
+// 正常原始 APK 通常有 2 个以上业务 DEX（classes2 + classes3+）
+if (payload.length === 1) {
+  console.warn('[shell] ⚠️ 警告：输入 APK 仅有 1 个业务 DEX，极可能已是加固版本（正常 APK 通常 2+ 个 DEX）。建议检查是否使用了原始 APK。');
 }
 
 const meta = {
@@ -4950,6 +4955,11 @@ console.log('OK:' + payload.length);
     );
     const shellResult = (shellStdout || '').trim();
     session.log.push(`[shell] payload 处理结果: ${shellResult || 'OK'}`);
+    // 检测是否对已加固 APK 再次加固（只有 1 个 payload）
+    const payloadCountMatch = shellResult.match(/^OK:(\d+)$/);
+    if (payloadCountMatch && parseInt(payloadCountMatch[1]) === 1) {
+      session.log.push('[shell] ⚠️ 警告：只检测到 1 个业务 DEX（正常 APK 通常有 2+ 个）。如果加固后运行时出现 ClassNotFoundException，请确认使用的是原始未加固 APK，而非已加固 APK 重复加固。');
+    }
     session.timing.preMs += Date.now() - preStart;
 
     // Stage2: 注入壳 Application（灰度开关，默认关闭，先保证稳定可启动）
