@@ -4271,6 +4271,7 @@ fs.writeFileSync(bootstrapFile, JSON.stringify(bootstrap, null, 2), 'utf8');
 // files that Android requires to be STORED (uncompressed) in the APK
 const mustStored = new Set(['resources.arsc']);
 
+
 const zout = new AdmZip();
 for (const item of entries) {
   const name = item.entryName;
@@ -4282,9 +4283,10 @@ for (const item of entries) {
   if (lowerName.includes('private_key') || lowerName.includes('rsa_private') || lowerName.includes('pkcs8')) continue;
   const data = item.getData();
   zout.addFile(name, data);
-  // Restore STORED (method=0) for resources.arsc — AdmZip defaults to DEFLATE which
-  // breaks Android 6+ mmap requirements and fails Google Play validation.
-  if (mustStored.has(name)) {
+  // Restore STORED (method=0) for resources.arsc and all .so files
+  // .so files MUST be uncompressed if the APK uses extractNativeLibs="false" (Android 9+ default)
+  // Compressing .so causes System.loadLibrary to fail silently on those devices
+  if (mustStored.has(name) || lowerName.endsWith('.so')) {
     const e = zout.getEntry(name);
     if (e) e.header.method = 0;
   }
