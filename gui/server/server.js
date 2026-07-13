@@ -4957,7 +4957,6 @@ APP_ABI := armeabi-v7a arm64-v8a
     invoke-direct {v0, v1, v2, v3, v4}, Ldalvik/system/DexClassLoader;-><init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V
     sput-object v0, L${stage2Path}/Stage2PayloadLoader;->sPayloadClassLoader:Ljava/lang/ClassLoader;
     invoke-static {p0, v0}, L${stage2Path}/Stage2PayloadLoader;->installGlobalClassLoader(Landroid/content/Context;Ljava/lang/ClassLoader;)V
-    invoke-static {p0}, L${stage2Path}/Stage2PayloadLoader;->preloadNativeLibs(Landroid/content/Context;)V
     :try_end
     .catch Ljava/lang/Throwable; {:try_start .. :try_end} :catch_all
     goto :ret
@@ -5514,6 +5513,7 @@ APP_ABI := armeabi-v7a arm64-v8a
     if-eqz v2, :done
     iput-object v2, p0, L${shellAppPath};->mDelegate:Landroid/app/Application;
     invoke-virtual {v2}, Landroid/app/Application;->onCreate()V
+    invoke-static {p0}, L${stage2Path}/Stage2PayloadLoader;->preloadNativeLibs(Landroid/content/Context;)V
     :done
     :try_end
     .catch Ljava/lang/Throwable; {:try_start .. :try_end} :catch_all
