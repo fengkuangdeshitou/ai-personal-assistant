@@ -3134,6 +3134,23 @@ app.get('/api/seafile/diagnose', async (_req, res) => {
   res.json({ success: true, ok: !hasError, summary, checks });
 });
 
+// Seafile 容器日志查看
+app.get('/api/seafile/logs', async (req, res) => {
+  const container = (req.query.container || 'seafile').replace(/[^a-zA-Z0-9_-]/g, '');
+  const tail = Math.min(parseInt(req.query.tail) || 200, 1000);
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  try {
+    const out = _execSync(`docker logs --tail=${tail} --timestamps "${container}" 2>&1`, {
+      encoding: 'utf8', timeout: 15000, env: ENV,
+    });
+    const lines = out.split('\n');
+    res.json({ success: true, container, tail, lines, total: lines.length });
+  } catch (e) {
+    res.json({ success: false, error: e.message });
+  }
+});
+
 const SEAFDAV_CONF = '/Users/maiyou001/seafile/data/seafile/conf/seafdav.conf';
 
 // 读取 SeafDAV 配置状态

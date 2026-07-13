@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Card, Button, Badge, Space, Typography, Table, message,
-  Spin, Switch, Tooltip, Alert, Collapse,
+  Spin, Switch, Tooltip, Alert, Collapse, Select, Tag,
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -15,7 +15,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   WarningOutlined,
-  QuestionCircleOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 import api from '../api/client';
 
@@ -64,7 +64,119 @@ const CheckIcon: React.FC<{ status: DiagnoseCheck['status'] }> = ({ status }) =>
   if (status === 'ok') return <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 16 }} />;
   if (status === 'error') return <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />;
   if (status === 'warn') return <WarningOutlined style={{ color: '#faad14', fontSize: 16 }} />;
-  return <QuestionCircleOutlined style={{ color: '#8c8c8c', fontSize: 16 }} />;
+  return null;
+};
+
+// 对日志行着色：ERROR/Exception 红色，WARN 黄色，INFO/OK 正常
+const colorLogLine = (line: string): string => {
+  if (/error|exception|traceback|critical|fatal|failed|can't connect/i.test(line)) return '#f85149';
+  if (/warn/i.test(line)) return '#d29922';
+  if (/info|ok|success|started|ready/i.test(line)) return '#3fb950';
+  return '#e6edf3';
+};
+
+const LogViewer: React.FC<{ container?: string }> = ({ container = 'seafile' }) => {
+  const [lines, setLines] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [tail, setTail] = useState(200);
+  const [selectedContainer, setSelectedContainer] = useState(container);
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchLogs = useCallback(async (c = selectedContainer, t = tail) => {
+    setLoading(true);
+    try {
+      const res = await api.get(`/api/seafile/logs?container=${encodeURIComponent(c)}&tail=${t}`, { timeout: 20000 });
+      if (res.data.success) {
+        setLines(res.data.lines || []);
+        setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+      } else {
+        message.error(res.data.error || '日志获取失败');
+      }
+    } catch (e: any) {
+      message.error(`日志获取失败：${e?.message || '网络错误'}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedContainer, tail]);
+
+  useEffect(() => {
+    fetchLogs(selectedContainer, tail);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const containerOptions = [
+    { value: 'seafile', label: 'seafile（主服务）' },
+    { value: 'seafile-mysql', label: 'seafile-mysql（数据库）' },
+    { value: 'seafile-memcached', label: 'seafile-memcached（缓存）' },
+  ];
+
+  const tailOptions = [
+    { value: 50, label: '最近 50 行' },
+    { value: 100, label: '最近 100 行' },
+    { value: 200, label: '最近 200 行' },
+    { value: 500, label: '最近 500 行' },
+    { value: 1000, label: '最近 1000 行' },
+  ];
+
+  return (
+    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      <Space wrap>
+        <Select
+          value={selectedContainer}
+          onChange={(v) => { setSelectedContainer(v); fetchLogs(v, tail); }}
+          options={containerOptions}
+          style={{ width: 220 }}
+          size="small"
+        />
+        <Select
+          value={tail}
+          onChange={(v) => { setTail(v); fetchLogs(selectedContainer, v); }}
+          options={tailOptions}
+          style={{ width: 140 }}
+          size="small"
+        />
+        <Button
+          size="small"
+          icon={<SyncOutlined spin={loading} />}
+          loading={loading}
+          onClick={() => fetchLogs(selectedContainer, tail)}
+        >
+          刷新
+        </Button>
+        {lines.length > 0 && (
+          <Text type="secondary" style={{ fontSize: 12 }}>{lines.length} 行</Text>
+        )}
+      </Space>
+
+      <div
+        style={{
+          background: '#0d1117',
+          border: '1px solid #30363d',
+          borderRadius: 6,
+          padding: '10px 14px',
+          height: 380,
+          overflowY: 'auto',
+          fontFamily: 'monospace',
+          fontSize: 12,
+          lineHeight: 1.6,
+        }}
+      >
+        {loading && lines.length === 0 ? (
+          <div style={{ color: '#8b949e', textAlign: 'center', paddingTop: 40 }}>
+            <Spin size="small" /> <span style={{ marginLeft: 8 }}>加载日志中...</span>
+          </div>
+        ) : lines.length === 0 ? (
+          <span style={{ color: '#8b949e' }}>暂无日志</span>
+        ) : (
+          lines.map((line, i) => (
+            <div key={i} style={{ color: colorLogLine(line), whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+              {line}
+            </div>
+          ))
+        )}
+        <div ref={logEndRef} />
+      </div>
+    </Space>
+  );
 };
 
 const SeafileManager: React.FC = () => {
@@ -77,6 +189,10 @@ const SeafileManager: React.FC = () => {
   const [diagnosing, setDiagnosing] = useState(false);
   const [diagnoseResult, setDiagnoseResult] = useState<DiagnoseResult | null>(null);
   const [diagnoseOpen, setDiagnoseOpen] = useState(false);
+
+  // 日志面板：诊断区内联日志 or 底部日志卡片
+  const [inlineLogContainer, setInlineLogContainer] = useState<string | null>(null);
+  const [logCardOpen, setLogCardOpen] = useState(false);
 
   const fetchStatus = useCallback(async (force = false) => {
     setLoading(true);
@@ -91,7 +207,6 @@ const SeafileManager: React.FC = () => {
         setStatus(data);
         return;
       }
-
       seafileStatusInFlight = api.get('/api/seafile/status').then(res => res.data as SeafileStatus);
       const data = await seafileStatusInFlight;
       seafileStatusCache = { ts: Date.now(), data };
@@ -163,6 +278,7 @@ const SeafileManager: React.FC = () => {
     setDiagnosing(true);
     setDiagnoseResult(null);
     setDiagnoseOpen(true);
+    setInlineLogContainer(null);
     try {
       const res = await api.get('/api/seafile/diagnose', { timeout: 40000 });
       if (res.data.success) {
@@ -300,6 +416,12 @@ const SeafileManager: React.FC = () => {
               >
                 自动诊断
               </Button>
+              <Button
+                icon={<FileTextOutlined />}
+                onClick={() => setLogCardOpen(v => !v)}
+              >
+                查看日志
+              </Button>
             </Space>
           </div>
 
@@ -348,30 +470,77 @@ const SeafileManager: React.FC = () => {
                       />
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {diagnoseResult.checks.map(check => (
-                          <div
-                            key={check.id}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'flex-start',
-                              gap: 10,
-                              padding: '8px 12px',
-                              borderRadius: 6,
-                              background: check.status === 'error' ? '#fff2f0' : check.status === 'warn' ? '#fffbe6' : '#f6ffed',
-                              border: `1px solid ${check.status === 'error' ? '#ffccc7' : check.status === 'warn' ? '#ffe58f' : '#b7eb8f'}`,
-                            }}
-                          >
-                            <div style={{ paddingTop: 1 }}>
-                              <CheckIcon status={check.status} />
-                            </div>
-                            <div style={{ flex: 1 }}>
-                              <Text strong style={{ fontSize: 13 }}>{check.label}</Text>
-                              <div style={{ fontSize: 12, color: '#595959', marginTop: 2 }}>{check.detail}</div>
-                              {check.suggestion && (
-                                <div style={{ fontSize: 12, color: '#d4380d', marginTop: 3 }}>
-                                  建议：{check.suggestion}
-                                </div>
+                          <div key={check.id}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: 10,
+                                padding: '8px 12px',
+                                borderRadius: inlineLogContainer === check.id ? '6px 6px 0 0' : 6,
+                                background: check.status === 'error' ? '#fff2f0' : check.status === 'warn' ? '#fffbe6' : '#f6ffed',
+                                border: `1px solid ${check.status === 'error' ? '#ffccc7' : check.status === 'warn' ? '#ffe58f' : '#b7eb8f'}`,
+                                borderBottom: inlineLogContainer === check.id ? 'none' : undefined,
+                              }}
+                            >
+                              <div style={{ paddingTop: 1 }}>
+                                <CheckIcon status={check.status} />
+                              </div>
+                              <div style={{ flex: 1 }}>
+                                <Text strong style={{ fontSize: 13 }}>{check.label}</Text>
+                                <div style={{ fontSize: 12, color: '#595959', marginTop: 2 }}>{check.detail}</div>
+                                {check.suggestion && check.id !== 'logs' && (
+                                  <div style={{ fontSize: 12, color: '#d4380d', marginTop: 3 }}>
+                                    建议：{check.suggestion}
+                                  </div>
+                                )}
+                                {/* 日志检查项：用按钮替换建议文字 */}
+                                {check.id === 'logs' && check.status !== 'ok' && (
+                                  <div style={{ marginTop: 6 }}>
+                                    <Button
+                                      size="small"
+                                      icon={<FileTextOutlined />}
+                                      type={inlineLogContainer === 'logs' ? 'primary' : 'default'}
+                                      onClick={() => setInlineLogContainer(
+                                        inlineLogContainer === 'logs' ? null : 'logs'
+                                      )}
+                                    >
+                                      {inlineLogContainer === 'logs' ? '收起日志' : '查看容器日志'}
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+                              {/* 容器状态项也可快速查日志 */}
+                              {check.id.startsWith('ctr_') && check.status === 'error' && (
+                                <Button
+                                  size="small"
+                                  icon={<FileTextOutlined />}
+                                  onClick={() => {
+                                    const cname = check.id.replace('ctr_', '');
+                                    setInlineLogContainer(inlineLogContainer === check.id ? null : check.id);
+                                    setLogCardOpen(false);
+                                    // 通知 LogViewer 显示对应容器
+                                    window.dispatchEvent(new CustomEvent('seafile-log-container', { detail: cname }));
+                                  }}
+                                >
+                                  查看日志
+                                </Button>
                               )}
                             </div>
+                            {/* 内联日志展开区 */}
+                            {(inlineLogContainer === check.id || (check.id === 'logs' && inlineLogContainer === 'logs')) && (
+                              <div style={{
+                                border: `1px solid ${check.status === 'error' ? '#ffccc7' : '#b7eb8f'}`,
+                                borderTop: 'none',
+                                borderRadius: '0 0 6px 6px',
+                                padding: 12,
+                                background: '#fff',
+                              }}>
+                                <LogViewer
+                                  container={check.id.startsWith('ctr_') ? check.id.replace('ctr_', '') : 'seafile'}
+                                />
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -414,6 +583,24 @@ const SeafileManager: React.FC = () => {
             </div>
           )}
         </Card>
+
+        {/* 容器日志卡片（点击"查看日志"按钮展开） */}
+        {logCardOpen && (
+          <Card
+            title={
+              <Space>
+                <FileTextOutlined />
+                <span>容器日志</span>
+                <Tag color="blue">实时拉取</Tag>
+              </Space>
+            }
+            extra={
+              <Button size="small" onClick={() => setLogCardOpen(false)}>收起</Button>
+            }
+          >
+            <LogViewer container="seafile" />
+          </Card>
+        )}
 
         {/* SeafDAV */}
         <Card
