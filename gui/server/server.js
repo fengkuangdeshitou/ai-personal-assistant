@@ -4309,6 +4309,7 @@ console.log('OK:' + payload.length);
     // ── 预处理步骤：直接向原始 Application 注入壳初始化，不替换 Application 类名 ──
     // 这样加固后 Application 类名不变，避免 ClassCastException 和 TUtil.getT 等兼容问题
     let preInjectSucceeded = false;
+    const stage2Path = shellStage2Package.replace(/\./g, '/'); // 提前定义，预处理和 stage2 均使用
     if (enableStage2Inject && originalApplication) {
       try {
         const preinjectDir = path.join(shellDir, 'preinject');
@@ -4429,7 +4430,6 @@ console.log('OK:' + payload.length);
       }
 
       const stage2Package = shellStage2Package;
-      const stage2Path = stage2Package.replace(/\./g, '/');
       const loaderClassName = shellLoaderClassName;
       const shellClassName = shellAppClassName;
       // 为壳类单独创建一个新的 dex 分包，避免壳类与业务类混在同一明文 dex。
