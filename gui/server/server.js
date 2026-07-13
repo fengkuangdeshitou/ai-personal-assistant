@@ -3135,6 +3135,40 @@ app.get('/api/seafile/diagnose', async (_req, res) => {
     checks.push({ id: 'disk', label: '磁盘空间', status: 'warn', detail: '检测失败' });
   }
 
+  // 4.5 残留 PID 文件检测（seahub.pid / gunicorn.pid 在数据卷中持久化导致重启失败）
+  const pidSearchDirs = [
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'seafile-server-latest', 'runtime'),
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'seafile-server-11.0.13', 'runtime'),
+  ];
+  let stalePidFiles = [];
+  for (const dir of pidSearchDirs) {
+    try {
+      if (fs.existsSync(dir)) {
+        stalePidFiles.push(...fs.readdirSync(dir).filter(f => f.endsWith('.pid')).map(f => path.join(dir, f)));
+      }
+    } catch (_) {}
+  }
+  try {
+    const found = _execSync(
+      `find "${path.join(SEAFILE_DIR, 'data')}" -name "*.pid" -path "*/runtime/*" 2>/dev/null`,
+      { encoding: 'utf8', timeout: 5000, env: ENV }
+    ).trim();
+    if (found) stalePidFiles.push(...found.split('\n').filter(Boolean));
+  } catch (_) {}
+  stalePidFiles = [...new Set(stalePidFiles)];
+  if (stalePidFiles.length > 0) {
+    checks.push({
+      id: 'pid',
+      label: '残留 PID 文件',
+      status: 'error',
+      detail: `发现 ${stalePidFiles.length} 个残留 PID 文件：${stalePidFiles.map(p => path.basename(p)).join(', ')}`,
+      suggestion: '这是 Seahub 重启失败的根因！点击"修复 MySQL 连接"按钮一键清理并重启',
+    });
+    hasError = true;
+  } else {
+    checks.push({ id: 'pid', label: '残留 PID 文件', status: 'ok', detail: '未发现残留 PID 文件' });
+  }
+
   // 5. HTTP 可达性（Nginx → Seahub）
   const curlResult = safeExec('curl -s -o /dev/null -w "%{http_code}" --max-time 6 http://localhost/');
   const httpCode = (curlResult.out || '').trim();
@@ -3184,6 +3218,41 @@ app.post('/api/seafile/fix', async (_req, res) => {
     // Step 1: 停止 seafile 主服务（保留 db / memcached 继续运行）
     steps.push(`停止 ${seafileServiceName} 容器...`);
     try { compose(`stop ${seafileServiceName}`); } catch (_) {}
+
+    // Step 1.5: 清理残留 PID 文件（根因：seahub.pid/gunicorn.pid 在数据卷中持久化，
+    // 容器异常退出后不会自动清除，导致下次 seahub.sh start 认为进程已在运行而直接退出）
+    steps.push('清理残留 PID 文件（seahub.pid / gunicorn.pid）...');
+    const pidCleaned = [];
+    const pidSearchDirs = [
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'seafile-server-latest', 'runtime'),
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'seafile-server-11.0.13', 'runtime'),
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'seafile-server-11.0.12', 'runtime'),
+    ];
+    for (const dir of pidSearchDirs) {
+      if (fs.existsSync(dir)) {
+        for (const f of fs.readdirSync(dir)) {
+          if (f.endsWith('.pid')) {
+            try {
+              fs.unlinkSync(path.join(dir, f));
+              pidCleaned.push(f);
+            } catch (_) {}
+          }
+        }
+      }
+    }
+    // 也尝试用 find 扫描（兼容其他版本号路径）
+    try {
+      const found = _execSync(
+        `find "${path.join(SEAFILE_DIR, 'data')}" -name "*.pid" -path "*/runtime/*" 2>/dev/null`,
+        { encoding: 'utf8', timeout: 5000, env: ENV }
+      ).trim();
+      for (const pidFile of found.split('\n').filter(Boolean)) {
+        try { fs.unlinkSync(pidFile); pidCleaned.push(path.basename(pidFile)); } catch (_) {}
+      }
+    } catch (_) {}
+    steps.push(pidCleaned.length > 0
+      ? `✅ 已删除 PID 文件：${[...new Set(pidCleaned)].join(', ')}`
+      : '✅ 未发现残留 PID 文件（或已在容器内，将在容器启动时自动处理）');
 
     // Step 2: 确保数据库容器在运行
     steps.push(`启动数据库容器 (${dbServiceNameEarly})...`);

@@ -545,7 +545,11 @@ const SeafileManager: React.FC = () => {
                           !diagnoseResult.ok ? (
                             <Space>
                               {/* MySQL 连接失败时显示专项修复按钮 */}
-                              {diagnoseResult.checks.some(c => c.id === 'logs' && c.status === 'error' && /mysql|数据库/i.test(c.detail)) && (
+                              {diagnoseResult.checks.some(c =>
+                                (c.id === 'pid' && c.status === 'error') ||
+                                (c.id === 'logs' && c.status === 'error' && /mysql|数据库/i.test(c.detail)) ||
+                                (c.id === 'http' && c.status === 'error')
+                              ) && (
                                 <Button
                                   size="small"
                                   type="primary"
