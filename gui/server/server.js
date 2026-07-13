@@ -4313,7 +4313,7 @@ console.log('OK:' + payload.length);
       try {
         const preinjectDir = path.join(shellDir, 'preinject');
         session.log.push(`[shell] 预处理：解码原始 APK 准备注入 Application`);
-        await execAsync(`java -jar "${apktoolJar}" d -f -s -o "${preinjectDir}" "${payloadSourceApk}"`, { timeout: 8 * 60 * 1000 });
+        await execAsync(`java -jar "${apktoolJar}" d -f -o "${preinjectDir}" "${payloadSourceApk}"`, { timeout: 8 * 60 * 1000 });
 
         // 查找 Application.smali（通常在 smali/ 目录，对应 classes.dex）
         const appRelPath = originalApplication.replace(/\./g, '/') + '.smali';
