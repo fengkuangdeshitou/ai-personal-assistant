@@ -75,21 +75,60 @@ const colorLogLine = (line: string): string => {
   return '#e6edf3';
 };
 
-const LogViewer: React.FC<{ container?: string }> = ({ container = 'seafile' }) => {
+type LogSource = 'docker' | 'seahub' | 'seafile' | 'ccnet';
+
+const LOG_SOURCE_OPTIONS = [
+  { value: 'docker' as LogSource, label: '容器日志（docker logs）' },
+  { value: 'seahub' as LogSource, label: 'Seahub 内部日志 ⭐' },
+  { value: 'seafile' as LogSource, label: 'Seafile 内部日志' },
+  { value: 'ccnet' as LogSource, label: 'CCNet 内部日志' },
+];
+
+const DOCKER_CONTAINER_OPTIONS = [
+  { value: 'seafile', label: 'seafile（主服务）' },
+  { value: 'seafile-mysql', label: 'seafile-mysql（数据库）' },
+  { value: 'seafile-memcached', label: 'seafile-memcached（缓存）' },
+];
+
+const TAIL_OPTIONS = [
+  { value: 100, label: '最近 100 行' },
+  { value: 300, label: '最近 300 行' },
+  { value: 500, label: '最近 500 行' },
+  { value: 1000, label: '最近 1000 行' },
+];
+
+const LogViewer: React.FC<{ container?: string; defaultSource?: LogSource }> = ({
+  container = 'seafile',
+  defaultSource = 'docker',
+}) => {
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [tail, setTail] = useState(200);
+  const [tail, setTail] = useState(300);
   const [selectedContainer, setSelectedContainer] = useState(container);
+  const [logSource, setLogSource] = useState<LogSource>(defaultSource);
+  const [logPath, setLogPath] = useState('');
   const logEndRef = useRef<HTMLDivElement>(null);
 
-  const fetchLogs = useCallback(async (c = selectedContainer, t = tail) => {
+  const fetchLogs = useCallback(async (
+    source: LogSource = logSource,
+    c: string = selectedContainer,
+    t: number = tail,
+  ) => {
     setLoading(true);
+    setLogPath('');
     try {
-      const res = await api.get(`/api/seafile/logs?container=${encodeURIComponent(c)}&tail=${t}`, { timeout: 20000 });
+      let res;
+      if (source === 'docker') {
+        res = await api.get(`/api/seafile/logs?container=${encodeURIComponent(c)}&tail=${t}`, { timeout: 20000 });
+      } else {
+        res = await api.get(`/api/seafile/internal-log?log=${source}&tail=${t}`, { timeout: 20000 });
+      }
       if (res.data.success) {
         setLines(res.data.lines || []);
+        if (res.data.logPath) setLogPath(res.data.logPath);
         setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
       } else {
+        setLines([]);
         message.error(res.data.error || '日志获取失败');
       }
     } catch (e: any) {
@@ -97,40 +136,41 @@ const LogViewer: React.FC<{ container?: string }> = ({ container = 'seafile' }) 
     } finally {
       setLoading(false);
     }
-  }, [selectedContainer, tail]);
+  }, [logSource, selectedContainer, tail]);
 
   useEffect(() => {
-    fetchLogs(selectedContainer, tail);
+    fetchLogs(defaultSource, container, 300);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const containerOptions = [
-    { value: 'seafile', label: 'seafile（主服务）' },
-    { value: 'seafile-mysql', label: 'seafile-mysql（数据库）' },
-    { value: 'seafile-memcached', label: 'seafile-memcached（缓存）' },
-  ];
-
-  const tailOptions = [
-    { value: 50, label: '最近 50 行' },
-    { value: 100, label: '最近 100 行' },
-    { value: 200, label: '最近 200 行' },
-    { value: 500, label: '最近 500 行' },
-    { value: 1000, label: '最近 1000 行' },
-  ];
+  const onSourceChange = (v: LogSource) => {
+    setLogSource(v);
+    setLines([]);
+    fetchLogs(v, selectedContainer, tail);
+  };
 
   return (
     <Space direction="vertical" size={8} style={{ width: '100%' }}>
       <Space wrap>
         <Select
-          value={selectedContainer}
-          onChange={(v) => { setSelectedContainer(v); fetchLogs(v, tail); }}
-          options={containerOptions}
+          value={logSource}
+          onChange={onSourceChange}
+          options={LOG_SOURCE_OPTIONS}
           style={{ width: 220 }}
           size="small"
         />
+        {logSource === 'docker' && (
+          <Select
+            value={selectedContainer}
+            onChange={(v) => { setSelectedContainer(v); fetchLogs(logSource, v, tail); }}
+            options={DOCKER_CONTAINER_OPTIONS}
+            style={{ width: 200 }}
+            size="small"
+          />
+        )}
         <Select
           value={tail}
-          onChange={(v) => { setTail(v); fetchLogs(selectedContainer, v); }}
-          options={tailOptions}
+          onChange={(v) => { setTail(v); fetchLogs(logSource, selectedContainer, v); }}
+          options={TAIL_OPTIONS}
           style={{ width: 140 }}
           size="small"
         />
@@ -138,7 +178,7 @@ const LogViewer: React.FC<{ container?: string }> = ({ container = 'seafile' }) 
           size="small"
           icon={<SyncOutlined spin={loading} />}
           loading={loading}
-          onClick={() => fetchLogs(selectedContainer, tail)}
+          onClick={() => fetchLogs(logSource, selectedContainer, tail)}
         >
           刷新
         </Button>
@@ -146,6 +186,9 @@ const LogViewer: React.FC<{ container?: string }> = ({ container = 'seafile' }) 
           <Text type="secondary" style={{ fontSize: 12 }}>{lines.length} 行</Text>
         )}
       </Space>
+      {logPath && (
+        <Text type="secondary" style={{ fontSize: 11 }}>文件路径：{logPath}</Text>
+      )}
 
       <div
         style={{
@@ -153,7 +196,7 @@ const LogViewer: React.FC<{ container?: string }> = ({ container = 'seafile' }) 
           border: '1px solid #30363d',
           borderRadius: 6,
           padding: '10px 14px',
-          height: 380,
+          height: 420,
           overflowY: 'auto',
           fontFamily: 'monospace',
           fontSize: 12,
@@ -165,7 +208,7 @@ const LogViewer: React.FC<{ container?: string }> = ({ container = 'seafile' }) 
             <Spin size="small" /> <span style={{ marginLeft: 8 }}>加载日志中...</span>
           </div>
         ) : lines.length === 0 ? (
-          <span style={{ color: '#8b949e' }}>暂无日志</span>
+          <span style={{ color: '#8b949e' }}>暂无日志（容器可能未运行，或日志文件路径不同）</span>
         ) : (
           lines.map((line, i) => (
             <div key={i} style={{ color: colorLogLine(line), whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
@@ -196,6 +239,7 @@ const SeafileManager: React.FC = () => {
   // 日志面板：诊断区内联日志 or 底部日志卡片
   const [inlineLogContainer, setInlineLogContainer] = useState<string | null>(null);
   const [logCardOpen, setLogCardOpen] = useState(false);
+  const [logCardSource, setLogCardSource] = useState<LogSource>('seahub');
 
   const fetchStatus = useCallback(async (force = false) => {
     setLoading(true);
@@ -454,9 +498,15 @@ const SeafileManager: React.FC = () => {
               </Tooltip>
               <Button
                 icon={<FileTextOutlined />}
-                onClick={() => setLogCardOpen(v => !v)}
+                onClick={() => { setLogCardOpen(v => !v); setLogCardSource('seahub'); }}
               >
-                查看日志
+                Seahub 日志
+              </Button>
+              <Button
+                icon={<FileTextOutlined />}
+                onClick={() => { setLogCardOpen(v => !v); setLogCardSource('docker'); }}
+              >
+                容器日志
               </Button>
             </Space>
           </div>
@@ -652,21 +702,27 @@ const SeafileManager: React.FC = () => {
           )}
         </Card>
 
-        {/* 容器日志卡片（点击"查看日志"按钮展开） */}
+        {/* 日志查看卡片 */}
         {logCardOpen && (
           <Card
             title={
               <Space>
                 <FileTextOutlined />
-                <span>容器日志</span>
-                <Tag color="blue">实时拉取</Tag>
+                <span>{logCardSource === 'seahub' ? 'Seahub 内部日志' : logCardSource === 'docker' ? '容器日志（docker logs）' : '内部日志'}</span>
+                {logCardSource === 'seahub' && (
+                  <Tag color="orange">seahub.log — 包含 Seahub 真实错误</Tag>
+                )}
               </Space>
             }
             extra={
-              <Button size="small" onClick={() => setLogCardOpen(false)}>收起</Button>
+              <Space>
+                <Button size="small" type={logCardSource === 'seahub' ? 'primary' : 'default'} onClick={() => setLogCardSource('seahub')}>Seahub 日志</Button>
+                <Button size="small" type={logCardSource === 'docker' ? 'primary' : 'default'} onClick={() => setLogCardSource('docker')}>容器日志</Button>
+                <Button size="small" onClick={() => setLogCardOpen(false)}>收起</Button>
+              </Space>
             }
           >
-            <LogViewer container="seafile" />
+            <LogViewer key={logCardSource} container="seafile" defaultSource={logCardSource} />
           </Card>
         )}
 

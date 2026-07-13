@@ -3231,7 +3231,7 @@ app.post('/api/seafile/fix', async (_req, res) => {
   }
 });
 
-// Seafile 容器日志查看
+// Seafile 容器日志查看（docker logs）
 app.get('/api/seafile/logs', async (req, res) => {
   const container = (req.query.container || 'seafile').replace(/[^a-zA-Z0-9_-]/g, '');
   const tail = Math.min(parseInt(req.query.tail) || 200, 1000);
@@ -3246,6 +3246,48 @@ app.get('/api/seafile/logs', async (req, res) => {
   } catch (e) {
     res.json({ success: false, error: e.message });
   }
+});
+
+// 读取容器内部日志文件（seahub.log / seafile.log 等 docker logs 看不到的日志）
+const ALLOWED_INTERNAL_LOGS = {
+  seahub:   ['/shared/logs/seahub.log', '/opt/seafile/logs/seahub.log'],
+  seafile:  ['/shared/logs/seafile.log', '/opt/seafile/logs/seafile.log'],
+  ccnet:    ['/shared/logs/ccnet.log',   '/opt/seafile/logs/ccnet.log'],
+  seafdav:  ['/shared/logs/seafdav.log', '/opt/seafile/logs/seafdav.log'],
+};
+app.get('/api/seafile/internal-log', async (req, res) => {
+  const logName = (req.query.log || 'seahub').replace(/[^a-z]/g, '');
+  const tail = Math.min(parseInt(req.query.tail) || 300, 2000);
+  const paths = ALLOWED_INTERNAL_LOGS[logName];
+  if (!paths) return res.json({ success: false, error: `未知日志类型: ${logName}` });
+
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+
+  // 动态找 seafile 主服务容器名
+  let containerName = 'seafile';
+  try {
+    const psOut = _execSync(
+      'docker compose ps -a --format "{{.Service}}|{{.Name}}"',
+      { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 8000 }
+    );
+    const line = psOut.split('\n').find(l => /^seafile\|/i.test(l));
+    if (line) containerName = line.split('|')[1].trim();
+  } catch (_) {}
+
+  for (const logPath of paths) {
+    try {
+      const out = _execSync(
+        `docker exec "${containerName}" tail -n ${tail} "${logPath}" 2>/dev/null`,
+        { encoding: 'utf8', timeout: 10000, env: ENV }
+      );
+      if (out.trim()) {
+        const lines = out.split('\n');
+        return res.json({ success: true, logPath, container: containerName, tail, lines });
+      }
+    } catch (_) {}
+  }
+  res.json({ success: false, error: `在容器 ${containerName} 中未找到可读的 ${logName} 日志文件，请确认容器正在运行` });
 });
 
 const SEAFDAV_CONF = '/Users/maiyou001/seafile/data/seafile/conf/seafdav.conf';
