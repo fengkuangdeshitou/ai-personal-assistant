@@ -3297,8 +3297,8 @@ app.post('/api/seafile/fix', async (_req, res) => {
     await new Promise(r => setTimeout(r, 10000));
     let seahubLogTail = [];
     for (const logPath of [
-      path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
       path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),
+      path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
     ]) {
       if (fs.existsSync(logPath)) {
         try {
@@ -3346,22 +3346,23 @@ app.get('/api/seafile/logs', async (req, res) => {
 // 读取容器内部日志文件（seahub.log / seafile.log 等 docker logs 看不到的日志）
 // 优先从宿主机直接读取（容器可能快速重启，docker exec 时机不可靠）
 const LOG_HOST_PATHS = {
-  // Seafile Docker 官方镜像将 /shared → host SEAFILE_DIR/data
+  // seafileltd/seafile-mc: /shared/seafile/logs/ → host SEAFILE_DIR/data/seafile/logs/
+  // /shared/logs/ → host SEAFILE_DIR/data/logs/
   seahub: [
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),  // 确认路径
     path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
-    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),
   ],
   seafile: [
-    path.join(SEAFILE_DIR, 'data', 'logs', 'seafile.log'),
     path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seafile.log'),
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seafile.log'),
   ],
   ccnet: [
-    path.join(SEAFILE_DIR, 'data', 'logs', 'ccnet.log'),
     path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'ccnet.log'),
+    path.join(SEAFILE_DIR, 'data', 'logs', 'ccnet.log'),
   ],
   seafdav: [
-    path.join(SEAFILE_DIR, 'data', 'logs', 'seafdav.log'),
     path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seafdav.log'),
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seafdav.log'),
   ],
 };
 // 容器内路径（作为 docker exec 回退）
@@ -3470,8 +3471,8 @@ app.post('/api/seafile/debug-seahub', async (_req, res) => {
     steps.push('读取 seahub.log（等待 Seahub 产生日志）...');
     let seahubLog = [];
     const logPaths = [
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),  // 确认路径
       path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
-      path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),
     ];
     const t0 = Date.now();
     while (Date.now() - t0 < 20000) {
@@ -3535,8 +3536,8 @@ app.post('/api/seafile/capture-seahub-error', async (_req, res) => {
 
   // 1. 先读宿主机上的 seahub.log（最可靠，不依赖容器在线）
   const hostLogPaths = [
-    path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
     path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
   ];
   for (const logPath of hostLogPaths) {
     if (fs.existsSync(logPath)) {
