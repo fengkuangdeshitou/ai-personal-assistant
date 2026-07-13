@@ -6162,6 +6162,8 @@ APP_ABI := armeabi-v7a arm64-v8a
 .super Landroid/app/Application;
 
 .field private mDelegate:Landroid/app/Application;
+# 子进程标志：attachBaseContext 写入，onCreate 读取
+.field private mIsSubProcess:Z
 
 .method public constructor <init>()V
     .registers 1
@@ -6170,66 +6172,42 @@ APP_ABI := armeabi-v7a arm64-v8a
 .end method
 
 .method protected attachBaseContext(Landroid/content/Context;)V
-    .locals 6
+    .locals 2
     invoke-super {p0, p1}, Landroid/app/Application;->attachBaseContext(Landroid/content/Context;)V
-    # 子进程检测：华为等设备对 ContentProvider 超时严苛（仅 5 秒）。
-    # 子进程（进程名包含 ":" 如 :core/:server/:pushcore）跳过 payload DEX 加载，
-    # 避免解密耗时阻塞 ContentProvider 初始化，导致超时崩溃。
-    # 主进程（进程名 == 包名）正常执行 install()。
-    const/4 v0, 0x0
-    :try_proc_check
-    const-string v1, "/proc/self/cmdline"
-    new-instance v2, Ljava/io/FileInputStream;
-    invoke-direct {v2, v1}, Ljava/io/FileInputStream;-><init>(Ljava/lang/String;)V
-    const/16 v3, 0x100
-    new-array v4, v3, [B
-    const/4 v5, 0x0
-    invoke-virtual {v2, v4, v5, v3}, Ljava/io/FileInputStream;->read([BII)I
-    move-result v3
-    invoke-virtual {v2}, Ljava/io/FileInputStream;->close()V
-    if-lez v3, :do_install
-    new-instance v2, Ljava/lang/String;
-    invoke-direct {v2, v4, v5, v3}, Ljava/lang/String;-><init>([BII)V
-    const-string v1, ":"
-    invoke-virtual {v2, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    # 子进程检测：用 ActivityThread.currentProcessName()（API 28+，无 IO 无空字节问题）。
+    # 子进程（进程名 != 包名）跳过 payload DEX 加载，避免解密耗时超过华为 5 秒 ContentProvider 超时。
+    # 出现任何异常（如 API < 28 方法不存在）则回退到正常 install()，保证兼容性。
+    :try_check
+    invoke-virtual {p1}, Landroid/content/Context;->getPackageName()Ljava/lang/String;
+    move-result-object v0
+    invoke-static {}, Landroid/app/ActivityThread;->currentProcessName()Ljava/lang/String;
+    move-result-object v1
+    if-eqz v1, :do_install
+    invoke-virtual {v1, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
     move-result v0
-    :try_proc_end
-    .catch Ljava/lang/Throwable; {:try_proc_check .. :try_proc_end} :catch_proc
-    if-nez v0, :skip_install
+    if-nez v0, :do_install
+    # 子进程：标记 flag，跳过 install()
+    const/4 v0, 0x1
+    iput-boolean v0, p0, L${shellAppPath};->mIsSubProcess:Z
+    goto :skip_install
+    :try_check_end
+    .catch Ljava/lang/Throwable; {:try_check .. :try_check_end} :catch_check
     :do_install
     invoke-static {p1}, L${stage2Path}/Stage2PayloadLoader;->install(Landroid/content/Context;)V
     :skip_install
     return-void
-    :catch_proc
-    goto :do_install
+    :catch_check
+    invoke-static {p1}, L${stage2Path}/Stage2PayloadLoader;->install(Landroid/content/Context;)V
+    return-void
 .end method
 
 .method public onCreate()V
-    .locals 6
+    .locals 4
     :try_start
     invoke-super {p0}, Landroid/app/Application;->onCreate()V
-    # 子进程跳过 createDelegate（与 attachBaseContext 保持一致）
-    const/4 v4, 0x0
-    :try_proc2
-    const-string v1, "/proc/self/cmdline"
-    new-instance v2, Ljava/io/FileInputStream;
-    invoke-direct {v2, v1}, Ljava/io/FileInputStream;-><init>(Ljava/lang/String;)V
-    const/16 v3, 0x80
-    new-array v5, v3, [B
-    const/4 v4, 0x0
-    invoke-virtual {v2, v5, v4, v3}, Ljava/io/FileInputStream;->read([BII)I
-    move-result v3
-    invoke-virtual {v2}, Ljava/io/FileInputStream;->close()V
-    if-lez v3, :main_proc
-    new-instance v2, Ljava/lang/String;
-    invoke-direct {v2, v5, v4, v3}, Ljava/lang/String;-><init>([BII)V
-    const-string v1, ":"
-    invoke-virtual {v2, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
-    move-result v4
-    :try_proc2_end
-    .catch Ljava/lang/Throwable; {:try_proc2 .. :try_proc2_end} :catch_proc2
-    if-nez v4, :done
-    :main_proc
+    # 子进程跳过 createDelegate（避免实例化 payload DEX 中的原 Application 类导致 ClassNotFoundException）
+    iget-boolean v0, p0, L${shellAppPath};->mIsSubProcess:Z
+    if-nez v0, :done
     const-string v0, "${escapedApp}"
     invoke-virtual {v0}, Ljava/lang/String;->length()I
     move-result v1
@@ -6243,8 +6221,6 @@ APP_ABI := armeabi-v7a arm64-v8a
     :try_end
     .catch Ljava/lang/Throwable; {:try_start .. :try_end} :catch_all
     goto :ret
-    :catch_proc2
-    goto :main_proc
     :catch_all
     move-exception v0
     const-string v1, "onCreate"
