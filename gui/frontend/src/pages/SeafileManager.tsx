@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Button, Badge, Space, Typography, Table, message, Spin, Switch, Tooltip } from 'antd';
+import {
+  Card, Button, Badge, Space, Typography, Table, message,
+  Spin, Switch, Tooltip, Alert, Collapse,
+} from 'antd';
 import {
   PlayCircleOutlined,
   PauseCircleOutlined,
@@ -8,6 +11,11 @@ import {
   LinkOutlined,
   CloudServerOutlined,
   HddOutlined,
+  MedicineBoxOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  WarningOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons';
 import api from '../api/client';
 
@@ -35,8 +43,29 @@ interface SeafDavStatus {
   shareName: string;
 }
 
+interface DiagnoseCheck {
+  id: string;
+  label: string;
+  status: 'ok' | 'warn' | 'error';
+  detail: string;
+  suggestion?: string;
+}
+
+interface DiagnoseResult {
+  ok: boolean;
+  summary: string;
+  checks: DiagnoseCheck[];
+}
+
 let seafileStatusInFlight: Promise<SeafileStatus> | null = null;
 let seafileStatusCache: { ts: number; data: SeafileStatus | null } = { ts: 0, data: null };
+
+const CheckIcon: React.FC<{ status: DiagnoseCheck['status'] }> = ({ status }) => {
+  if (status === 'ok') return <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 16 }} />;
+  if (status === 'error') return <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />;
+  if (status === 'warn') return <WarningOutlined style={{ color: '#faad14', fontSize: 16 }} />;
+  return <QuestionCircleOutlined style={{ color: '#8c8c8c', fontSize: 16 }} />;
+};
 
 const SeafileManager: React.FC = () => {
   const [status, setStatus] = useState<SeafileStatus | null>(null);
@@ -44,6 +73,10 @@ const SeafileManager: React.FC = () => {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [seafdav, setSeafdav] = useState<SeafDavStatus | null>(null);
   const [seafdavToggling, setSeafdavToggling] = useState(false);
+
+  const [diagnosing, setDiagnosing] = useState(false);
+  const [diagnoseResult, setDiagnoseResult] = useState<DiagnoseResult | null>(null);
+  const [diagnoseOpen, setDiagnoseOpen] = useState(false);
 
   const fetchStatus = useCallback(async (force = false) => {
     setLoading(true);
@@ -126,6 +159,24 @@ const SeafileManager: React.FC = () => {
     }
   };
 
+  const handleDiagnose = async () => {
+    setDiagnosing(true);
+    setDiagnoseResult(null);
+    setDiagnoseOpen(true);
+    try {
+      const res = await api.get('/api/seafile/diagnose', { timeout: 40000 });
+      if (res.data.success) {
+        setDiagnoseResult(res.data);
+      } else {
+        message.error('诊断请求失败');
+      }
+    } catch (err: any) {
+      message.error(`诊断失败：${err?.message || '网络错误'}`);
+    } finally {
+      setDiagnosing(false);
+    }
+  };
+
   const columns = [
     {
       title: '容器名称',
@@ -182,7 +233,7 @@ const SeafileManager: React.FC = () => {
           extra={
             <Button
               icon={<SyncOutlined spin={loading} />}
-                onClick={() => fetchStatus(true)}
+              onClick={() => fetchStatus(true)}
               loading={loading}
               size="small"
             >
@@ -212,7 +263,6 @@ const SeafileManager: React.FC = () => {
                 </Button>
               )}
             </Space>
-
           </div>
 
           <div style={{ marginTop: 20 }}>
@@ -243,8 +293,99 @@ const SeafileManager: React.FC = () => {
               >
                 重启
               </Button>
+              <Button
+                icon={<MedicineBoxOutlined />}
+                onClick={handleDiagnose}
+                loading={diagnosing}
+              >
+                自动诊断
+              </Button>
             </Space>
           </div>
+
+          {/* 诊断结果区域 */}
+          {diagnoseOpen && (
+            <div style={{ marginTop: 20 }}>
+              <Collapse
+                activeKey={diagnoseOpen ? ['diagnose'] : []}
+                onChange={(keys) => setDiagnoseOpen(Array.isArray(keys) ? keys.includes('diagnose') : keys === 'diagnose')}
+                items={[{
+                  key: 'diagnose',
+                  label: (
+                    <Space>
+                      <MedicineBoxOutlined />
+                      <Text strong>自动诊断结果</Text>
+                      {diagnoseResult && (
+                        <Badge
+                          status={diagnoseResult.ok ? 'success' : 'error'}
+                          text={diagnoseResult.ok ? '正常' : '发现问题'}
+                        />
+                      )}
+                    </Space>
+                  ),
+                  children: diagnosing ? (
+                    <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                      <Spin tip="正在诊断中，请稍候..." />
+                    </div>
+                  ) : diagnoseResult ? (
+                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                      <Alert
+                        type={diagnoseResult.ok ? 'success' : 'error'}
+                        message={diagnoseResult.summary}
+                        showIcon
+                        action={
+                          !diagnoseResult.ok ? (
+                            <Button
+                              size="small"
+                              icon={<ReloadOutlined />}
+                              loading={actionLoading === 'restart'}
+                              onClick={() => handleAction('restart')}
+                            >
+                              一键重启
+                            </Button>
+                          ) : undefined
+                        }
+                      />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {diagnoseResult.checks.map(check => (
+                          <div
+                            key={check.id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              gap: 10,
+                              padding: '8px 12px',
+                              borderRadius: 6,
+                              background: check.status === 'error' ? '#fff2f0' : check.status === 'warn' ? '#fffbe6' : '#f6ffed',
+                              border: `1px solid ${check.status === 'error' ? '#ffccc7' : check.status === 'warn' ? '#ffe58f' : '#b7eb8f'}`,
+                            }}
+                          >
+                            <div style={{ paddingTop: 1 }}>
+                              <CheckIcon status={check.status} />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                              <Text strong style={{ fontSize: 13 }}>{check.label}</Text>
+                              <div style={{ fontSize: 12, color: '#595959', marginTop: 2 }}>{check.detail}</div>
+                              {check.suggestion && (
+                                <div style={{ fontSize: 12, color: '#d4380d', marginTop: 3 }}>
+                                  建议：{check.suggestion}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <Button size="small" onClick={handleDiagnose} loading={diagnosing}>
+                          重新诊断
+                        </Button>
+                      </div>
+                    </Space>
+                  ) : null,
+                }]}
+              />
+            </div>
+          )}
         </Card>
 
         {/* 容器列表 */}

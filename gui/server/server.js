@@ -3019,6 +3019,121 @@ app.post('/api/seafile/restart', async (_req, res) => {
   }
 });
 
+// Seafile 自动诊断
+app.get('/api/seafile/diagnose', async (_req, res) => {
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  const safeExec = (cmd, opts = {}) => {
+    try { return { ok: true, out: _execSync(cmd, { encoding: 'utf8', timeout: 10000, env: ENV, ...opts }) }; }
+    catch (e) { return { ok: false, out: e.stderr || e.stdout || e.message || '' }; }
+  };
+
+  const checks = [];
+  let hasError = false;
+
+  // 1. Docker 守护进程
+  const dockerInfo = safeExec('docker info');
+  if (!dockerInfo.ok) {
+    checks.push({ id: 'docker', label: 'Docker 服务', status: 'error', detail: 'Docker 未运行或无权限', suggestion: '请启动 Docker Desktop 后重试' });
+    return res.json({ success: true, ok: false, summary: 'Docker 未运行，无法继续诊断', checks });
+  }
+  checks.push({ id: 'docker', label: 'Docker 服务', status: 'ok', detail: 'Docker 守护进程正在运行' });
+
+  // 2. 各容器状态
+  const psResult = safeExec('docker ps -a --filter "name=seafile" --format "{{.Names}}|{{.Status}}|{{.State}}"');
+  const containerMap = {};
+  if (psResult.ok) {
+    psResult.out.trim().split('\n').filter(Boolean).forEach(line => {
+      const [name, status, state] = line.split('|');
+      if (name) containerMap[name.trim()] = { status: status?.trim(), state: state?.trim() };
+    });
+  }
+  const expectedContainers = ['seafile', 'seafile-mysql', 'seafile-memcached'];
+  for (const cname of expectedContainers) {
+    const found = Object.entries(containerMap).find(([k]) => k === cname || k.endsWith(`-${cname}`));
+    if (!found) {
+      checks.push({ id: `ctr_${cname}`, label: `容器 ${cname}`, status: 'error', detail: '容器不存在', suggestion: `在 ${SEAFILE_DIR} 执行 docker compose up -d` });
+      hasError = true;
+    } else {
+      const [, info] = found;
+      const running = info.state === 'running';
+      checks.push({
+        id: `ctr_${cname}`, label: `容器 ${cname}`,
+        status: running ? 'ok' : 'error',
+        detail: info.status,
+        suggestion: running ? undefined : '容器已退出，建议点击"重启"或查看日志',
+      });
+      if (!running) hasError = true;
+    }
+  }
+
+  // 3. Seafile 容器日志中的错误关键词
+  const logsResult = safeExec('docker logs --tail=120 seafile 2>&1');
+  if (logsResult.ok || logsResult.out) {
+    const logText = logsResult.out || '';
+    const errorPatterns = [
+      { re: /Can't connect.*MySQL|Connection refused.*3306/i, msg: '无法连接 MySQL 数据库' },
+      { re: /OperationalError/i, msg: '数据库操作异常' },
+      { re: /unicorn.*error|worker.*exit/i, msg: 'Seahub unicorn 工作进程崩溃' },
+      { re: /Traceback \(most recent/i, msg: 'Python 异常（Traceback）' },
+      { re: /Permission denied/i, msg: '文件权限不足' },
+      { re: /No space left on device/i, msg: '磁盘空间不足' },
+      { re: /Address already in use/i, msg: '端口被占用' },
+    ];
+    const found = errorPatterns.filter(p => p.re.test(logText)).map(p => p.msg);
+    if (found.length > 0) {
+      checks.push({ id: 'logs', label: 'Seafile 容器日志', status: 'error', detail: found.join('；'), suggestion: '运行 docker logs seafile 查看完整日志' });
+      hasError = true;
+    } else {
+      checks.push({ id: 'logs', label: 'Seafile 容器日志', status: 'ok', detail: '近 120 行日志中未发现明显错误' });
+    }
+  } else {
+    checks.push({ id: 'logs', label: 'Seafile 容器日志', status: 'warn', detail: '日志读取失败（容器可能不存在）' });
+  }
+
+  // 4. 磁盘空间
+  const dfResult = safeExec('df -h /');
+  if (dfResult.ok) {
+    const line = dfResult.out.trim().split('\n').find(l => /\d+%/.test(l)) || '';
+    const pctMatch = line.match(/(\d+)%/);
+    const pct = pctMatch ? parseInt(pctMatch[1]) : 0;
+    if (pct >= 95) {
+      checks.push({ id: 'disk', label: '磁盘空间', status: 'error', detail: `使用率 ${pct}%，剩余空间严重不足`, suggestion: '清理 Docker 镜像或数据后重试：docker system prune' });
+      hasError = true;
+    } else if (pct >= 80) {
+      checks.push({ id: 'disk', label: '磁盘空间', status: 'warn', detail: `使用率 ${pct}%，建议关注磁盘剩余空间` });
+    } else {
+      checks.push({ id: 'disk', label: '磁盘空间', status: 'ok', detail: `使用率 ${pct}%，空间充足` });
+    }
+  } else {
+    checks.push({ id: 'disk', label: '磁盘空间', status: 'warn', detail: '检测失败' });
+  }
+
+  // 5. HTTP 可达性（Nginx → Seahub）
+  const curlResult = safeExec('curl -s -o /dev/null -w "%{http_code}" --max-time 6 http://localhost/');
+  const httpCode = (curlResult.out || '').trim();
+  if (['200', '302', '301'].includes(httpCode)) {
+    checks.push({ id: 'http', label: 'Web 访问（HTTP 80）', status: 'ok', detail: `Seahub 响应正常（HTTP ${httpCode}）` });
+  } else if (httpCode === '502' || httpCode === '503') {
+    checks.push({ id: 'http', label: 'Web 访问（HTTP 80）', status: 'error', detail: `Nginx 返回 ${httpCode}，Seahub 尚未就绪或已崩溃`, suggestion: '点击"重启"按钮，等待约 60 秒后再访问' });
+    hasError = true;
+  } else if (httpCode) {
+    checks.push({ id: 'http', label: 'Web 访问（HTTP 80）', status: 'warn', detail: `HTTP 响应码 ${httpCode}` });
+  } else {
+    checks.push({ id: 'http', label: 'Web 访问（HTTP 80）', status: 'error', detail: '无法连接 localhost:80，Nginx 可能未启动', suggestion: '点击"重启"按钮重新拉起服务' });
+    hasError = true;
+  }
+
+  // 汇总
+  const errCount = checks.filter(c => c.status === 'error').length;
+  const warnCount = checks.filter(c => c.status === 'warn').length;
+  let summary = '所有检查通过，Seafile 运行正常';
+  if (errCount > 0) summary = `发现 ${errCount} 个错误${warnCount > 0 ? `、${warnCount} 个警告` : ''}，建议重启 Seafile 并查看日志`;
+  else if (warnCount > 0) summary = `发现 ${warnCount} 个警告，Seafile 整体可用`;
+
+  res.json({ success: true, ok: !hasError, summary, checks });
+});
+
 const SEAFDAV_CONF = '/Users/maiyou001/seafile/data/seafile/conf/seafdav.conf';
 
 // 读取 SeafDAV 配置状态
