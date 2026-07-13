@@ -2918,17 +2918,48 @@ async function runDockerCompose(args) {
 app.get('/api/seafile/status', async (_req, res) => {
   try {
     const { execSync } = await import('child_process');
-    const output = execSync(
-      'docker ps -a --filter "name=seafile" --format "{{.Names}}|{{.Status}}|{{.Image}}|{{.Size}}"',
-      { env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' }, encoding: 'utf8' }
-    );
-    const containers = output.trim().split('\n').filter(Boolean).map(line => {
-      const [name, status, image, sizeStr] = line.split('|');
-      // sizeStr 格式: "16.8MB (virtual 1.49GB)"，取括号内的 virtual 值
-      const virtualMatch = sizeStr?.match(/virtual\s+([\d.]+\s*\w+)/i);
-      const imageSize = virtualMatch ? virtualMatch[1] : '';
-      return { name, status, image, running: status?.startsWith('Up'), imageSize };
-    });
+    const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+
+    // 用 docker compose ps 获取该 compose 项目下所有服务容器（含 db、memcached 等任意命名）
+    let containers = [];
+    try {
+      const psOut = execSync(
+        'docker compose ps -a --format "{{.Name}}|{{.Status}}|{{.Image}}"',
+        { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 10000 }
+      );
+      containers = psOut.trim().split('\n').filter(Boolean).map(line => {
+        const [name, status, image] = line.split('|');
+        return { name: name?.trim(), status: status?.trim(), image: image?.trim(), running: status?.trim().startsWith('Up') };
+      });
+    } catch (_) {
+      // 回退：docker ps 过滤项目名（兼容旧版 compose）
+      const fallback = execSync(
+        `docker ps -a --filter "label=com.docker.compose.project.working_dir=${SEAFILE_DIR}" --format "{{.Names}}|{{.Status}}|{{.Image}}"`,
+        { env: ENV, encoding: 'utf8', timeout: 10000 }
+      );
+      containers = fallback.trim().split('\n').filter(Boolean).map(line => {
+        const [name, status, image] = line.split('|');
+        return { name: name?.trim(), status: status?.trim(), image: image?.trim(), running: status?.trim().startsWith('Up') };
+      });
+    }
+
+    // 补充每个容器的镜像大小
+    try {
+      const sizeOut = execSync(
+        'docker ps -a --format "{{.Names}}|{{.Size}}"',
+        { env: ENV, encoding: 'utf8', timeout: 8000 }
+      );
+      const sizeMap = {};
+      sizeOut.trim().split('\n').filter(Boolean).forEach(line => {
+        const [n, s] = line.split('|');
+        if (n) {
+          const m = s?.match(/virtual\s+([\d.]+\s*\w+)/i);
+          sizeMap[n.trim()] = m ? m[1] : '';
+        }
+      });
+      containers = containers.map(c => ({ ...c, imageSize: sizeMap[c.name] || '' }));
+    } catch (_) {}
+
     const allRunning = containers.length > 0 && containers.every(c => c.running);
 
     // 获取局域网 IP
@@ -2936,44 +2967,30 @@ app.get('/api/seafile/status', async (_req, res) => {
     let localIp = '';
     for (const iface of Object.values(nets)) {
       for (const addr of (iface || [])) {
-        if (addr.family === 'IPv4' && !addr.internal) {
-          localIp = addr.address;
-          break;
-        }
+        if (addr.family === 'IPv4' && !addr.internal) { localIp = addr.address; break; }
       }
       if (localIp) break;
     }
 
-    // 统计各容器关联的磁盘占用
+    // 磁盘占用：按容器名关键词匹配数据目录
     const duSize = (p) => {
       try {
-        return execSync(`du -sh "${p}" 2>/dev/null | cut -f1`, {
-          env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' },
-          encoding: 'utf8', timeout: 8000,
-        }).trim();
+        return execSync(`du -sh "${p}" 2>/dev/null | cut -f1`, { env: ENV, encoding: 'utf8', timeout: 8000 }).trim();
       } catch (_) { return ''; }
     };
-    // 容器名 → 数据目录映射
-    const containerDiskMap = {
-      seafile:           duSize(`${SEAFILE_DIR}/data/seafile/seafile-data`),
-      'seafile-mysql':   duSize(`${SEAFILE_DIR}/mysql`),
-      'seafile-memcached': '',
-    };
-    // 每个容器附上镜像大小和数据大小
+    const diskRules = [
+      { keyword: /seafile(?!.*mysql|.*db|.*memcach)/i, path: `${SEAFILE_DIR}/data/seafile/seafile-data` },
+      { keyword: /mysql|mariadb|\bdb\b/i,              path: `${SEAFILE_DIR}/mysql` },
+    ];
     const containersWithDisk = containers.map(c => {
-      // 按最长 key 优先匹配，避免 "seafile" 覆盖 "seafile-mysql"
-      const matchKey = Object.keys(containerDiskMap)
-        .sort((a, b) => b.length - a.length)
-        .find(k => c.name.includes(k));
-      return { ...c, diskUsage: matchKey ? containerDiskMap[matchKey] : '' };
+      const rule = diskRules.find(r => r.keyword.test(c.name));
+      return { ...c, diskUsage: rule ? duSize(rule.path) : '' };
     });
+
     // 镜像总占用
     let imagesSize = '';
     try {
-      const out = execSync(
-        'docker system df --format "{{.Type}}|{{.Size}}" 2>/dev/null',
-        { env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' }, encoding: 'utf8', timeout: 5000 }
-      );
+      const out = execSync('docker system df --format "{{.Type}}|{{.Size}}" 2>/dev/null', { env: ENV, encoding: 'utf8', timeout: 5000 });
       const line = out.split('\n').find(l => l.startsWith('Images|'));
       imagesSize = line ? line.split('|')[1] : '';
     } catch (_) {}
@@ -3039,36 +3056,45 @@ app.get('/api/seafile/diagnose', async (_req, res) => {
   }
   checks.push({ id: 'docker', label: 'Docker 服务', status: 'ok', detail: 'Docker 守护进程正在运行' });
 
-  // 2. 各容器状态
-  const psResult = safeExec('docker ps -a --filter "name=seafile" --format "{{.Names}}|{{.Status}}|{{.State}}"');
-  const containerMap = {};
-  if (psResult.ok) {
-    psResult.out.trim().split('\n').filter(Boolean).forEach(line => {
-      const [name, status, state] = line.split('|');
-      if (name) containerMap[name.trim()] = { status: status?.trim(), state: state?.trim() };
+  // 2. 各容器状态（用 docker compose ps 获取该项目所有服务，包括 db/mysql 等任意命名）
+  let composeServices = [];
+  try {
+    const composePs = _execSync(
+      'docker compose ps -a --format "{{.Service}}|{{.Name}}|{{.Status}}"',
+      { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 10000 }
+    );
+    composeServices = composePs.trim().split('\n').filter(Boolean).map(line => {
+      const [service, name, status] = line.split('|');
+      return {
+        service: service?.trim(),
+        name: name?.trim(),
+        status: status?.trim(),
+        running: status?.trim().startsWith('Up'),
+      };
     });
-  }
-  const expectedContainers = ['seafile', 'seafile-mysql', 'seafile-memcached'];
-  for (const cname of expectedContainers) {
-    const found = Object.entries(containerMap).find(([k]) => k === cname || k.endsWith(`-${cname}`));
-    if (!found) {
-      checks.push({ id: `ctr_${cname}`, label: `容器 ${cname}`, status: 'error', detail: '容器不存在', suggestion: `在 ${SEAFILE_DIR} 执行 docker compose up -d` });
-      hasError = true;
-    } else {
-      const [, info] = found;
-      const running = info.state === 'running';
+  } catch (_) {}
+
+  if (composeServices.length === 0) {
+    checks.push({ id: 'ctr_all', label: '所有容器', status: 'error', detail: '未找到任何 Seafile 相关容器', suggestion: `在 ${SEAFILE_DIR} 执行 docker compose up -d` });
+    hasError = true;
+  } else {
+    for (const svc of composeServices) {
+      const isDb = /db|mysql|mariadb/i.test(svc.service);
       checks.push({
-        id: `ctr_${cname}`, label: `容器 ${cname}`,
-        status: running ? 'ok' : 'error',
-        detail: info.status,
-        suggestion: running ? undefined : '容器已退出，建议点击"重启"或查看日志',
+        id: `ctr_${svc.service}`,
+        label: `${svc.service}${isDb ? '（数据库）' : ''}`,
+        status: svc.running ? 'ok' : 'error',
+        detail: svc.status || '状态未知',
+        suggestion: svc.running ? undefined : '容器已停止，建议点击"修复 MySQL 连接"或"重启"',
       });
-      if (!running) hasError = true;
+      if (!svc.running) hasError = true;
     }
   }
 
-  // 3. Seafile 容器日志中的错误关键词
-  const logsResult = safeExec('docker logs --tail=120 seafile 2>&1');
+  // 3. Seafile 容器日志中的错误关键词（动态找 seafile 主服务容器名）
+  const seafileSvc = composeServices.find(s => /^seafile$/i.test(s.service)) || composeServices.find(s => /seafile/i.test(s.service));
+  const seafileContainerName = seafileSvc?.name || 'seafile';
+  const logsResult = safeExec(`docker logs --tail=120 "${seafileContainerName}" 2>&1`);
   if (logsResult.ok || logsResult.out) {
     const logText = logsResult.out || '';
     const errorPatterns = [
@@ -3143,25 +3169,43 @@ app.post('/api/seafile/fix', async (_req, res) => {
   const steps = [];
 
   try {
-    // Step 1: 停止 seafile（保留 db / memcached 继续运行）
-    steps.push('停止 seafile 容器...');
-    try { compose('stop seafile'); } catch (_) {}
+    // 先通过 docker compose ps 确定实际的服务名（seafile 主服务 / db 服务）
+    let seafileServiceName = 'seafile';
+    let dbServiceNameEarly = 'db';
+    try {
+      const psOut = compose('ps -a --format "{{.Service}}|{{.Status}}"');
+      for (const line of psOut.split('\n').filter(Boolean)) {
+        const svc = line.split('|')[0].trim();
+        if (/^seafile$/i.test(svc)) seafileServiceName = svc;
+        if (/db|mysql|mariadb/i.test(svc)) dbServiceNameEarly = svc;
+      }
+    } catch (_) {}
 
-    // Step 2: 确保 db 容器在运行
-    steps.push('启动 MySQL (db) 容器...');
-    compose('up -d db');
+    // Step 1: 停止 seafile 主服务（保留 db / memcached 继续运行）
+    steps.push(`停止 ${seafileServiceName} 容器...`);
+    try { compose(`stop ${seafileServiceName}`); } catch (_) {}
+
+    // Step 2: 确保数据库容器在运行
+    steps.push(`启动数据库容器 (${dbServiceNameEarly})...`);
+    compose(`up -d ${dbServiceNameEarly}`);
 
     // Step 3: 等待 MySQL 接受连接（最长 90 秒）
-    steps.push('等待 MySQL 就绪（最长 90 秒）...');
+    // 先从 docker compose ps 找到数据库服务名（db / mysql / mariadb 等任意命名）
+    let dbServiceName = 'db';
+    try {
+      const psOut = compose('ps -a --format "{{.Service}}|{{.Status}}"');
+      const dbLine = psOut.split('\n').find(l => /db|mysql|mariadb/i.test(l.split('|')[0]));
+      if (dbLine) dbServiceName = dbLine.split('|')[0].trim();
+    } catch (_) {}
+    steps.push(`等待 ${dbServiceName} 就绪（最长 90 秒）...`);
     let mysqlReady = false;
     const deadline = Date.now() + 90000;
     while (Date.now() < deadline) {
       try {
-        // 尝试通过 mysqladmin ping 检测 MySQL 是否可用
+        // 用 docker compose exec（自动匹配服务名，无论容器实际叫什么）
         _execSync(
-          'docker exec seafile-mysql mysqladmin ping -h 127.0.0.1 --silent 2>/dev/null || ' +
-          'docker exec seafile-db   mysqladmin ping -h 127.0.0.1 --silent 2>/dev/null',
-          { env: ENV, encoding: 'utf8', timeout: 5000 }
+          `docker compose exec -T ${dbServiceName} mysqladmin ping -h 127.0.0.1 --silent`,
+          { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 5000 }
         );
         mysqlReady = true;
         break;
@@ -3175,9 +3219,9 @@ app.post('/api/seafile/fix', async (_req, res) => {
       steps.push('✅ MySQL 已就绪');
     }
 
-    // Step 4: 启动 seafile
-    steps.push('启动 seafile 容器...');
-    compose('up -d seafile');
+    // Step 4: 启动 seafile 主服务
+    steps.push(`启动 ${seafileServiceName} 容器...`);
+    compose(`up -d ${seafileServiceName}`);
     steps.push('✅ seafile 已启动，等待 Seahub 初始化（约 30 秒）后再访问页面');
 
     res.json({ success: true, steps });
