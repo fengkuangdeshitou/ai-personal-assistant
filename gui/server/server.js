@@ -4305,6 +4305,8 @@ console.log('OK:' + payload.length);
     const stripDuringPayloadBuild = enableStage3StripClasses2;
     // U1: 提前生成 nativeSecret，payload 脚本加密和 SO 解密共用同一密钥
     const nativeSecret = crypto.randomBytes(32);
+    // stage2Path 提前定义，loaderSmali 模板和预处理步骤均依赖它
+    const stage2Path = shellStage2Package.replace(/\./g, '/');
     const loaderSmali = enableStage2RuntimeLoad ? `.class public L${stage2Path}/Stage2PayloadLoader;
 .super Ljava/lang/Object;
 
@@ -4921,7 +4923,6 @@ console.log('OK:' + payload.length);
     // ── 预处理步骤：直接向原始 Application 注入壳初始化，不替换 Application 类名 ──
     // 这样加固后 Application 类名不变，避免 ClassCastException 和 TUtil.getT 等兼容问题
     let preInjectSucceeded = false;
-    const stage2Path = shellStage2Package.replace(/\./g, '/'); // 提前定义，预处理和 stage2 均使用
     if (enableStage2Inject && originalApplication) {
       try {
         const preinjectDir = path.join(shellDir, 'preinject');
