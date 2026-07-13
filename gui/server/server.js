@@ -5670,12 +5670,7 @@ APP_ABI := armeabi-v7a arm64-v8a
     invoke-virtual {v7}, Ljava/io/File;->exists()Z
     move-result v8
     if-eqz v8, :need_decrypt
-    # 缓存文件存在，验证大小 > 0 后直接返回路径
-    invoke-virtual {v7}, Ljava/io/File;->length()J
-    move-result-wide v8
-    const-wide/16 v5, 0x0
-    cmp-long v5, v8, v5
-    if-lez v5, :need_decrypt
+    # 缓存命中：文件已存在，直接返回路径（避免重复解密）
     invoke-virtual {v7}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
     move-result-object v0
     return-object v0
