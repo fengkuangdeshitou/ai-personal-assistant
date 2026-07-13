@@ -5649,6 +5649,37 @@ APP_ABI := armeabi-v7a arm64-v8a
 .method private static loadPayloadDexPath(Landroid/content/Context;Landroid/content/res/AssetManager;Ljava/lang/String;Ljava/io/File;I)Ljava/lang/String;
     .locals 10
     :try_start
+    # 快速路径：缓存命中时直接返回，无需重新解密（跨进程/跨重启均有效）
+    # 文件名：payload_classes{N}.dex（不含 PID，多进程共享同一份缓存）
+    new-instance v5, Ljava/lang/StringBuilder;
+    invoke-direct {v5}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v6, "payload_classes"
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    move-result-object v5
+    invoke-static {p4}, Ljava/lang/String;->valueOf(I)Ljava/lang/String;
+    move-result-object v6
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    move-result-object v5
+    const-string v6, ".dex"
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    move-result-object v5
+    invoke-virtual {v5}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v6
+    new-instance v7, Ljava/io/File;
+    invoke-direct {v7, p3, v6}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+    invoke-virtual {v7}, Ljava/io/File;->exists()Z
+    move-result v8
+    if-eqz v8, :need_decrypt
+    # 缓存文件存在，验证大小 > 0 后直接返回路径
+    invoke-virtual {v7}, Ljava/io/File;->length()J
+    move-result-wide v8
+    const-wide/16 v5, 0x0
+    cmp-long v5, v8, v5
+    if-lez v5, :need_decrypt
+    invoke-virtual {v7}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v0
+    return-object v0
+    :need_decrypt
     new-instance v0, Ljava/lang/StringBuilder;
     invoke-direct {v0}, Ljava/lang/StringBuilder;-><init>()V
     const-string v1, "payload/classes"
@@ -5673,6 +5704,8 @@ APP_ABI := armeabi-v7a arm64-v8a
     if-eqz v4, :catch_ignore
     invoke-static {v4}, L${stage2Path}/Stage2PayloadLoader;->inflate([B)[B
     move-result-object v4
+    # 使用稳定文件名（不含 PID），使多进程可复用已解密的缓存文件，
+    # 避免每次进程重启都重新解密，解决华为等设备 ContentProvider 5 秒超时崩溃问题
     new-instance v5, Ljava/lang/StringBuilder;
     invoke-direct {v5}, Ljava/lang/StringBuilder;-><init>()V
     const-string v6, "payload_classes"
@@ -5681,15 +5714,6 @@ APP_ABI := armeabi-v7a arm64-v8a
     invoke-static {p4}, Ljava/lang/String;->valueOf(I)Ljava/lang/String;
     move-result-object v6
     invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    move-result-object v5
-    const-string v6, "_"
-    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    move-result-object v5
-    invoke-static {}, Landroid/os/Process;->myPid()I
-    move-result v8
-    invoke-static {v8}, Ljava/lang/String;->valueOf(I)Ljava/lang/String;
-    move-result-object v9
-    invoke-virtual {v5, v9}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     move-result-object v5
     const-string v6, ".dex"
     invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
@@ -6162,8 +6186,6 @@ APP_ABI := armeabi-v7a arm64-v8a
 .super Landroid/app/Application;
 
 .field private mDelegate:Landroid/app/Application;
-# 子进程标志：attachBaseContext 写入，onCreate 读取
-.field private mIsSubProcess:Z
 
 .method public constructor <init>()V
     .registers 1
@@ -6172,31 +6194,8 @@ APP_ABI := armeabi-v7a arm64-v8a
 .end method
 
 .method protected attachBaseContext(Landroid/content/Context;)V
-    .locals 2
+    .locals 0
     invoke-super {p0, p1}, Landroid/app/Application;->attachBaseContext(Landroid/content/Context;)V
-    # 子进程检测：用 ActivityThread.currentProcessName()（API 28+，无 IO 无空字节问题）。
-    # 子进程（进程名 != 包名）跳过 payload DEX 加载，避免解密耗时超过华为 5 秒 ContentProvider 超时。
-    # 出现任何异常（如 API < 28 方法不存在）则回退到正常 install()，保证兼容性。
-    :try_check
-    invoke-virtual {p1}, Landroid/content/Context;->getPackageName()Ljava/lang/String;
-    move-result-object v0
-    invoke-static {}, Landroid/app/ActivityThread;->currentProcessName()Ljava/lang/String;
-    move-result-object v1
-    if-eqz v1, :do_install
-    invoke-virtual {v1, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
-    move-result v0
-    if-nez v0, :do_install
-    # 子进程：标记 flag，跳过 install()
-    const/4 v0, 0x1
-    iput-boolean v0, p0, L${shellAppPath};->mIsSubProcess:Z
-    goto :skip_install
-    :try_check_end
-    .catch Ljava/lang/Throwable; {:try_check .. :try_check_end} :catch_check
-    :do_install
-    invoke-static {p1}, L${stage2Path}/Stage2PayloadLoader;->install(Landroid/content/Context;)V
-    :skip_install
-    return-void
-    :catch_check
     invoke-static {p1}, L${stage2Path}/Stage2PayloadLoader;->install(Landroid/content/Context;)V
     return-void
 .end method
@@ -6205,9 +6204,6 @@ APP_ABI := armeabi-v7a arm64-v8a
     .locals 4
     :try_start
     invoke-super {p0}, Landroid/app/Application;->onCreate()V
-    # 子进程跳过 createDelegate（避免实例化 payload DEX 中的原 Application 类导致 ClassNotFoundException）
-    iget-boolean v0, p0, L${shellAppPath};->mIsSubProcess:Z
-    if-nez v0, :done
     const-string v0, "${escapedApp}"
     invoke-virtual {v0}, Ljava/lang/String;->length()I
     move-result v1
