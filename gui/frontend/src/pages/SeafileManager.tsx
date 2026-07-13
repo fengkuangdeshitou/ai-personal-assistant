@@ -239,6 +239,9 @@ const SeafileManager: React.FC = () => {
   const [captureResult, setCaptureResult] = useState<{ lines: string[]; logPath?: string; error?: string } | null>(null);
   const [debugging, setDebugging] = useState(false);
   const [debugResult, setDebugResult] = useState<{ steps: string[]; seahubLog: string[]; errors: string[]; logFound: boolean } | null>(null);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildSteps, setRebuildSteps] = useState<string[]>([]);
+  const [rebuildOpen, setRebuildOpen] = useState(false);
 
   // 日志面板：诊断区内联日志 or 底部日志卡片
   const [inlineLogContainer, setInlineLogContainer] = useState<string | null>(null);
@@ -322,6 +325,28 @@ const SeafileManager: React.FC = () => {
       }
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleRebuild = async () => {
+    setRebuilding(true);
+    setRebuildSteps(['🔄 开始重建容器（保留数据）...']);
+    setRebuildOpen(true);
+    setDiagnoseOpen(false);
+    try {
+      const res = await api.post('/api/seafile/rebuild', {}, { timeout: 180000 });
+      setRebuildSteps(res.data.steps || []);
+      if (res.data.success) {
+        message.success('重建完成，等待约 30 秒后刷新状态');
+        setTimeout(() => fetchStatus(true), 30000);
+      } else {
+        message.error(`重建失败：${res.data.error || '未知错误'}`);
+      }
+    } catch (e: any) {
+      setRebuildSteps(prev => [...prev, `❌ 请求失败：${e?.message || '网络错误'}`]);
+      message.error(`重建请求失败：${e?.message}`);
+    } finally {
+      setRebuilding(false);
     }
   };
 
@@ -533,6 +558,16 @@ const SeafileManager: React.FC = () => {
               >
                 自动诊断
               </Button>
+              <Tooltip title="保留所有数据，重新创建容器并按正确顺序启动（先 db/memcached，再 seafile）">
+                <Button
+                  icon={<ReloadOutlined />}
+                  danger
+                  loading={rebuilding}
+                  onClick={handleRebuild}
+                >
+                  重建容器
+                </Button>
+              </Tooltip>
               <Tooltip title="MySQL 未就绪导致 Seahub 启动失败时使用：停止 seafile → 等待 MySQL 就绪 → 重启 seafile">
                 <Button
                   icon={<MedicineBoxOutlined />}
@@ -567,6 +602,33 @@ const SeafileManager: React.FC = () => {
               </Button>
             </Space>
           </div>
+
+          {/* 重建容器进度 */}
+          {rebuildOpen && (
+            <div style={{ marginTop: 16 }}>
+              <Collapse
+                activeKey={rebuildOpen ? ['rebuild'] : []}
+                onChange={(keys) => setRebuildOpen(Array.isArray(keys) ? keys.includes('rebuild') : keys === 'rebuild')}
+                items={[{
+                  key: 'rebuild',
+                  label: <Space><ReloadOutlined /><Text strong>重建容器进度</Text>{rebuilding && <Badge status="processing" text="进行中" />}</Space>,
+                  children: (
+                    <div style={{ background: '#0d1117', borderRadius: 6, padding: '10px 14px', fontFamily: 'monospace', fontSize: 12 }}>
+                      {rebuildSteps.map((s, i) => (
+                        <div key={i} style={{
+                          color: s.startsWith('✅') ? '#3fb950' : s.startsWith('❌') ? '#f85149' : s.startsWith('⚠️') ? '#d29922' : s.startsWith('⏳') ? '#58a6ff' : '#e6edf3',
+                          lineHeight: 1.8,
+                        }}>
+                          {s}
+                        </div>
+                      ))}
+                      {rebuilding && <div style={{ color: '#8b949e', marginTop: 4 }}>▌ 处理中，请耐心等待（约 1-2 分钟）...</div>}
+                    </div>
+                  ),
+                }]}
+              />
+            </div>
+          )}
 
           {/* Seahub 错误日志调试结果 */}
           {debugResult && (

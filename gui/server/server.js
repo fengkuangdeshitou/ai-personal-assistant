@@ -3434,6 +3434,76 @@ app.get('/api/seafile/internal-log', async (req, res) => {
   res.json({ success: false, error: `未找到 ${logName}.log（已搜索 ${SEAFILE_DIR} 下所有路径及容器内部）` });
 });
 
+// 重建容器（保留数据卷）：down → up db+memcached → 等就绪 → up seafile
+app.post('/api/seafile/rebuild', async (_req, res) => {
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  const compose = (args) => _execSync(`docker compose ${args}`, { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 120000 });
+  const steps = [];
+
+  try {
+    // 1. 停止并移除所有容器（保留数据卷）
+    steps.push('停止并移除所有容器（保留数据卷）...');
+    compose('down --timeout 15');
+    steps.push('✅ 容器已清理');
+
+    // 2. 清理残留 PID 文件
+    steps.push('清理残留 PID 文件...');
+    try {
+      _execSync(`find "${path.join(SEAFILE_DIR, 'data')}" -name "*.pid" -path "*/runtime/*" -delete 2>/dev/null`, { env: ENV, encoding: 'utf8', timeout: 8000 });
+    } catch (_) {}
+    steps.push('✅ PID 文件已清理');
+
+    // 3. 先启动 db 和 memcached
+    steps.push('启动数据库和缓存服务（db + memcached）...');
+    compose('up -d db memcached');
+    steps.push('✅ db / memcached 已启动，等待就绪（15 秒）...');
+    await new Promise(r => setTimeout(r, 15000));
+
+    // 4. 等待 MySQL 端口就绪（最长 60 秒）
+    let dbReady = false;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 60000) {
+      try {
+        _execSync(
+          `docker compose exec -T db python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',3306)); s.close(); print('OK')"`,
+          { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 8000 }
+        );
+        dbReady = true;
+        break;
+      } catch (_) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+    steps.push(dbReady ? '✅ MySQL 已就绪' : '⚠️ MySQL 等待超时，仍继续启动（可能需要更长时间）');
+
+    // 5. 启动 seafile
+    steps.push('启动 Seafile 主服务...');
+    compose('up -d seafile');
+    steps.push('✅ Seafile 已启动，等待 Seahub 初始化（约 30 秒后访问页面）...');
+
+    // 6. 等 15 秒后读 seahub.log 检查是否有错误
+    await new Promise(r => setTimeout(r, 15000));
+    let seahubStatus = '（日志读取中）';
+    const logPath = path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log');
+    if (fs.existsSync(logPath)) {
+      const lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
+      const recent = lines.slice(-20);
+      const hasError = recent.some(l => /error|failed|exception|traceback/i.test(l));
+      const hasStarted = recent.some(l => /seahub is started|starting success/i.test(l));
+      if (hasStarted) seahubStatus = '✅ Seahub 已成功启动！';
+      else if (hasError) seahubStatus = '⚠️ seahub.log 中有错误，请查看日志';
+      else seahubStatus = '⏳ Seahub 启动中，请稍候再访问';
+    }
+    steps.push(seahubStatus);
+
+    return res.json({ success: true, steps });
+  } catch (e) {
+    steps.push(`❌ 重建失败: ${e.message}`);
+    return res.status(500).json({ success: false, steps, error: e.message });
+  }
+});
+
 // 暂停自动重启 → exec 读 seahub.log → 恢复重启
 // 解决容器每次只存活 5 秒、docker exec 时机不可靠的问题
 app.post('/api/seafile/debug-seahub', async (_req, res) => {
