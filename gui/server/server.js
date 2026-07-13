@@ -3293,7 +3293,33 @@ app.post('/api/seafile/fix', async (_req, res) => {
     compose(`up -d ${seafileServiceName}`);
     steps.push('✅ seafile 已启动，等待 Seahub 初始化（约 30 秒）后再访问页面');
 
-    res.json({ success: true, steps });
+    // 等待 10 秒后读取 seahub.log，帮助用户查看是否仍有错误
+    await new Promise(r => setTimeout(r, 10000));
+    let seahubLogTail = [];
+    for (const logPath of [
+      path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),
+    ]) {
+      if (fs.existsSync(logPath)) {
+        try {
+          const lines = fs.readFileSync(logPath, 'utf8').split('\n');
+          seahubLogTail = lines.slice(-30).filter(Boolean);
+          break;
+        } catch (_) {}
+      }
+    }
+    if (seahubLogTail.length > 0) {
+      // 找最后一个错误
+      const errLines = seahubLogTail.filter(l => /error|exception|traceback|critical/i.test(l));
+      if (errLines.length > 0) {
+        steps.push(`⚠️ seahub.log 最新错误（请查看「Seahub 日志」了解详情）：`);
+        steps.push(...errLines.slice(-5).map(l => `    ${l.trim()}`));
+      } else {
+        steps.push('✅ seahub.log 未发现明显错误，Seahub 可能正在初始化中...');
+      }
+    }
+
+    res.json({ success: true, steps, seahubLogTail });
   } catch (e) {
     steps.push(`❌ 修复失败: ${e.message}`);
     res.status(500).json({ success: false, steps, error: e.message });
@@ -3318,22 +3344,56 @@ app.get('/api/seafile/logs', async (req, res) => {
 });
 
 // 读取容器内部日志文件（seahub.log / seafile.log 等 docker logs 看不到的日志）
-const ALLOWED_INTERNAL_LOGS = {
-  seahub:   ['/shared/logs/seahub.log', '/opt/seafile/logs/seahub.log'],
-  seafile:  ['/shared/logs/seafile.log', '/opt/seafile/logs/seafile.log'],
-  ccnet:    ['/shared/logs/ccnet.log',   '/opt/seafile/logs/ccnet.log'],
-  seafdav:  ['/shared/logs/seafdav.log', '/opt/seafile/logs/seafdav.log'],
+// 优先从宿主机直接读取（容器可能快速重启，docker exec 时机不可靠）
+const LOG_HOST_PATHS = {
+  // Seafile Docker 官方镜像将 /shared → host SEAFILE_DIR/data
+  seahub: [
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),
+  ],
+  seafile: [
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seafile.log'),
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seafile.log'),
+  ],
+  ccnet: [
+    path.join(SEAFILE_DIR, 'data', 'logs', 'ccnet.log'),
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'ccnet.log'),
+  ],
+  seafdav: [
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seafdav.log'),
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seafdav.log'),
+  ],
 };
+// 容器内路径（作为 docker exec 回退）
+const LOG_CONTAINER_PATHS = {
+  seahub:  ['/shared/logs/seahub.log',  '/opt/seafile/logs/seahub.log'],
+  seafile: ['/shared/logs/seafile.log', '/opt/seafile/logs/seafile.log'],
+  ccnet:   ['/shared/logs/ccnet.log',   '/opt/seafile/logs/ccnet.log'],
+  seafdav: ['/shared/logs/seafdav.log', '/opt/seafile/logs/seafdav.log'],
+};
+
 app.get('/api/seafile/internal-log', async (req, res) => {
   const logName = (req.query.log || 'seahub').replace(/[^a-z]/g, '');
   const tail = Math.min(parseInt(req.query.tail) || 300, 2000);
-  const paths = ALLOWED_INTERNAL_LOGS[logName];
-  if (!paths) return res.json({ success: false, error: `未知日志类型: ${logName}` });
+  const hostPaths = LOG_HOST_PATHS[logName];
+  const containerPaths = LOG_CONTAINER_PATHS[logName];
+  if (!hostPaths) return res.json({ success: false, error: `未知日志类型: ${logName}` });
 
+  // 方案1：直接从宿主机文件系统读取（最可靠，容器无需在线）
+  for (const logPath of hostPaths) {
+    if (fs.existsSync(logPath)) {
+      try {
+        const all = fs.readFileSync(logPath, 'utf8');
+        const lines = all.split('\n');
+        const slice = lines.slice(-tail);
+        return res.json({ success: true, logPath, source: 'host', tail, lines: slice, totalLines: lines.length });
+      } catch (_) {}
+    }
+  }
+
+  // 方案2：docker exec 读取（容器需在线）
   const { execSync: _execSync } = await import('child_process');
   const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
-
-  // 动态找 seafile 主服务容器名
   let containerName = 'seafile';
   try {
     const psOut = _execSync(
@@ -3344,19 +3404,33 @@ app.get('/api/seafile/internal-log', async (req, res) => {
     if (line) containerName = line.split('|')[1].trim();
   } catch (_) {}
 
-  for (const logPath of paths) {
+  for (const logPath of containerPaths) {
     try {
       const out = _execSync(
         `docker exec "${containerName}" tail -n ${tail} "${logPath}" 2>/dev/null`,
         { encoding: 'utf8', timeout: 10000, env: ENV }
       );
       if (out.trim()) {
-        const lines = out.split('\n');
-        return res.json({ success: true, logPath, container: containerName, tail, lines });
+        return res.json({ success: true, logPath, source: 'container', container: containerName, tail, lines: out.split('\n') });
       }
     } catch (_) {}
   }
-  res.json({ success: false, error: `在容器 ${containerName} 中未找到可读的 ${logName} 日志文件，请确认容器正在运行` });
+
+  // 方案3：自动搜索宿主机上的所有 seahub.log
+  try {
+    const found = _execSync(
+      `find "${SEAFILE_DIR}" -name "${logName}.log" 2>/dev/null | head -5`,
+      { encoding: 'utf8', timeout: 8000, env: ENV }
+    ).trim();
+    if (found) {
+      const firstPath = found.split('\n')[0];
+      const all = fs.readFileSync(firstPath, 'utf8');
+      const lines = all.split('\n');
+      return res.json({ success: true, logPath: firstPath, source: 'host-search', tail, lines: lines.slice(-tail), totalLines: lines.length });
+    }
+  } catch (_) {}
+
+  res.json({ success: false, error: `未找到 ${logName}.log（已搜索 ${SEAFILE_DIR} 下所有路径及容器内部）` });
 });
 
 const SEAFDAV_CONF = '/Users/maiyou001/seafile/data/seafile/conf/seafdav.conf';
