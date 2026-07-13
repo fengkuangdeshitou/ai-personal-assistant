@@ -4302,12 +4302,569 @@ console.log('OK:' + payload.length);
     fs.writeFileSync(payloadScriptPath, payloadScript, 'utf8');
     session.progress = 15;
     const shellUnsignedApk = path.join(shellDir, 'shell-lite-unsigned.apk');
+    // Bug fix: previously this was `enableStage3StripClasses2 && !enableStage2Inject`,
+    // which meant stripping NEVER happened during payload build when stage2 was enabled.
+    // This relied entirely on stage3 to clean up, but stage3's provider-range logic could
+    // accidentally retain classes3-N, causing the plaintext DEX bug (seen in v4/v5/v8).
+    // Fix: always strip all business DEX during payload build when stage3 is requested.
     const stripDuringPayloadBuild = enableStage3StripClasses2;
     // U1: 提前生成 nativeSecret，payload 脚本加密和 SO 解密共用同一密钥
     const nativeSecret = crypto.randomBytes(32);
-    // stage2Path 提前定义，loaderSmali 模板和预处理步骤均依赖它
-    const stage2Path = shellStage2Package.replace(/\./g, '/');
-    const loaderSmali = enableStage2RuntimeLoad ? `.class public L${stage2Path}/Stage2PayloadLoader;
+    const { stdout: shellStdout } = await execAsync(
+      `node "${payloadScriptPath}" "${payloadSourceApk}" "${shellUnsignedApk}" "${shellAssetsDir}" "${shellMetaFile}" "${shellBootstrapFile}" "${manifestPackage}" "${originalApplication}" "${stripDuringPayloadBuild ? '1' : '0'}" "${shellAppFqcn}" "${shellLoaderFqcn}" "${signerDigestForKey}" "${nativeSecret.toString('hex')}"`,
+      { timeout: 10 * 60 * 1000 }
+    );
+    const shellResult = (shellStdout || '').trim();
+    session.log.push(`[shell] payload 处理结果: ${shellResult || 'OK'}`);
+    session.timing.preMs += Date.now() - preStart;
+
+    // Stage2: 注入壳 Application（灰度开关，默认关闭，先保证稳定可启动）
+    let stage2InjectSucceeded = !enableStage2Inject;
+    let stage3StripSucceeded = !enableStage3StripClasses2;
+    if (enableStage2Inject) {
+      try {
+      const injectDir = path.join(shellDir, 'inject');
+      const shellRebuiltApk = path.join(shellDir, 'shell-stage2-unsigned.apk');
+      session.log.push(`[shell] stage2 灰度开启，完整日志文件: ${stage2LogFile}`);
+      const decodeCmd = `java -jar "${apktoolJar}" d -f -o "${injectDir}" "${shellUnsignedApk}"`;
+      fs.appendFileSync(stage2LogFile, `\n[decode.cmd] ${decodeCmd}\n`, 'utf8');
+      const decodeResult = await execAsync(decodeCmd, { timeout: 8 * 60 * 1000 });
+      fs.appendFileSync(stage2LogFile, `[decode.stdout]\n${decodeResult.stdout || ''}\n[decode.stderr]\n${decodeResult.stderr || ''}\n`, 'utf8');
+      const manifestPath = path.join(injectDir, 'AndroidManifest.xml');
+      let manifestText = fs.readFileSync(manifestPath, 'utf8');
+      const packageMatch = manifestText.match(/package="([^"]+)"/);
+      const pkg = packageMatch?.[1] || manifestPackage || '';
+      const appTagMatch = manifestText.match(/<application[^>]*>/);
+      const currentNameMatch = appTagMatch?.[0]?.match(/android:name="([^"]+)"/);
+      let currentAppName = currentNameMatch?.[1] || originalApplication || '';
+      if (currentAppName.startsWith('.')) currentAppName = `${pkg}${currentAppName}`;
+      const shellAppClass = shellAppFqcn;
+      if (appTagMatch) {
+        let newAppTag = appTagMatch[0];
+        if (/android:name="[^"]*"/.test(newAppTag)) {
+          newAppTag = newAppTag.replace(/android:name="[^"]*"/, `android:name="${shellAppClass}"`);
+        } else {
+          newAppTag = newAppTag.replace('<application', `<application android:name="${shellAppClass}"`);
+        }
+        // P0: 强制关闭 debuggable，防止调试注入与内存抓取
+        if (/android:debuggable="[^"]*"/.test(newAppTag)) {
+          newAppTag = newAppTag.replace(/android:debuggable="[^"]*"/, 'android:debuggable="false"');
+        } else {
+          newAppTag = newAppTag.replace('<application', '<application android:debuggable="false"');
+        }
+        manifestText = manifestText.replace(appTagMatch[0], newAppTag);
+        fs.writeFileSync(manifestPath, manifestText, 'utf8');
+      }
+
+      const stage2Package = shellStage2Package;
+      const stage2Path = stage2Package.replace(/\./g, '/');
+      const loaderClassName = shellLoaderClassName;
+      const shellClassName = shellAppClassName;
+      // 为壳类单独创建一个新的 dex 分包，避免壳类与业务类混在同一明文 dex。
+      // 这样 stage3 扩大裁剪时可以仅保留 classes.dex + 壳 dex。
+      const smaliDexNums = fs.readdirSync(injectDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && /^smali_classes\d+$/.test(d.name))
+        .map((d) => Number(d.name.replace('smali_classes', '')))
+        .filter((n) => Number.isFinite(n) && n >= 2);
+      const shellDexNum = Math.max(1, ...smaliDexNums) + 1;
+      const smaliRoot = `smali_classes${shellDexNum}`;
+      const smaliDir = path.join(injectDir, smaliRoot, stage2Path);
+      fs.mkdirSync(smaliDir, { recursive: true });
+      const jniDir = path.join(shellDir, 'jni');
+      fs.mkdirSync(jniDir, { recursive: true });
+
+      // U1: nativeSecret 已在上方提前生成，此处仅派生 XOR 编码辅助变量供 C 模板使用
+      const nsXorKey = (crypto.randomBytes(1)[0] || 0x47) | 0x01; // 非零
+      const nsEncC = Array.from(nativeSecret).map(b => `0x${(b ^ nsXorKey).toString(16).padStart(2, '0')}`).join(', ');
+      const nsXorKeyHex = `0x${nsXorKey.toString(16).padStart(2, '0')}`;
+
+      // U2: XOR 编码助手 — 统一 XOR key=0x5A，与已有 SO 内 xor_jstr 保持一致
+      const soXorKey = 0x5A;
+      const cArr = (str) => '{ ' + Array.from(Buffer.from(str, 'utf8')).map(b => `0x${(b ^ soXorKey).toString(16).padStart(2, '0')}`).join(', ') + ' }';
+
+      const nativeSource = `
+#include <jni.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <android/log.h>
+
+#define LOG_TAG "shellguard"
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+static int has_exception(JNIEnv *env) {
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 1;
+    }
+    return 0;
+}
+
+static jstring xor_jstr(JNIEnv *env, const unsigned char *src, int len, unsigned char key) {
+    char *tmp = (char *)malloc((size_t)len + 1);
+    if (tmp == NULL) return NULL;
+    for (int i = 0; i < len; i++) tmp[i] = (char)(src[i] ^ key);
+    tmp[len] = '\0';
+    jstring out = (*env)->NewStringUTF(env, tmp);
+    free(tmp);
+    return out;
+}
+
+/* xor_cstr: 返回 XOR 解码后的 malloc C 字符串，调用方负责 free() */
+static char *xor_cstr(const unsigned char *src, int len, unsigned char key) {
+    char *tmp = (char *)malloc((size_t)len + 1);
+    if (tmp == NULL) return NULL;
+    for (int i = 0; i < len; i++) tmp[i] = (char)(src[i] ^ key);
+    tmp[len] = '\0';
+    return tmp;
+}
+
+/* C2: 扫描 /proc/self/maps 中是否含 frida 注入特征 */
+static int scan_maps_for_frida() {
+    static const unsigned char s_maps[] = ${cArr('/proc/self/maps')};
+    char *maps_path = xor_cstr(s_maps, (int)sizeof(s_maps), 0x5A);
+    if (maps_path == NULL) return 0;
+    FILE *f = fopen(maps_path, "r");
+    free(maps_path);
+    if (f == NULL) return 0;
+
+    /* frida 各注入模式均会在 maps 中留下以下特征之一 */
+    static const unsigned char s_k1[] = ${cArr('frida')};
+    static const unsigned char s_k2[] = ${cArr('gum-js-loop')};
+    static const unsigned char s_k3[] = ${cArr('gmain')};
+    static const unsigned char s_k4[] = ${cArr('linjector')};
+    char *k1 = xor_cstr(s_k1, (int)sizeof(s_k1), 0x5A);
+    char *k2 = xor_cstr(s_k2, (int)sizeof(s_k2), 0x5A);
+    char *k3 = xor_cstr(s_k3, (int)sizeof(s_k3), 0x5A);
+    char *k4 = xor_cstr(s_k4, (int)sizeof(s_k4), 0x5A);
+
+    char line[512];
+    int found = 0;
+    while (!found && fgets(line, (int)sizeof(line), f)) {
+        if ((k1 && strstr(line, k1)) ||
+            (k2 && strstr(line, k2)) ||
+            (k3 && strstr(line, k3)) ||
+            (k4 && strstr(line, k4))) {
+            found = 1;
+        }
+    }
+    fclose(f);
+    free(k1); free(k2); free(k3); free(k4);
+    return found;
+}
+
+/* C3: 读取 /proc/self/status 中 TracerPid，非零说明正在被调试 */
+static int check_tracerpid() {
+    static const unsigned char s_status[] = ${cArr('/proc/self/status')};
+    char *status_path = xor_cstr(s_status, (int)sizeof(s_status), 0x5A);
+    if (status_path == NULL) return 0;
+    FILE *f = fopen(status_path, "r");
+    free(status_path);
+    if (f == NULL) return 0;
+
+    static const unsigned char s_tracer[] = ${cArr('TracerPid:')};
+    char *tracer_key = xor_cstr(s_tracer, (int)sizeof(s_tracer), 0x5A);
+    if (tracer_key == NULL) { fclose(f); return 0; }
+    int key_len = (int)strlen(tracer_key);
+
+    char line[128];
+    int traced = 0;
+    while (fgets(line, (int)sizeof(line), f)) {
+        if (strncmp(line, tracer_key, (size_t)key_len) == 0) {
+            int pid = 0;
+            sscanf(line + key_len, " %d", &pid);
+            if (pid != 0) traced = 1;
+            break;
+        }
+    }
+    fclose(f);
+    free(tracer_key);
+    return traced;
+}
+
+static jstring get_signer_digest(JNIEnv *env, jobject appCtx) {
+    jclass contextCls = (*env)->GetObjectClass(env, appCtx);
+    if (contextCls == NULL || has_exception(env)) return NULL;
+    static const unsigned char s_getPm[] = ${cArr('getPackageManager')};
+    static const unsigned char s_getPmSig[] = ${cArr('()Landroid/content/pm/PackageManager;')};
+    static const unsigned char s_getPn[] = ${cArr('getPackageName')};
+    static const unsigned char s_getPnSig[] = ${cArr('()Ljava/lang/String;')};
+    jstring jGetPm = xor_jstr(env, s_getPm, sizeof(s_getPm), 0x5A);
+    jstring jGetPmSig = xor_jstr(env, s_getPmSig, sizeof(s_getPmSig), 0x5A);
+    jstring jGetPn = xor_jstr(env, s_getPn, sizeof(s_getPn), 0x5A);
+    jstring jGetPnSig = xor_jstr(env, s_getPnSig, sizeof(s_getPnSig), 0x5A);
+    if (!jGetPm || !jGetPmSig || !jGetPn || !jGetPnSig || has_exception(env)) return NULL;
+    const char *pmStr = (*env)->GetStringUTFChars(env, jGetPm, NULL);
+    const char *pmSigStr = (*env)->GetStringUTFChars(env, jGetPmSig, NULL);
+    const char *pnStr = (*env)->GetStringUTFChars(env, jGetPn, NULL);
+    const char *pnSigStr = (*env)->GetStringUTFChars(env, jGetPnSig, NULL);
+    if (!pmStr || !pmSigStr || !pnStr || !pnSigStr) return NULL;
+    jmethodID getPm = (*env)->GetMethodID(env, contextCls, pmStr, pmSigStr);
+    jmethodID getPn = (*env)->GetMethodID(env, contextCls, pnStr, pnSigStr);
+    (*env)->ReleaseStringUTFChars(env, jGetPm, pmStr);
+    (*env)->ReleaseStringUTFChars(env, jGetPmSig, pmSigStr);
+    (*env)->ReleaseStringUTFChars(env, jGetPn, pnStr);
+    (*env)->ReleaseStringUTFChars(env, jGetPnSig, pnSigStr);
+    if (getPm == NULL || getPn == NULL || has_exception(env)) return NULL;
+    jobject pm = (*env)->CallObjectMethod(env, appCtx, getPm);
+    jstring pn = (jstring)(*env)->CallObjectMethod(env, appCtx, getPn);
+    if (pm == NULL || pn == NULL || has_exception(env)) return NULL;
+
+    jclass pmCls = (*env)->GetObjectClass(env, pm);
+    if (pmCls == NULL || has_exception(env)) return NULL;
+    static const unsigned char s_getPi[] = ${cArr('getPackageInfo')};
+    static const unsigned char s_getPiSig[] = ${cArr('(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;')};
+    jstring jGetPi = xor_jstr(env, s_getPi, sizeof(s_getPi), 0x5A);
+    jstring jGetPiSig = xor_jstr(env, s_getPiSig, sizeof(s_getPiSig), 0x5A);
+    if (!jGetPi || !jGetPiSig || has_exception(env)) return NULL;
+    const char *piStr = (*env)->GetStringUTFChars(env, jGetPi, NULL);
+    const char *piSigStr = (*env)->GetStringUTFChars(env, jGetPiSig, NULL);
+    if (!piStr || !piSigStr) return NULL;
+    jmethodID getPi = (*env)->GetMethodID(env, pmCls, piStr, piSigStr);
+    (*env)->ReleaseStringUTFChars(env, jGetPi, piStr);
+    (*env)->ReleaseStringUTFChars(env, jGetPiSig, piSigStr);
+    if (getPi == NULL || has_exception(env)) return NULL;
+    jobject pi = (*env)->CallObjectMethod(env, pm, getPi, pn, 0x08000040);
+    if (pi == NULL || has_exception(env)) return NULL;
+
+    jclass piCls = (*env)->GetObjectClass(env, pi);
+    if (piCls == NULL || has_exception(env)) return NULL;
+    jfieldID fidSigningInfo = (*env)->GetFieldID(env, piCls, "signingInfo", "Landroid/content/pm/SigningInfo;");
+    if (has_exception(env)) fidSigningInfo = NULL;
+    jfieldID fidSignatures = (*env)->GetFieldID(env, piCls, "signatures", "[Landroid/content/pm/Signature;");
+    if (has_exception(env)) fidSignatures = NULL;
+    if (fidSigningInfo == NULL && fidSignatures == NULL) return NULL;
+
+    jobject sigObj = NULL;
+    if (fidSigningInfo != NULL) {
+        jobject signingInfo = (*env)->GetObjectField(env, pi, fidSigningInfo);
+        if (signingInfo != NULL && !has_exception(env)) {
+            jclass siCls = (*env)->GetObjectClass(env, signingInfo);
+            if (siCls != NULL && !has_exception(env)) {
+                const unsigned char s_get_signers[] = {0x3d,0x3f,0x2e,0x1b,0x2a,0x31,0x19,0x35,0x34,0x2e,0x3f,0x34,0x2e,0x29,0x9,0x33,0x3d,0x34,0x3f,0x28,0x29};
+                jstring getSignersName = xor_jstr(env, s_get_signers, sizeof(s_get_signers), 0x5A);
+                if (getSignersName == NULL || has_exception(env)) return NULL;
+                const char *getSignersUtf = (*env)->GetStringUTFChars(env, getSignersName, NULL);
+                if (getSignersUtf == NULL || has_exception(env)) return NULL;
+                jmethodID getSigners = (*env)->GetMethodID(env, siCls, getSignersUtf, "()[Landroid/content/pm/Signature;");
+                (*env)->ReleaseStringUTFChars(env, getSignersName, getSignersUtf);
+                if (getSigners != NULL && !has_exception(env)) {
+                    jobjectArray arr = (jobjectArray)(*env)->CallObjectMethod(env, signingInfo, getSigners);
+                    if (arr != NULL && !has_exception(env) && (*env)->GetArrayLength(env, arr) > 0) {
+                        sigObj = (*env)->GetObjectArrayElement(env, arr, 0);
+                    }
+                }
+            }
+        }
+    }
+    if (sigObj == NULL && fidSignatures != NULL) {
+        jobjectArray arr = (jobjectArray)(*env)->GetObjectField(env, pi, fidSignatures);
+        if (arr != NULL && !has_exception(env) && (*env)->GetArrayLength(env, arr) > 0) {
+            sigObj = (*env)->GetObjectArrayElement(env, arr, 0);
+        }
+    }
+    if (sigObj == NULL || has_exception(env)) return NULL;
+
+    jclass sigCls = (*env)->GetObjectClass(env, sigObj);
+    if (sigCls == NULL || has_exception(env)) return NULL;
+    static const unsigned char s_toBytes[] = ${cArr('toByteArray')};
+    static const unsigned char s_toBytesSig[] = ${cArr('()[B')};
+    jstring jToBytes = xor_jstr(env, s_toBytes, sizeof(s_toBytes), 0x5A);
+    jstring jToBytesSig = xor_jstr(env, s_toBytesSig, sizeof(s_toBytesSig), 0x5A);
+    if (!jToBytes || !jToBytesSig || has_exception(env)) return NULL;
+    const char *toBytesStr = (*env)->GetStringUTFChars(env, jToBytes, NULL);
+    const char *toBytesSigStr = (*env)->GetStringUTFChars(env, jToBytesSig, NULL);
+    if (!toBytesStr || !toBytesSigStr) return NULL;
+    jmethodID toBytes = (*env)->GetMethodID(env, sigCls, toBytesStr, toBytesSigStr);
+    (*env)->ReleaseStringUTFChars(env, jToBytes, toBytesStr);
+    (*env)->ReleaseStringUTFChars(env, jToBytesSig, toBytesSigStr);
+    if (toBytes == NULL || has_exception(env)) return NULL;
+    jbyteArray cert = (jbyteArray)(*env)->CallObjectMethod(env, sigObj, toBytes);
+    if (cert == NULL || has_exception(env)) return NULL;
+
+    const unsigned char s_md_cls[] = {0x30,0x3b,0x2c,0x3b,0x75,0x29,0x3f,0x39,0x2f,0x28,0x33,0x2e,0x23,0x75,0x17,0x3f,0x29,0x29,0x3b,0x3d,0x3f,0x1e,0x33,0x3d,0x3f,0x29,0x2e};
+    jstring mdClsName = xor_jstr(env, s_md_cls, sizeof(s_md_cls), 0x5A);
+    if (mdClsName == NULL || has_exception(env)) return NULL;
+    const char *mdClsUtf = (*env)->GetStringUTFChars(env, mdClsName, NULL);
+    if (mdClsUtf == NULL || has_exception(env)) return NULL;
+    jclass mdCls = (*env)->FindClass(env, mdClsUtf);
+    (*env)->ReleaseStringUTFChars(env, mdClsName, mdClsUtf);
+    if (mdCls == NULL || has_exception(env)) return NULL;
+    static const unsigned char s_getInstance[] = ${cArr('getInstance')};
+    static const unsigned char s_getInstanceSig[] = ${cArr('(Ljava/lang/String;)Ljava/security/MessageDigest;')};
+    static const unsigned char s_digest[] = ${cArr('digest')};
+    static const unsigned char s_digestSig[] = ${cArr('([B)[B')};
+    jstring jGetInstance = xor_jstr(env, s_getInstance, sizeof(s_getInstance), 0x5A);
+    jstring jGetInstanceSig = xor_jstr(env, s_getInstanceSig, sizeof(s_getInstanceSig), 0x5A);
+    jstring jDigest = xor_jstr(env, s_digest, sizeof(s_digest), 0x5A);
+    jstring jDigestSig = xor_jstr(env, s_digestSig, sizeof(s_digestSig), 0x5A);
+    if (!jGetInstance || !jGetInstanceSig || !jDigest || !jDigestSig || has_exception(env)) return NULL;
+    const char *giStr = (*env)->GetStringUTFChars(env, jGetInstance, NULL);
+    const char *giSigStr = (*env)->GetStringUTFChars(env, jGetInstanceSig, NULL);
+    const char *dgStr = (*env)->GetStringUTFChars(env, jDigest, NULL);
+    const char *dgSigStr = (*env)->GetStringUTFChars(env, jDigestSig, NULL);
+    if (!giStr || !giSigStr || !dgStr || !dgSigStr) return NULL;
+    jmethodID mdGetInstance = (*env)->GetStaticMethodID(env, mdCls, giStr, giSigStr);
+    jmethodID mdDigest = (*env)->GetMethodID(env, mdCls, dgStr, dgSigStr);
+    (*env)->ReleaseStringUTFChars(env, jGetInstance, giStr);
+    (*env)->ReleaseStringUTFChars(env, jGetInstanceSig, giSigStr);
+    (*env)->ReleaseStringUTFChars(env, jDigest, dgStr);
+    (*env)->ReleaseStringUTFChars(env, jDigestSig, dgSigStr);
+    if (mdGetInstance == NULL || mdDigest == NULL || has_exception(env)) return NULL;
+    const unsigned char s_sha256[] = {0x09,0x12,0x1b,0x77,0x68,0x6f,0x6c};
+    jstring sha256 = xor_jstr(env, s_sha256, sizeof(s_sha256), 0x5A);
+    if (sha256 == NULL || has_exception(env)) return NULL;
+    jobject md = (*env)->CallStaticObjectMethod(env, mdCls, mdGetInstance, sha256);
+    if (md == NULL || has_exception(env)) return NULL;
+    jbyteArray dig = (jbyteArray)(*env)->CallObjectMethod(env, md, mdDigest, cert);
+    if (dig == NULL || has_exception(env)) return NULL;
+
+    jsize digLen = (*env)->GetArrayLength(env, dig);
+    jbyte *raw = (jbyte *)malloc((size_t)digLen);
+    if (raw == NULL) return NULL;
+    (*env)->GetByteArrayRegion(env, dig, 0, digLen, raw);
+    if (has_exception(env)) { free(raw); return NULL; }
+    char *hex = (char *)malloc((size_t)digLen * 2 + 1);
+    if (hex == NULL) { free(raw); return NULL; }
+    static const char *digits = "0123456789abcdef";
+    for (jsize i = 0; i < digLen; i++) {
+        unsigned char b = (unsigned char)raw[i];
+        hex[i * 2] = digits[(b >> 4) & 0xF];
+        hex[i * 2 + 1] = digits[b & 0xF];
+    }
+    hex[digLen * 2] = '\0';
+    free(raw);
+    jstring out = (*env)->NewStringUTF(env, hex);
+    free(hex);
+    if (has_exception(env)) return NULL;
+    return out;
+}
+
+/* C1: 改为 static — 不导出符号，由 JNI_OnLoad 动态注册，消除精准 Hook 入口 */
+static jbyteArray nativeAesDecryptImpl(JNIEnv *env, jclass clazz, jobject appCtx, jbyteArray enc, jstring pkg) {
+    (void)clazz; (void)appCtx; (void)pkg;  /* 方案三：静态内嵌密钥，不再依赖签名证书 */
+    if (enc == NULL) { LOGE("E01"); return NULL; }
+    jsize len = (*env)->GetArrayLength(env, enc);
+    if (len <= 12) { LOGE("E02"); return NULL; }
+
+    /* 方案三：直接解码 XOR 混淆的静态密钥 nativeSecret，无需任何运行时信息 */
+    static const unsigned char s_ns[32] = { ${nsEncC} };
+    const unsigned char ns_xk = ${nsXorKeyHex};
+    unsigned char keyRaw[32];
+    for (int i = 0; i < 32; i++) keyRaw[i] = s_ns[i] ^ ns_xk;
+
+    jbyteArray keyBytes = (*env)->NewByteArray(env, 32);
+    if (keyBytes == NULL || has_exception(env)) { LOGE("E11"); return NULL; }
+    (*env)->SetByteArrayRegion(env, keyBytes, 0, 32, (const jbyte *)keyRaw);
+
+    static const unsigned char s_skCls[] = ${cArr('javax/crypto/spec/SecretKeySpec')};
+    static const unsigned char s_skCtorSig[] = ${cArr('([BLjava/lang/String;)V')};
+    static const unsigned char s_aes[] = ${cArr('AES')};
+    jstring jSkCls = xor_jstr(env, s_skCls, sizeof(s_skCls), 0x5A);
+    jstring jSkCtorSig = xor_jstr(env, s_skCtorSig, sizeof(s_skCtorSig), 0x5A);
+    jstring jAes = xor_jstr(env, s_aes, sizeof(s_aes), 0x5A);
+    if (!jSkCls || !jSkCtorSig || !jAes || has_exception(env)) { LOGE("E12"); return NULL; }
+    const char *skClsStr = (*env)->GetStringUTFChars(env, jSkCls, NULL);
+    const char *skCtorSigStr = (*env)->GetStringUTFChars(env, jSkCtorSig, NULL);
+    if (!skClsStr || !skCtorSigStr) { LOGE("E12b"); return NULL; }
+    jclass skCls = (*env)->FindClass(env, skClsStr);
+    (*env)->ReleaseStringUTFChars(env, jSkCls, skClsStr);
+    if (skCls == NULL || has_exception(env)) { LOGE("E12c"); return NULL; }
+    jmethodID skCtor = (*env)->GetMethodID(env, skCls, "<init>", skCtorSigStr);
+    (*env)->ReleaseStringUTFChars(env, jSkCtorSig, skCtorSigStr);
+    if (skCtor == NULL || has_exception(env)) { LOGE("E13"); return NULL; }
+    jobject keySpec = (*env)->NewObject(env, skCls, skCtor, keyBytes, jAes);
+    if (keySpec == NULL || has_exception(env)) { LOGE("E15"); return NULL; }
+
+    jbyte ivRaw[12];
+    (*env)->GetByteArrayRegion(env, enc, 0, 12, ivRaw);
+    if (has_exception(env)) { LOGE("E16"); return NULL; }
+    jbyteArray ivBytes = (*env)->NewByteArray(env, 12);
+    if (ivBytes == NULL || has_exception(env)) { LOGE("E17"); return NULL; }
+    (*env)->SetByteArrayRegion(env, ivBytes, 0, 12, ivRaw);
+    if (has_exception(env)) { LOGE("E18"); return NULL; }
+
+    static const unsigned char s_gcmCls[] = ${cArr('javax/crypto/spec/GCMParameterSpec')};
+    static const unsigned char s_gcmCtorSig[] = ${cArr('(I[B)V')};
+    static const unsigned char s_cipherCls[] = ${cArr('javax/crypto/Cipher')};
+    static const unsigned char s_cipherGiSig[] = ${cArr('(Ljava/lang/String;)Ljavax/crypto/Cipher;')};
+    static const unsigned char s_cipherInit[] = ${cArr('init')};
+    static const unsigned char s_cipherInitSig[] = ${cArr('(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V')};
+    static const unsigned char s_doFinal[] = ${cArr('doFinal')};
+    static const unsigned char s_doFinalSig[] = ${cArr('([B)[B')};
+    jstring jGcmCls = xor_jstr(env, s_gcmCls, sizeof(s_gcmCls), 0x5A);
+    jstring jGcmCtorSig = xor_jstr(env, s_gcmCtorSig, sizeof(s_gcmCtorSig), 0x5A);
+    jstring jCipherCls = xor_jstr(env, s_cipherCls, sizeof(s_cipherCls), 0x5A);
+    jstring jCipherGiSig = xor_jstr(env, s_cipherGiSig, sizeof(s_cipherGiSig), 0x5A);
+    jstring jCipherInit = xor_jstr(env, s_cipherInit, sizeof(s_cipherInit), 0x5A);
+    jstring jCipherInitSig = xor_jstr(env, s_cipherInitSig, sizeof(s_cipherInitSig), 0x5A);
+    jstring jDoFinal = xor_jstr(env, s_doFinal, sizeof(s_doFinal), 0x5A);
+    jstring jDoFinalSig = xor_jstr(env, s_doFinalSig, sizeof(s_doFinalSig), 0x5A);
+    if (!jGcmCls || !jGcmCtorSig || !jCipherCls || !jCipherGiSig || !jCipherInit || !jCipherInitSig || !jDoFinal || !jDoFinalSig || has_exception(env)) { LOGE("E19"); return NULL; }
+    const char *gcmClsStr = (*env)->GetStringUTFChars(env, jGcmCls, NULL);
+    const char *gcmCtorSigStr = (*env)->GetStringUTFChars(env, jGcmCtorSig, NULL);
+    const char *cipherClsStr = (*env)->GetStringUTFChars(env, jCipherCls, NULL);
+    const char *cipherGiSigStr = (*env)->GetStringUTFChars(env, jCipherGiSig, NULL);
+    const char *cipherInitStr = (*env)->GetStringUTFChars(env, jCipherInit, NULL);
+    const char *cipherInitSigStr = (*env)->GetStringUTFChars(env, jCipherInitSig, NULL);
+    const char *doFinalStr = (*env)->GetStringUTFChars(env, jDoFinal, NULL);
+    const char *doFinalSigStr = (*env)->GetStringUTFChars(env, jDoFinalSig, NULL);
+    if (!gcmClsStr || !gcmCtorSigStr || !cipherClsStr || !cipherGiSigStr || !cipherInitStr || !cipherInitSigStr || !doFinalStr || !doFinalSigStr) { LOGE("E19b"); return NULL; }
+    jclass gcmCls = (*env)->FindClass(env, gcmClsStr);
+    (*env)->ReleaseStringUTFChars(env, jGcmCls, gcmClsStr);
+    if (gcmCls == NULL || has_exception(env)) { LOGE("E19c"); return NULL; }
+    jmethodID gcmCtor = (*env)->GetMethodID(env, gcmCls, "<init>", gcmCtorSigStr);
+    (*env)->ReleaseStringUTFChars(env, jGcmCtorSig, gcmCtorSigStr);
+    if (gcmCtor == NULL || has_exception(env)) { LOGE("E20"); return NULL; }
+    jobject gcmSpec = (*env)->NewObject(env, gcmCls, gcmCtor, 128, ivBytes);
+    if (gcmSpec == NULL || has_exception(env)) { LOGE("E21"); return NULL; }
+    jclass cipherCls = (*env)->FindClass(env, cipherClsStr);
+    (*env)->ReleaseStringUTFChars(env, jCipherCls, cipherClsStr);
+    if (cipherCls == NULL || has_exception(env)) { LOGE("E22"); return NULL; }
+    static const unsigned char s_cipherGiName[] = ${cArr('getInstance')};
+    jstring jCipherGiName = xor_jstr(env, s_cipherGiName, sizeof(s_cipherGiName), 0x5A);
+    if (!jCipherGiName || has_exception(env)) { LOGE("E22b"); return NULL; }
+    const char *cipherGiNameStr = (*env)->GetStringUTFChars(env, jCipherGiName, NULL);
+    if (!cipherGiNameStr) { LOGE("E22c"); return NULL; }
+    jmethodID cipherGetInstance = (*env)->GetStaticMethodID(env, cipherCls, cipherGiNameStr, cipherGiSigStr);
+    (*env)->ReleaseStringUTFChars(env, jCipherGiName, cipherGiNameStr);
+    jmethodID cipherInit = (*env)->GetMethodID(env, cipherCls, cipherInitStr, cipherInitSigStr);
+    jmethodID cipherDoFinal = (*env)->GetMethodID(env, cipherCls, doFinalStr, doFinalSigStr);
+    (*env)->ReleaseStringUTFChars(env, jCipherGiSig, cipherGiSigStr);
+    (*env)->ReleaseStringUTFChars(env, jCipherInit, cipherInitStr);
+    (*env)->ReleaseStringUTFChars(env, jCipherInitSig, cipherInitSigStr);
+    (*env)->ReleaseStringUTFChars(env, jDoFinal, doFinalStr);
+    (*env)->ReleaseStringUTFChars(env, jDoFinalSig, doFinalSigStr);
+    if (cipherGetInstance == NULL || cipherInit == NULL || cipherDoFinal == NULL || has_exception(env)) { LOGE("E23"); return NULL; }
+    const unsigned char s_trans[] = {0x1b,0x1f,0x9,0x75,0x1d,0x19,0x17,0x75,0x14,0x35,0xa,0x3b,0x3e,0x3e,0x33,0x34,0x3d};
+    jstring trans = xor_jstr(env, s_trans, sizeof(s_trans), 0x5A);
+    if (trans == NULL || has_exception(env)) { LOGE("E24"); return NULL; }
+    jobject cipher = (*env)->CallStaticObjectMethod(env, cipherCls, cipherGetInstance, trans);
+    if (cipher == NULL || has_exception(env)) { LOGE("E25"); return NULL; }
+    (*env)->CallVoidMethod(env, cipher, cipherInit, 2, keySpec, gcmSpec);
+    if (has_exception(env)) { LOGE("E26"); return NULL; }
+
+    jsize bodyLen = len - 12;
+    jbyteArray body = (*env)->NewByteArray(env, bodyLen);
+    if (body == NULL || has_exception(env)) { LOGE("E27"); return NULL; }
+    jbyte *raw = (jbyte *)malloc((size_t)len);
+    if (raw == NULL) { LOGE("E28"); return NULL; }
+    (*env)->GetByteArrayRegion(env, enc, 0, len, raw);
+    if (has_exception(env)) { LOGE("E29"); free(raw); return NULL; }
+    (*env)->SetByteArrayRegion(env, body, 0, bodyLen, raw + 12);
+    free(raw);
+    if (has_exception(env)) { LOGE("E30"); return NULL; }
+
+    jbyteArray out = (jbyteArray)(*env)->CallObjectMethod(env, cipher, cipherDoFinal, body);
+    if (out == NULL || has_exception(env)) { LOGE("E31"); return NULL; }
+    return out;
+}
+
+/* C1: 全局缓存动态注册所需的方法名和签名字符串（RegisterNatives 不拷贝字符串）*/
+static char g_mn[20];  /* "nativeAesDecrypt" */
+static char g_ms[52];  /* JNI 方法签名 */
+
+/* JNI_OnLoad: 在 SO 加载时执行反调试检查，并动态注册 nativeAesDecryptImpl */
+JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
+    (void)reserved;
+
+    /* C2: /proc/self/maps 扫描 frida 特征（最有效，覆盖 frida-server 标准模式）*/
+    if (scan_maps_for_frida()) {
+        LOGE("E90");
+        return JNI_ERR;
+    }
+
+    /* C3: TracerPid 检测（过滤 ptrace 附加场景）*/
+    if (check_tracerpid()) {
+        LOGE("E91");
+        return JNI_ERR;
+    }
+
+    JNIEnv *env = NULL;
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        LOGE("E92");
+        return JNI_ERR;
+    }
+
+    /* C1: 用 XOR 编码的类名动态查找壳类，FindClass 不暴露明文类路径 */
+    static const unsigned char s_cls[] = ${cArr(stage2Path + '/' + shellLoaderClassName)};
+    char *cls_name = xor_cstr(s_cls, (int)sizeof(s_cls), 0x5A);
+    if (cls_name == NULL) return JNI_ERR;
+    jclass cls = (*env)->FindClass(env, cls_name);
+    free(cls_name);
+    if (cls == NULL || (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        LOGE("E93");
+        return JNI_ERR;
+    }
+
+    /* C1: XOR 解码方法名和签名，写入全局 buffer，避免栈变量被回收 */
+    static const unsigned char s_mn[] = ${cArr('nativeAesDecrypt')};
+    static const unsigned char s_ms[] = ${cArr('(Landroid/content/Context;[BLjava/lang/String;)[B')};
+    for (int i = 0; i < (int)sizeof(s_mn); i++) g_mn[i] = (char)(s_mn[i] ^ 0x5A);
+    for (int i = 0; i < (int)sizeof(s_ms); i++) g_ms[i] = (char)(s_ms[i] ^ 0x5A);
+
+    JNINativeMethod methods[] = {
+        { g_mn, g_ms, (void *)nativeAesDecryptImpl }
+    };
+    if ((*env)->RegisterNatives(env, cls, methods, 1) != 0) {
+        LOGE("E94");
+        return JNI_ERR;
+    }
+
+    return JNI_VERSION_1_6;
+}
+`.trim();
+      const nativeCPath = path.join(jniDir, 'shellguard.c');
+      fs.writeFileSync(nativeCPath, nativeSource, 'utf8');
+      const ndkBuild = detectNdkPath();
+      let nativeLibCopied = false;
+      if (ndkBuild) {
+        const mkPath = path.join(jniDir, 'Android.mk');
+        const appMkPath = path.join(jniDir, 'Application.mk');
+        fs.writeFileSync(mkPath, `
+LOCAL_PATH := $(call my-dir)
+include $(CLEAR_VARS)
+LOCAL_MODULE := shellguard
+LOCAL_SRC_FILES := shellguard.c
+LOCAL_LDLIBS := -llog
+include $(BUILD_SHARED_LIBRARY)
+`.trim(), 'utf8');
+        fs.writeFileSync(appMkPath, `
+APP_PLATFORM := android-21
+APP_ABI := armeabi-v7a arm64-v8a
+`.trim(), 'utf8');
+        try {
+          const ndkCmd = `"${path.join(ndkBuild, 'ndk-build')}" -C "${jniDir}" NDK_PROJECT_PATH="${jniDir}" APP_BUILD_SCRIPT="${mkPath}" NDK_APPLICATION_MK="${appMkPath}"`;
+          fs.appendFileSync(stage2LogFile, `\n[ndk.cmd] ${ndkCmd}\n`, 'utf8');
+          const ndkResult = await execAsync(ndkCmd, { timeout: 3 * 60 * 1000 });
+          fs.appendFileSync(stage2LogFile, `[ndk.stdout]\n${ndkResult.stdout || ''}\n[ndk.stderr]\n${ndkResult.stderr || ''}\n`, 'utf8');
+          const libsDir = path.join(jniDir, 'libs');
+          if (fs.existsSync(libsDir)) {
+            const injectLibDir = path.join(injectDir, 'lib');
+            fs.mkdirSync(injectLibDir, { recursive: true });
+            for (const abi of fs.readdirSync(libsDir)) {
+              const soPath = path.join(libsDir, abi, 'libshellguard.so');
+              if (!fs.existsSync(soPath)) continue;
+              const dstAbiDir = path.join(injectLibDir, abi);
+              fs.mkdirSync(dstAbiDir, { recursive: true });
+              fs.copyFileSync(soPath, path.join(dstAbiDir, 'libshellguard.so'));
+              nativeLibCopied = true;
+            }
+          }
+        } catch (e) {
+          fs.appendFileSync(stage2LogFile, `[ndk.error]\n${String(e?.message || e)}\n`, 'utf8');
+          throw e;
+        }
+      } else {
+        throw new Error('NDK not found: strict native decrypt requires ndk-build');
+      }
+      if (!nativeLibCopied) {
+        throw new Error('native libshellguard.so not generated/copied');
+      }
+      const escapedApp = (currentAppName || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+      const loaderSmali = enableStage2RuntimeLoad ? `.class public L${stage2Path}/Stage2PayloadLoader;
 .super Ljava/lang/Object;
 
 .field private static sPayloadClassLoader:Ljava/lang/ClassLoader;
@@ -4919,647 +5476,14 @@ console.log('OK:' + payload.length);
 
 `;
 
-
-    // ── 预处理步骤：直接向原始 Application 注入壳初始化，不替换 Application 类名 ──
-    // 这样加固后 Application 类名不变，避免 ClassCastException 和 TUtil.getT 等兼容问题
-    let preInjectSucceeded = false;
-    if (enableStage2Inject && originalApplication) {
-      try {
-        const preinjectDir = path.join(shellDir, 'preinject');
-        session.log.push(`[shell] 预处理：解码原始 APK 准备注入 Application`);
-        await execAsync(`java -jar "${apktoolJar}" d -f -o "${preinjectDir}" "${payloadSourceApk}"`, { timeout: 8 * 60 * 1000 });
-
-        // 查找 Application.smali（通常在 smali/ 目录，对应 classes.dex）
-        const appRelPath = originalApplication.replace(/\./g, '/') + '.smali';
-        let appSmaliPath = null;
-        const smaliRoots = fs.readdirSync(preinjectDir, { withFileTypes: true })
-          .filter(d => d.isDirectory() && /^smali(_classes\d+)?$/.test(d.name))
-          .map(d => d.name)
-          .sort();
-        for (const root of smaliRoots) {
-          const candidate = path.join(preinjectDir, root, appRelPath);
-          if (fs.existsSync(candidate)) { appSmaliPath = candidate; break; }
-        }
-
-        if (appSmaliPath) {
-          // 注入 Stage2PayloadLoader.install(context) 到 attachBaseContext 开头
-          let smaliContent = fs.readFileSync(appSmaliPath, 'utf8');
-          const installLine = `    invoke-static {p1}, L${stage2Path}/Stage2PayloadLoader;->install(Landroid/content/Context;)V`;
-          const attachRe = /(.method protected attachBaseContext\(Landroid\/content\/Context;\)V\n)([ \t]*\.locals \d+)/;
-          if (attachRe.test(smaliContent)) {
-            smaliContent = smaliContent.replace(attachRe, `$1$2\n${installLine}`);
-            session.log.push(`[shell] 预处理：已注入 attachBaseContext (${originalApplication})`);
-          } else if (smaliContent.includes('.method protected attachBaseContext')) {
-            // 方法存在但格式不同，尝试在方法开头注入
-            smaliContent = smaliContent.replace(
-              /(.method protected attachBaseContext\(Landroid\/content\/Context;\)V\n)/,
-              `$1${installLine}\n`
-            );
-            session.log.push(`[shell] 预处理：已注入 attachBaseContext（备用模式）`);
-          } else {
-            // attachBaseContext 不存在，新增
-            const newMethod = `\n.method protected attachBaseContext(Landroid/content/Context;)V\n    .locals 0\n${installLine}\n    invoke-super {p0, p1}, Landroid/app/Application;->attachBaseContext(Landroid/content/Context;)V\n    return-void\n.end method\n`;
-            smaliContent = smaliContent.replace(/\n# virtual methods\b/, newMethod + '\n# virtual methods');
-            if (!smaliContent.includes(installLine)) {
-              // 最后兜底：在文件末尾追加
-              smaliContent = smaliContent.trimEnd() + newMethod;
-            }
-            session.log.push(`[shell] 预处理：已新增 attachBaseContext (${originalApplication})`);
-          }
-          fs.writeFileSync(appSmaliPath, smaliContent, 'utf8');
-
-          // 将 Stage2PayloadLoader.smali 写入 Application 所在的同一 smali 目录（完整版含 JNI 解密逻辑）
-          const appSmaliRoot = path.relative(preinjectDir, appSmaliPath).split(path.sep)[0];
-          const loaderSmaliDir = path.join(preinjectDir, appSmaliRoot, stage2Path);
-          fs.mkdirSync(loaderSmaliDir, { recursive: true });
-          // 写入完整版 Stage2PayloadLoader（与 Application 同在 classes.dex，确保 install() 正确执行）
-          fs.writeFileSync(path.join(loaderSmaliDir, 'Stage2PayloadLoader.smali'), loaderSmali, 'utf8');
-          session.log.push(`[shell] 预处理：已写入完整 Stage2PayloadLoader 到 ${appSmaliRoot}`);
-
-          // 重建 APK（包含修改后的 Application 和占位 PayloadLoader）
-          const preinjectApk = path.join(shellDir, 'preinject-source.apk');
-          await execAsync(`java -jar "${apktoolJar}" b -o "${preinjectApk}" "${preinjectDir}"`, { timeout: 8 * 60 * 1000 });
-          payloadSourceApk = preinjectApk;
-          preInjectSucceeded = true;
-          session.log.push(`[shell] 预处理完成，使用注入后的 APK 构建 payload`);
-        } else {
-          session.log.push(`[shell] ⚠️ 预处理：未找到 ${originalApplication}.smali，跳过注入（将使用 Stage2ShellApplication 方案）`);
-        }
-      } catch (preErr) {
-        session.log.push(`[shell] ⚠️ 预处理失败，回退到 Stage2ShellApplication 方案: ${preErr.message?.split('\n')[0]}`);
-      }
-    }
-
-    const { stdout: shellStdout } = await execAsync(
-      `node "${payloadScriptPath}" "${payloadSourceApk}" "${shellUnsignedApk}" "${shellAssetsDir}" "${shellMetaFile}" "${shellBootstrapFile}" "${manifestPackage}" "${originalApplication}" "${stripDuringPayloadBuild ? '1' : '0'}" "${shellAppFqcn}" "${shellLoaderFqcn}" "${signerDigestForKey}" "${nativeSecret.toString('hex')}"`,
-      { timeout: 10 * 60 * 1000 }
-    );
-    const shellResult = (shellStdout || '').trim();
-    session.log.push(`[shell] payload 处理结果: ${shellResult || 'OK'}`);
-    session.timing.preMs += Date.now() - preStart;
-
-    // Stage2: 注入壳 Application（灰度开关，默认关闭，先保证稳定可启动）
-    let stage2InjectSucceeded = !enableStage2Inject;
-    let stage3StripSucceeded = !enableStage3StripClasses2;
-    if (enableStage2Inject) {
-      try {
-      const injectDir = path.join(shellDir, 'inject');
-      const shellRebuiltApk = path.join(shellDir, 'shell-stage2-unsigned.apk');
-      session.log.push(`[shell] stage2 灰度开启，完整日志文件: ${stage2LogFile}`);
-      const decodeCmd = `java -jar "${apktoolJar}" d -f -o "${injectDir}" "${shellUnsignedApk}"`;
-      fs.appendFileSync(stage2LogFile, `\n[decode.cmd] ${decodeCmd}\n`, 'utf8');
-      const decodeResult = await execAsync(decodeCmd, { timeout: 8 * 60 * 1000 });
-      fs.appendFileSync(stage2LogFile, `[decode.stdout]\n${decodeResult.stdout || ''}\n[decode.stderr]\n${decodeResult.stderr || ''}\n`, 'utf8');
-      const manifestPath = path.join(injectDir, 'AndroidManifest.xml');
-      let manifestText = fs.readFileSync(manifestPath, 'utf8');
-      const packageMatch = manifestText.match(/package="([^"]+)"/);
-      const pkg = packageMatch?.[1] || manifestPackage || '';
-      const appTagMatch = manifestText.match(/<application[^>]*>/);
-      const currentNameMatch = appTagMatch?.[0]?.match(/android:name="([^"]+)"/);
-      let currentAppName = currentNameMatch?.[1] || originalApplication || '';
-      if (currentAppName.startsWith('.')) currentAppName = `${pkg}${currentAppName}`;
-      const shellAppClass = shellAppFqcn;
-      if (appTagMatch) {
-        let newAppTag = appTagMatch[0];
-        if (!preInjectSucceeded) {
-          // 预处理未成功：使用 Stage2ShellApplication 方案，替换 Application 类名
-          if (/android:name="[^"]*"/.test(newAppTag)) {
-            newAppTag = newAppTag.replace(/android:name="[^"]*"/, `android:name="${shellAppClass}"`);
-          } else {
-            newAppTag = newAppTag.replace('<application', `<application android:name="${shellAppClass}"`);
-          }
-        }
-        // P0: 强制关闭 debuggable，防止调试注入与内存抓取
-        if (/android:debuggable="[^"]*"/.test(newAppTag)) {
-          newAppTag = newAppTag.replace(/android:debuggable="[^"]*"/, 'android:debuggable="false"');
-        } else {
-          newAppTag = newAppTag.replace('<application', '<application android:debuggable="false"');
-        }
-        manifestText = manifestText.replace(appTagMatch[0], newAppTag);
-        fs.writeFileSync(manifestPath, manifestText, 'utf8');
-      }
-
-      const stage2Package = shellStage2Package;
-      const loaderClassName = shellLoaderClassName;
-      const shellClassName = shellAppClassName;
-      // 为壳类单独创建一个新的 dex 分包，避免壳类与业务类混在同一明文 dex。
-      // 这样 stage3 扩大裁剪时可以仅保留 classes.dex + 壳 dex。
-      const smaliDexNums = fs.readdirSync(injectDir, { withFileTypes: true })
-        .filter((d) => d.isDirectory() && /^smali_classes\d+$/.test(d.name))
-        .map((d) => Number(d.name.replace('smali_classes', '')))
-        .filter((n) => Number.isFinite(n) && n >= 2);
-      const shellDexNum = Math.max(1, ...smaliDexNums) + 1;
-      const smaliRoot = `smali_classes${shellDexNum}`;
-      const smaliDir = path.join(injectDir, smaliRoot, stage2Path);
-      fs.mkdirSync(smaliDir, { recursive: true });
-      const jniDir = path.join(shellDir, 'jni');
-      fs.mkdirSync(jniDir, { recursive: true });
-
-      // U1: nativeSecret 已在上方提前生成，此处仅派生 XOR 编码辅助变量供 C 模板使用
-      const nsXorKey = (crypto.randomBytes(1)[0] || 0x47) | 0x01; // 非零
-      const nsEncC = Array.from(nativeSecret).map(b => `0x${(b ^ nsXorKey).toString(16).padStart(2, '0')}`).join(', ');
-      const nsXorKeyHex = `0x${nsXorKey.toString(16).padStart(2, '0')}`;
-
-      // U2: XOR 编码助手 — 统一 XOR key=0x5A，与已有 SO 内 xor_jstr 保持一致
-      const soXorKey = 0x5A;
-      const cArr = (str) => '{ ' + Array.from(Buffer.from(str, 'utf8')).map(b => `0x${(b ^ soXorKey).toString(16).padStart(2, '0')}`).join(', ') + ' }';
-
-      const nativeSource = `
-#include <jni.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <android/log.h>
-
-#define LOG_TAG "shellguard"
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
-
-static int has_exception(JNIEnv *env) {
-    if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
-        return 1;
-    }
-    return 0;
-}
-
-static jstring xor_jstr(JNIEnv *env, const unsigned char *src, int len, unsigned char key) {
-    char *tmp = (char *)malloc((size_t)len + 1);
-    if (tmp == NULL) return NULL;
-    for (int i = 0; i < len; i++) tmp[i] = (char)(src[i] ^ key);
-    tmp[len] = '\0';
-    jstring out = (*env)->NewStringUTF(env, tmp);
-    free(tmp);
-    return out;
-}
-
-/* xor_cstr: 返回 XOR 解码后的 malloc C 字符串，调用方负责 free() */
-static char *xor_cstr(const unsigned char *src, int len, unsigned char key) {
-    char *tmp = (char *)malloc((size_t)len + 1);
-    if (tmp == NULL) return NULL;
-    for (int i = 0; i < len; i++) tmp[i] = (char)(src[i] ^ key);
-    tmp[len] = '\0';
-    return tmp;
-}
-
-/* C2: 扫描 /proc/self/maps 中是否含 frida 注入特征 */
-static int scan_maps_for_frida() {
-    static const unsigned char s_maps[] = ${cArr('/proc/self/maps')};
-    char *maps_path = xor_cstr(s_maps, (int)sizeof(s_maps), 0x5A);
-    if (maps_path == NULL) return 0;
-    FILE *f = fopen(maps_path, "r");
-    free(maps_path);
-    if (f == NULL) return 0;
-
-    /* frida 各注入模式均会在 maps 中留下以下特征之一 */
-    static const unsigned char s_k1[] = ${cArr('frida')};
-    static const unsigned char s_k2[] = ${cArr('gum-js-loop')};
-    static const unsigned char s_k3[] = ${cArr('gmain')};
-    static const unsigned char s_k4[] = ${cArr('linjector')};
-    char *k1 = xor_cstr(s_k1, (int)sizeof(s_k1), 0x5A);
-    char *k2 = xor_cstr(s_k2, (int)sizeof(s_k2), 0x5A);
-    char *k3 = xor_cstr(s_k3, (int)sizeof(s_k3), 0x5A);
-    char *k4 = xor_cstr(s_k4, (int)sizeof(s_k4), 0x5A);
-
-    char line[512];
-    int found = 0;
-    while (!found && fgets(line, (int)sizeof(line), f)) {
-        if ((k1 && strstr(line, k1)) ||
-            (k2 && strstr(line, k2)) ||
-            (k3 && strstr(line, k3)) ||
-            (k4 && strstr(line, k4))) {
-            found = 1;
-        }
-    }
-    fclose(f);
-    free(k1); free(k2); free(k3); free(k4);
-    return found;
-}
-
-/* C3: 读取 /proc/self/status 中 TracerPid，非零说明正在被调试 */
-static int check_tracerpid() {
-    static const unsigned char s_status[] = ${cArr('/proc/self/status')};
-    char *status_path = xor_cstr(s_status, (int)sizeof(s_status), 0x5A);
-    if (status_path == NULL) return 0;
-    FILE *f = fopen(status_path, "r");
-    free(status_path);
-    if (f == NULL) return 0;
-
-    static const unsigned char s_tracer[] = ${cArr('TracerPid:')};
-    char *tracer_key = xor_cstr(s_tracer, (int)sizeof(s_tracer), 0x5A);
-    if (tracer_key == NULL) { fclose(f); return 0; }
-    int key_len = (int)strlen(tracer_key);
-
-    char line[128];
-    int traced = 0;
-    while (fgets(line, (int)sizeof(line), f)) {
-        if (strncmp(line, tracer_key, (size_t)key_len) == 0) {
-            int pid = 0;
-            sscanf(line + key_len, " %d", &pid);
-            if (pid != 0) traced = 1;
-            break;
-        }
-    }
-    fclose(f);
-    free(tracer_key);
-    return traced;
-}
-
-static jstring get_signer_digest(JNIEnv *env, jobject appCtx) {
-    jclass contextCls = (*env)->GetObjectClass(env, appCtx);
-    if (contextCls == NULL || has_exception(env)) return NULL;
-    static const unsigned char s_getPm[] = ${cArr('getPackageManager')};
-    static const unsigned char s_getPmSig[] = ${cArr('()Landroid/content/pm/PackageManager;')};
-    static const unsigned char s_getPn[] = ${cArr('getPackageName')};
-    static const unsigned char s_getPnSig[] = ${cArr('()Ljava/lang/String;')};
-    jstring jGetPm = xor_jstr(env, s_getPm, sizeof(s_getPm), 0x5A);
-    jstring jGetPmSig = xor_jstr(env, s_getPmSig, sizeof(s_getPmSig), 0x5A);
-    jstring jGetPn = xor_jstr(env, s_getPn, sizeof(s_getPn), 0x5A);
-    jstring jGetPnSig = xor_jstr(env, s_getPnSig, sizeof(s_getPnSig), 0x5A);
-    if (!jGetPm || !jGetPmSig || !jGetPn || !jGetPnSig || has_exception(env)) return NULL;
-    const char *pmStr = (*env)->GetStringUTFChars(env, jGetPm, NULL);
-    const char *pmSigStr = (*env)->GetStringUTFChars(env, jGetPmSig, NULL);
-    const char *pnStr = (*env)->GetStringUTFChars(env, jGetPn, NULL);
-    const char *pnSigStr = (*env)->GetStringUTFChars(env, jGetPnSig, NULL);
-    if (!pmStr || !pmSigStr || !pnStr || !pnSigStr) return NULL;
-    jmethodID getPm = (*env)->GetMethodID(env, contextCls, pmStr, pmSigStr);
-    jmethodID getPn = (*env)->GetMethodID(env, contextCls, pnStr, pnSigStr);
-    (*env)->ReleaseStringUTFChars(env, jGetPm, pmStr);
-    (*env)->ReleaseStringUTFChars(env, jGetPmSig, pmSigStr);
-    (*env)->ReleaseStringUTFChars(env, jGetPn, pnStr);
-    (*env)->ReleaseStringUTFChars(env, jGetPnSig, pnSigStr);
-    if (getPm == NULL || getPn == NULL || has_exception(env)) return NULL;
-    jobject pm = (*env)->CallObjectMethod(env, appCtx, getPm);
-    jstring pn = (jstring)(*env)->CallObjectMethod(env, appCtx, getPn);
-    if (pm == NULL || pn == NULL || has_exception(env)) return NULL;
-
-    jclass pmCls = (*env)->GetObjectClass(env, pm);
-    if (pmCls == NULL || has_exception(env)) return NULL;
-    static const unsigned char s_getPi[] = ${cArr('getPackageInfo')};
-    static const unsigned char s_getPiSig[] = ${cArr('(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;')};
-    jstring jGetPi = xor_jstr(env, s_getPi, sizeof(s_getPi), 0x5A);
-    jstring jGetPiSig = xor_jstr(env, s_getPiSig, sizeof(s_getPiSig), 0x5A);
-    if (!jGetPi || !jGetPiSig || has_exception(env)) return NULL;
-    const char *piStr = (*env)->GetStringUTFChars(env, jGetPi, NULL);
-    const char *piSigStr = (*env)->GetStringUTFChars(env, jGetPiSig, NULL);
-    if (!piStr || !piSigStr) return NULL;
-    jmethodID getPi = (*env)->GetMethodID(env, pmCls, piStr, piSigStr);
-    (*env)->ReleaseStringUTFChars(env, jGetPi, piStr);
-    (*env)->ReleaseStringUTFChars(env, jGetPiSig, piSigStr);
-    if (getPi == NULL || has_exception(env)) return NULL;
-    jobject pi = (*env)->CallObjectMethod(env, pm, getPi, pn, 0x08000040);
-    if (pi == NULL || has_exception(env)) return NULL;
-
-    jclass piCls = (*env)->GetObjectClass(env, pi);
-    if (piCls == NULL || has_exception(env)) return NULL;
-    jfieldID fidSigningInfo = (*env)->GetFieldID(env, piCls, "signingInfo", "Landroid/content/pm/SigningInfo;");
-    if (has_exception(env)) fidSigningInfo = NULL;
-    jfieldID fidSignatures = (*env)->GetFieldID(env, piCls, "signatures", "[Landroid/content/pm/Signature;");
-    if (has_exception(env)) fidSignatures = NULL;
-    if (fidSigningInfo == NULL && fidSignatures == NULL) return NULL;
-
-    jobject sigObj = NULL;
-    if (fidSigningInfo != NULL) {
-        jobject signingInfo = (*env)->GetObjectField(env, pi, fidSigningInfo);
-        if (signingInfo != NULL && !has_exception(env)) {
-            jclass siCls = (*env)->GetObjectClass(env, signingInfo);
-            if (siCls != NULL && !has_exception(env)) {
-                const unsigned char s_get_signers[] = {0x3d,0x3f,0x2e,0x1b,0x2a,0x31,0x19,0x35,0x34,0x2e,0x3f,0x34,0x2e,0x29,0x9,0x33,0x3d,0x34,0x3f,0x28,0x29};
-                jstring getSignersName = xor_jstr(env, s_get_signers, sizeof(s_get_signers), 0x5A);
-                if (getSignersName == NULL || has_exception(env)) return NULL;
-                const char *getSignersUtf = (*env)->GetStringUTFChars(env, getSignersName, NULL);
-                if (getSignersUtf == NULL || has_exception(env)) return NULL;
-                jmethodID getSigners = (*env)->GetMethodID(env, siCls, getSignersUtf, "()[Landroid/content/pm/Signature;");
-                (*env)->ReleaseStringUTFChars(env, getSignersName, getSignersUtf);
-                if (getSigners != NULL && !has_exception(env)) {
-                    jobjectArray arr = (jobjectArray)(*env)->CallObjectMethod(env, signingInfo, getSigners);
-                    if (arr != NULL && !has_exception(env) && (*env)->GetArrayLength(env, arr) > 0) {
-                        sigObj = (*env)->GetObjectArrayElement(env, arr, 0);
-                    }
-                }
-            }
-        }
-    }
-    if (sigObj == NULL && fidSignatures != NULL) {
-        jobjectArray arr = (jobjectArray)(*env)->GetObjectField(env, pi, fidSignatures);
-        if (arr != NULL && !has_exception(env) && (*env)->GetArrayLength(env, arr) > 0) {
-            sigObj = (*env)->GetObjectArrayElement(env, arr, 0);
-        }
-    }
-    if (sigObj == NULL || has_exception(env)) return NULL;
-
-    jclass sigCls = (*env)->GetObjectClass(env, sigObj);
-    if (sigCls == NULL || has_exception(env)) return NULL;
-    static const unsigned char s_toBytes[] = ${cArr('toByteArray')};
-    static const unsigned char s_toBytesSig[] = ${cArr('()[B')};
-    jstring jToBytes = xor_jstr(env, s_toBytes, sizeof(s_toBytes), 0x5A);
-    jstring jToBytesSig = xor_jstr(env, s_toBytesSig, sizeof(s_toBytesSig), 0x5A);
-    if (!jToBytes || !jToBytesSig || has_exception(env)) return NULL;
-    const char *toBytesStr = (*env)->GetStringUTFChars(env, jToBytes, NULL);
-    const char *toBytesSigStr = (*env)->GetStringUTFChars(env, jToBytesSig, NULL);
-    if (!toBytesStr || !toBytesSigStr) return NULL;
-    jmethodID toBytes = (*env)->GetMethodID(env, sigCls, toBytesStr, toBytesSigStr);
-    (*env)->ReleaseStringUTFChars(env, jToBytes, toBytesStr);
-    (*env)->ReleaseStringUTFChars(env, jToBytesSig, toBytesSigStr);
-    if (toBytes == NULL || has_exception(env)) return NULL;
-    jbyteArray cert = (jbyteArray)(*env)->CallObjectMethod(env, sigObj, toBytes);
-    if (cert == NULL || has_exception(env)) return NULL;
-
-    const unsigned char s_md_cls[] = {0x30,0x3b,0x2c,0x3b,0x75,0x29,0x3f,0x39,0x2f,0x28,0x33,0x2e,0x23,0x75,0x17,0x3f,0x29,0x29,0x3b,0x3d,0x3f,0x1e,0x33,0x3d,0x3f,0x29,0x2e};
-    jstring mdClsName = xor_jstr(env, s_md_cls, sizeof(s_md_cls), 0x5A);
-    if (mdClsName == NULL || has_exception(env)) return NULL;
-    const char *mdClsUtf = (*env)->GetStringUTFChars(env, mdClsName, NULL);
-    if (mdClsUtf == NULL || has_exception(env)) return NULL;
-    jclass mdCls = (*env)->FindClass(env, mdClsUtf);
-    (*env)->ReleaseStringUTFChars(env, mdClsName, mdClsUtf);
-    if (mdCls == NULL || has_exception(env)) return NULL;
-    static const unsigned char s_getInstance[] = ${cArr('getInstance')};
-    static const unsigned char s_getInstanceSig[] = ${cArr('(Ljava/lang/String;)Ljava/security/MessageDigest;')};
-    static const unsigned char s_digest[] = ${cArr('digest')};
-    static const unsigned char s_digestSig[] = ${cArr('([B)[B')};
-    jstring jGetInstance = xor_jstr(env, s_getInstance, sizeof(s_getInstance), 0x5A);
-    jstring jGetInstanceSig = xor_jstr(env, s_getInstanceSig, sizeof(s_getInstanceSig), 0x5A);
-    jstring jDigest = xor_jstr(env, s_digest, sizeof(s_digest), 0x5A);
-    jstring jDigestSig = xor_jstr(env, s_digestSig, sizeof(s_digestSig), 0x5A);
-    if (!jGetInstance || !jGetInstanceSig || !jDigest || !jDigestSig || has_exception(env)) return NULL;
-    const char *giStr = (*env)->GetStringUTFChars(env, jGetInstance, NULL);
-    const char *giSigStr = (*env)->GetStringUTFChars(env, jGetInstanceSig, NULL);
-    const char *dgStr = (*env)->GetStringUTFChars(env, jDigest, NULL);
-    const char *dgSigStr = (*env)->GetStringUTFChars(env, jDigestSig, NULL);
-    if (!giStr || !giSigStr || !dgStr || !dgSigStr) return NULL;
-    jmethodID mdGetInstance = (*env)->GetStaticMethodID(env, mdCls, giStr, giSigStr);
-    jmethodID mdDigest = (*env)->GetMethodID(env, mdCls, dgStr, dgSigStr);
-    (*env)->ReleaseStringUTFChars(env, jGetInstance, giStr);
-    (*env)->ReleaseStringUTFChars(env, jGetInstanceSig, giSigStr);
-    (*env)->ReleaseStringUTFChars(env, jDigest, dgStr);
-    (*env)->ReleaseStringUTFChars(env, jDigestSig, dgSigStr);
-    if (mdGetInstance == NULL || mdDigest == NULL || has_exception(env)) return NULL;
-    const unsigned char s_sha256[] = {0x09,0x12,0x1b,0x77,0x68,0x6f,0x6c};
-    jstring sha256 = xor_jstr(env, s_sha256, sizeof(s_sha256), 0x5A);
-    if (sha256 == NULL || has_exception(env)) return NULL;
-    jobject md = (*env)->CallStaticObjectMethod(env, mdCls, mdGetInstance, sha256);
-    if (md == NULL || has_exception(env)) return NULL;
-    jbyteArray dig = (jbyteArray)(*env)->CallObjectMethod(env, md, mdDigest, cert);
-    if (dig == NULL || has_exception(env)) return NULL;
-
-    jsize digLen = (*env)->GetArrayLength(env, dig);
-    jbyte *raw = (jbyte *)malloc((size_t)digLen);
-    if (raw == NULL) return NULL;
-    (*env)->GetByteArrayRegion(env, dig, 0, digLen, raw);
-    if (has_exception(env)) { free(raw); return NULL; }
-    char *hex = (char *)malloc((size_t)digLen * 2 + 1);
-    if (hex == NULL) { free(raw); return NULL; }
-    static const char *digits = "0123456789abcdef";
-    for (jsize i = 0; i < digLen; i++) {
-        unsigned char b = (unsigned char)raw[i];
-        hex[i * 2] = digits[(b >> 4) & 0xF];
-        hex[i * 2 + 1] = digits[b & 0xF];
-    }
-    hex[digLen * 2] = '\0';
-    free(raw);
-    jstring out = (*env)->NewStringUTF(env, hex);
-    free(hex);
-    if (has_exception(env)) return NULL;
-    return out;
-}
-
-/* C1: 改为 static — 不导出符号，由 JNI_OnLoad 动态注册，消除精准 Hook 入口 */
-static jbyteArray nativeAesDecryptImpl(JNIEnv *env, jclass clazz, jobject appCtx, jbyteArray enc, jstring pkg) {
-    (void)clazz; (void)appCtx; (void)pkg;  /* 方案三：静态内嵌密钥，不再依赖签名证书 */
-    if (enc == NULL) { LOGE("E01"); return NULL; }
-    jsize len = (*env)->GetArrayLength(env, enc);
-    if (len <= 12) { LOGE("E02"); return NULL; }
-
-    /* 方案三：直接解码 XOR 混淆的静态密钥 nativeSecret，无需任何运行时信息 */
-    static const unsigned char s_ns[32] = { ${nsEncC} };
-    const unsigned char ns_xk = ${nsXorKeyHex};
-    unsigned char keyRaw[32];
-    for (int i = 0; i < 32; i++) keyRaw[i] = s_ns[i] ^ ns_xk;
-
-    jbyteArray keyBytes = (*env)->NewByteArray(env, 32);
-    if (keyBytes == NULL || has_exception(env)) { LOGE("E11"); return NULL; }
-    (*env)->SetByteArrayRegion(env, keyBytes, 0, 32, (const jbyte *)keyRaw);
-
-    static const unsigned char s_skCls[] = ${cArr('javax/crypto/spec/SecretKeySpec')};
-    static const unsigned char s_skCtorSig[] = ${cArr('([BLjava/lang/String;)V')};
-    static const unsigned char s_aes[] = ${cArr('AES')};
-    jstring jSkCls = xor_jstr(env, s_skCls, sizeof(s_skCls), 0x5A);
-    jstring jSkCtorSig = xor_jstr(env, s_skCtorSig, sizeof(s_skCtorSig), 0x5A);
-    jstring jAes = xor_jstr(env, s_aes, sizeof(s_aes), 0x5A);
-    if (!jSkCls || !jSkCtorSig || !jAes || has_exception(env)) { LOGE("E12"); return NULL; }
-    const char *skClsStr = (*env)->GetStringUTFChars(env, jSkCls, NULL);
-    const char *skCtorSigStr = (*env)->GetStringUTFChars(env, jSkCtorSig, NULL);
-    if (!skClsStr || !skCtorSigStr) { LOGE("E12b"); return NULL; }
-    jclass skCls = (*env)->FindClass(env, skClsStr);
-    (*env)->ReleaseStringUTFChars(env, jSkCls, skClsStr);
-    if (skCls == NULL || has_exception(env)) { LOGE("E12c"); return NULL; }
-    jmethodID skCtor = (*env)->GetMethodID(env, skCls, "<init>", skCtorSigStr);
-    (*env)->ReleaseStringUTFChars(env, jSkCtorSig, skCtorSigStr);
-    if (skCtor == NULL || has_exception(env)) { LOGE("E13"); return NULL; }
-    jobject keySpec = (*env)->NewObject(env, skCls, skCtor, keyBytes, jAes);
-    if (keySpec == NULL || has_exception(env)) { LOGE("E15"); return NULL; }
-
-    jbyte ivRaw[12];
-    (*env)->GetByteArrayRegion(env, enc, 0, 12, ivRaw);
-    if (has_exception(env)) { LOGE("E16"); return NULL; }
-    jbyteArray ivBytes = (*env)->NewByteArray(env, 12);
-    if (ivBytes == NULL || has_exception(env)) { LOGE("E17"); return NULL; }
-    (*env)->SetByteArrayRegion(env, ivBytes, 0, 12, ivRaw);
-    if (has_exception(env)) { LOGE("E18"); return NULL; }
-
-    static const unsigned char s_gcmCls[] = ${cArr('javax/crypto/spec/GCMParameterSpec')};
-    static const unsigned char s_gcmCtorSig[] = ${cArr('(I[B)V')};
-    static const unsigned char s_cipherCls[] = ${cArr('javax/crypto/Cipher')};
-    static const unsigned char s_cipherGiSig[] = ${cArr('(Ljava/lang/String;)Ljavax/crypto/Cipher;')};
-    static const unsigned char s_cipherInit[] = ${cArr('init')};
-    static const unsigned char s_cipherInitSig[] = ${cArr('(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V')};
-    static const unsigned char s_doFinal[] = ${cArr('doFinal')};
-    static const unsigned char s_doFinalSig[] = ${cArr('([B)[B')};
-    jstring jGcmCls = xor_jstr(env, s_gcmCls, sizeof(s_gcmCls), 0x5A);
-    jstring jGcmCtorSig = xor_jstr(env, s_gcmCtorSig, sizeof(s_gcmCtorSig), 0x5A);
-    jstring jCipherCls = xor_jstr(env, s_cipherCls, sizeof(s_cipherCls), 0x5A);
-    jstring jCipherGiSig = xor_jstr(env, s_cipherGiSig, sizeof(s_cipherGiSig), 0x5A);
-    jstring jCipherInit = xor_jstr(env, s_cipherInit, sizeof(s_cipherInit), 0x5A);
-    jstring jCipherInitSig = xor_jstr(env, s_cipherInitSig, sizeof(s_cipherInitSig), 0x5A);
-    jstring jDoFinal = xor_jstr(env, s_doFinal, sizeof(s_doFinal), 0x5A);
-    jstring jDoFinalSig = xor_jstr(env, s_doFinalSig, sizeof(s_doFinalSig), 0x5A);
-    if (!jGcmCls || !jGcmCtorSig || !jCipherCls || !jCipherGiSig || !jCipherInit || !jCipherInitSig || !jDoFinal || !jDoFinalSig || has_exception(env)) { LOGE("E19"); return NULL; }
-    const char *gcmClsStr = (*env)->GetStringUTFChars(env, jGcmCls, NULL);
-    const char *gcmCtorSigStr = (*env)->GetStringUTFChars(env, jGcmCtorSig, NULL);
-    const char *cipherClsStr = (*env)->GetStringUTFChars(env, jCipherCls, NULL);
-    const char *cipherGiSigStr = (*env)->GetStringUTFChars(env, jCipherGiSig, NULL);
-    const char *cipherInitStr = (*env)->GetStringUTFChars(env, jCipherInit, NULL);
-    const char *cipherInitSigStr = (*env)->GetStringUTFChars(env, jCipherInitSig, NULL);
-    const char *doFinalStr = (*env)->GetStringUTFChars(env, jDoFinal, NULL);
-    const char *doFinalSigStr = (*env)->GetStringUTFChars(env, jDoFinalSig, NULL);
-    if (!gcmClsStr || !gcmCtorSigStr || !cipherClsStr || !cipherGiSigStr || !cipherInitStr || !cipherInitSigStr || !doFinalStr || !doFinalSigStr) { LOGE("E19b"); return NULL; }
-    jclass gcmCls = (*env)->FindClass(env, gcmClsStr);
-    (*env)->ReleaseStringUTFChars(env, jGcmCls, gcmClsStr);
-    if (gcmCls == NULL || has_exception(env)) { LOGE("E19c"); return NULL; }
-    jmethodID gcmCtor = (*env)->GetMethodID(env, gcmCls, "<init>", gcmCtorSigStr);
-    (*env)->ReleaseStringUTFChars(env, jGcmCtorSig, gcmCtorSigStr);
-    if (gcmCtor == NULL || has_exception(env)) { LOGE("E20"); return NULL; }
-    jobject gcmSpec = (*env)->NewObject(env, gcmCls, gcmCtor, 128, ivBytes);
-    if (gcmSpec == NULL || has_exception(env)) { LOGE("E21"); return NULL; }
-    jclass cipherCls = (*env)->FindClass(env, cipherClsStr);
-    (*env)->ReleaseStringUTFChars(env, jCipherCls, cipherClsStr);
-    if (cipherCls == NULL || has_exception(env)) { LOGE("E22"); return NULL; }
-    static const unsigned char s_cipherGiName[] = ${cArr('getInstance')};
-    jstring jCipherGiName = xor_jstr(env, s_cipherGiName, sizeof(s_cipherGiName), 0x5A);
-    if (!jCipherGiName || has_exception(env)) { LOGE("E22b"); return NULL; }
-    const char *cipherGiNameStr = (*env)->GetStringUTFChars(env, jCipherGiName, NULL);
-    if (!cipherGiNameStr) { LOGE("E22c"); return NULL; }
-    jmethodID cipherGetInstance = (*env)->GetStaticMethodID(env, cipherCls, cipherGiNameStr, cipherGiSigStr);
-    (*env)->ReleaseStringUTFChars(env, jCipherGiName, cipherGiNameStr);
-    jmethodID cipherInit = (*env)->GetMethodID(env, cipherCls, cipherInitStr, cipherInitSigStr);
-    jmethodID cipherDoFinal = (*env)->GetMethodID(env, cipherCls, doFinalStr, doFinalSigStr);
-    (*env)->ReleaseStringUTFChars(env, jCipherGiSig, cipherGiSigStr);
-    (*env)->ReleaseStringUTFChars(env, jCipherInit, cipherInitStr);
-    (*env)->ReleaseStringUTFChars(env, jCipherInitSig, cipherInitSigStr);
-    (*env)->ReleaseStringUTFChars(env, jDoFinal, doFinalStr);
-    (*env)->ReleaseStringUTFChars(env, jDoFinalSig, doFinalSigStr);
-    if (cipherGetInstance == NULL || cipherInit == NULL || cipherDoFinal == NULL || has_exception(env)) { LOGE("E23"); return NULL; }
-    const unsigned char s_trans[] = {0x1b,0x1f,0x9,0x75,0x1d,0x19,0x17,0x75,0x14,0x35,0xa,0x3b,0x3e,0x3e,0x33,0x34,0x3d};
-    jstring trans = xor_jstr(env, s_trans, sizeof(s_trans), 0x5A);
-    if (trans == NULL || has_exception(env)) { LOGE("E24"); return NULL; }
-    jobject cipher = (*env)->CallStaticObjectMethod(env, cipherCls, cipherGetInstance, trans);
-    if (cipher == NULL || has_exception(env)) { LOGE("E25"); return NULL; }
-    (*env)->CallVoidMethod(env, cipher, cipherInit, 2, keySpec, gcmSpec);
-    if (has_exception(env)) { LOGE("E26"); return NULL; }
-
-    jsize bodyLen = len - 12;
-    jbyteArray body = (*env)->NewByteArray(env, bodyLen);
-    if (body == NULL || has_exception(env)) { LOGE("E27"); return NULL; }
-    jbyte *raw = (jbyte *)malloc((size_t)len);
-    if (raw == NULL) { LOGE("E28"); return NULL; }
-    (*env)->GetByteArrayRegion(env, enc, 0, len, raw);
-    if (has_exception(env)) { LOGE("E29"); free(raw); return NULL; }
-    (*env)->SetByteArrayRegion(env, body, 0, bodyLen, raw + 12);
-    free(raw);
-    if (has_exception(env)) { LOGE("E30"); return NULL; }
-
-    jbyteArray out = (jbyteArray)(*env)->CallObjectMethod(env, cipher, cipherDoFinal, body);
-    if (out == NULL || has_exception(env)) { LOGE("E31"); return NULL; }
-    return out;
-}
-
-/* C1: 全局缓存动态注册所需的方法名和签名字符串（RegisterNatives 不拷贝字符串）*/
-static char g_mn[20];  /* "nativeAesDecrypt" */
-static char g_ms[52];  /* JNI 方法签名 */
-
-/* JNI_OnLoad: 在 SO 加载时执行反调试检查，并动态注册 nativeAesDecryptImpl */
-JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
-    (void)reserved;
-
-    /* C2: /proc/self/maps 扫描 frida 特征（最有效，覆盖 frida-server 标准模式）*/
-    if (scan_maps_for_frida()) {
-        LOGE("E90");
-        return JNI_ERR;
-    }
-
-    /* C3: TracerPid 检测（过滤 ptrace 附加场景）*/
-    if (check_tracerpid()) {
-        LOGE("E91");
-        return JNI_ERR;
-    }
-
-    JNIEnv *env = NULL;
-    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
-        LOGE("E92");
-        return JNI_ERR;
-    }
-
-    /* C1: 用 XOR 编码的类名动态查找壳类，FindClass 不暴露明文类路径 */
-    static const unsigned char s_cls[] = ${cArr(stage2Path + '/' + shellLoaderClassName)};
-    char *cls_name = xor_cstr(s_cls, (int)sizeof(s_cls), 0x5A);
-    if (cls_name == NULL) return JNI_ERR;
-    jclass cls = (*env)->FindClass(env, cls_name);
-    free(cls_name);
-    if (cls == NULL || (*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
-        LOGE("E93");
-        return JNI_ERR;
-    }
-
-    /* C1: XOR 解码方法名和签名，写入全局 buffer，避免栈变量被回收 */
-    static const unsigned char s_mn[] = ${cArr('nativeAesDecrypt')};
-    static const unsigned char s_ms[] = ${cArr('(Landroid/content/Context;[BLjava/lang/String;)[B')};
-    for (int i = 0; i < (int)sizeof(s_mn); i++) g_mn[i] = (char)(s_mn[i] ^ 0x5A);
-    for (int i = 0; i < (int)sizeof(s_ms); i++) g_ms[i] = (char)(s_ms[i] ^ 0x5A);
-
-    JNINativeMethod methods[] = {
-        { g_mn, g_ms, (void *)nativeAesDecryptImpl }
-    };
-    if ((*env)->RegisterNatives(env, cls, methods, 1) != 0) {
-        LOGE("E94");
-        return JNI_ERR;
-    }
-
-    return JNI_VERSION_1_6;
-}
-`.trim();
-      const nativeCPath = path.join(jniDir, 'shellguard.c');
-      fs.writeFileSync(nativeCPath, nativeSource, 'utf8');
-      const ndkBuild = detectNdkPath();
-      let nativeLibCopied = false;
-      if (ndkBuild) {
-        const mkPath = path.join(jniDir, 'Android.mk');
-        const appMkPath = path.join(jniDir, 'Application.mk');
-        fs.writeFileSync(mkPath, `
-LOCAL_PATH := $(call my-dir)
-include $(CLEAR_VARS)
-LOCAL_MODULE := shellguard
-LOCAL_SRC_FILES := shellguard.c
-LOCAL_LDLIBS := -llog
-include $(BUILD_SHARED_LIBRARY)
-`.trim(), 'utf8');
-        fs.writeFileSync(appMkPath, `
-APP_PLATFORM := android-21
-APP_ABI := armeabi-v7a arm64-v8a
-`.trim(), 'utf8');
-        try {
-          const ndkCmd = `"${path.join(ndkBuild, 'ndk-build')}" -C "${jniDir}" NDK_PROJECT_PATH="${jniDir}" APP_BUILD_SCRIPT="${mkPath}" NDK_APPLICATION_MK="${appMkPath}"`;
-          fs.appendFileSync(stage2LogFile, `\n[ndk.cmd] ${ndkCmd}\n`, 'utf8');
-          const ndkResult = await execAsync(ndkCmd, { timeout: 3 * 60 * 1000 });
-          fs.appendFileSync(stage2LogFile, `[ndk.stdout]\n${ndkResult.stdout || ''}\n[ndk.stderr]\n${ndkResult.stderr || ''}\n`, 'utf8');
-          const libsDir = path.join(jniDir, 'libs');
-          if (fs.existsSync(libsDir)) {
-            const injectLibDir = path.join(injectDir, 'lib');
-            fs.mkdirSync(injectLibDir, { recursive: true });
-            for (const abi of fs.readdirSync(libsDir)) {
-              const soPath = path.join(libsDir, abi, 'libshellguard.so');
-              if (!fs.existsSync(soPath)) continue;
-              const dstAbiDir = path.join(injectLibDir, abi);
-              fs.mkdirSync(dstAbiDir, { recursive: true });
-              fs.copyFileSync(soPath, path.join(dstAbiDir, 'libshellguard.so'));
-              nativeLibCopied = true;
-            }
-          }
-        } catch (e) {
-          fs.appendFileSync(stage2LogFile, `[ndk.error]\n${String(e?.message || e)}\n`, 'utf8');
-          throw e;
-        }
-      } else {
-        throw new Error('NDK not found: strict native decrypt requires ndk-build');
-      }
-      if (!nativeLibCopied) {
-        throw new Error('native libshellguard.so not generated/copied');
-      }
-      const escapedApp = (currentAppName || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
-
       fs.writeFileSync(path.join(smaliDir, 'Stage2PayloadLoader.smali'), loaderSmali, 'utf8');
-      // Stage2PayloadLoader 已在预处理步骤写入 classes.dex，stage2 无需重复写入（避免重复类）
-      if (!preInjectSucceeded) {
-        fs.writeFileSync(path.join(smaliDir, 'Stage2PayloadLoader.smali'), loaderSmali, 'utf8');
-      }
 
-      if (!preInjectSucceeded) {
-        // 预处理未成功：使用 Stage2ShellApplication 方案（回退兼容）
-        const shellAppPath = shellAppFqcn.replace(/\./g, '/');
-        const shellAppSmaliDir = path.join(injectDir, smaliRoot, ...shellAppFqcn.split('.').slice(0, -1));
-        fs.mkdirSync(shellAppSmaliDir, { recursive: true });
-        const shellAppSimpleName = shellAppFqcn.split('.').pop();
-        const shellSmali = `.class public L${shellAppPath};
+      // 壳 Application 使用随机包名下的 Stage2ShellApplication，避免与 payload 中的原始 Application 重名造成重复类问题
+      const shellAppPath = shellAppFqcn.replace(/\./g, '/');
+      const shellAppSmaliDir = path.join(injectDir, smaliRoot, ...shellAppFqcn.split('.').slice(0, -1));
+      fs.mkdirSync(shellAppSmaliDir, { recursive: true });
+      const shellAppSimpleName = shellAppFqcn.split('.').pop();
+      const shellSmali = `.class public L${shellAppPath};
 .super Landroid/app/Application;
 
 .field private mDelegate:Landroid/app/Application;
@@ -5602,20 +5526,14 @@ APP_ABI := armeabi-v7a arm64-v8a
     return-void
 .end method
 `;
-        fs.writeFileSync(path.join(shellAppSmaliDir, `${shellAppSimpleName}.smali`), shellSmali, 'utf8');
-        session.log.push(`[shell] stage2 使用回退方案: Stage2ShellApplication`);
-      } else {
-        session.log.push(`[shell] stage2 使用新方案: 原始 Application 已注入，无需 Stage2ShellApplication`);
-      }
+      fs.writeFileSync(path.join(shellAppSmaliDir, `${shellAppSimpleName}.smali`), shellSmali, 'utf8');
 
       const buildCmd = `java -jar "${apktoolJar}" b -o "${shellRebuiltApk}" "${injectDir}"`;
       fs.appendFileSync(stage2LogFile, `\n[build.cmd] ${buildCmd}\n`, 'utf8');
       const buildResult = await execAsync(buildCmd, { timeout: 10 * 60 * 1000 });
       fs.appendFileSync(stage2LogFile, `[build.stdout]\n${buildResult.stdout || ''}\n[build.stderr]\n${buildResult.stderr || ''}\n`, 'utf8');
       fs.copyFileSync(shellRebuiltApk, shellUnsignedApk);
-      session.log.push(preInjectSucceeded
-        ? '[shell] stage2 注入完成：Application 直接注入（原始类名保留）'
-        : '[shell] stage2 注入完成：壳 Application 已接管并桥接原 Application');
+      session.log.push('[shell] stage2 注入完成：壳 Application 已接管并桥接原 Application');
       session.log.push(`[shell] stage2 灰度完整日志: ${stage2LogFile}`);
       stage2InjectSucceeded = true;
       } catch (e) {
