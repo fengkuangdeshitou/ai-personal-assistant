@@ -6170,16 +6170,66 @@ APP_ABI := armeabi-v7a arm64-v8a
 .end method
 
 .method protected attachBaseContext(Landroid/content/Context;)V
-    .locals 0
+    .locals 6
     invoke-super {p0, p1}, Landroid/app/Application;->attachBaseContext(Landroid/content/Context;)V
+    # 子进程检测：华为等设备对 ContentProvider 超时严苛（仅 5 秒）。
+    # 子进程（进程名包含 ":" 如 :core/:server/:pushcore）跳过 payload DEX 加载，
+    # 避免解密耗时阻塞 ContentProvider 初始化，导致超时崩溃。
+    # 主进程（进程名 == 包名）正常执行 install()。
+    const/4 v0, 0x0
+    :try_proc_check
+    const-string v1, "/proc/self/cmdline"
+    new-instance v2, Ljava/io/FileInputStream;
+    invoke-direct {v2, v1}, Ljava/io/FileInputStream;-><init>(Ljava/lang/String;)V
+    const/16 v3, 0x100
+    new-array v4, v3, [B
+    const/4 v5, 0x0
+    invoke-virtual {v2, v4, v5, v3}, Ljava/io/FileInputStream;->read([BII)I
+    move-result v3
+    invoke-virtual {v2}, Ljava/io/FileInputStream;->close()V
+    if-lez v3, :do_install
+    new-instance v2, Ljava/lang/String;
+    invoke-direct {v2, v4, v5, v3}, Ljava/lang/String;-><init>([BII)V
+    const-string v1, ":"
+    invoke-virtual {v2, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    move-result v0
+    :try_proc_end
+    .catch Ljava/lang/Throwable; {:try_proc_check .. :try_proc_end} :catch_proc
+    if-nez v0, :skip_install
+    :do_install
     invoke-static {p1}, L${stage2Path}/Stage2PayloadLoader;->install(Landroid/content/Context;)V
+    :skip_install
     return-void
+    :catch_proc
+    goto :do_install
 .end method
 
 .method public onCreate()V
-    .locals 4
+    .locals 6
     :try_start
     invoke-super {p0}, Landroid/app/Application;->onCreate()V
+    # 子进程跳过 createDelegate（与 attachBaseContext 保持一致）
+    const/4 v4, 0x0
+    :try_proc2
+    const-string v1, "/proc/self/cmdline"
+    new-instance v2, Ljava/io/FileInputStream;
+    invoke-direct {v2, v1}, Ljava/io/FileInputStream;-><init>(Ljava/lang/String;)V
+    const/16 v3, 0x80
+    new-array v5, v3, [B
+    const/4 v4, 0x0
+    invoke-virtual {v2, v5, v4, v3}, Ljava/io/FileInputStream;->read([BII)I
+    move-result v3
+    invoke-virtual {v2}, Ljava/io/FileInputStream;->close()V
+    if-lez v3, :main_proc
+    new-instance v2, Ljava/lang/String;
+    invoke-direct {v2, v5, v4, v3}, Ljava/lang/String;-><init>([BII)V
+    const-string v1, ":"
+    invoke-virtual {v2, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    move-result v4
+    :try_proc2_end
+    .catch Ljava/lang/Throwable; {:try_proc2 .. :try_proc2_end} :catch_proc2
+    if-nez v4, :done
+    :main_proc
     const-string v0, "${escapedApp}"
     invoke-virtual {v0}, Ljava/lang/String;->length()I
     move-result v1
@@ -6193,6 +6243,8 @@ APP_ABI := armeabi-v7a arm64-v8a
     :try_end
     .catch Ljava/lang/Throwable; {:try_start .. :try_end} :catch_all
     goto :ret
+    :catch_proc2
+    goto :main_proc
     :catch_all
     move-exception v0
     const-string v1, "onCreate"
