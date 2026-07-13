@@ -235,6 +235,8 @@ const SeafileManager: React.FC = () => {
 
   const [fixing, setFixing] = useState(false);
   const [fixSteps, setFixSteps] = useState<string[]>([]);
+  const [capturing, setCapturing] = useState(false);
+  const [captureResult, setCaptureResult] = useState<{ lines: string[]; logPath?: string; error?: string } | null>(null);
 
   // 日志面板：诊断区内联日志 or 底部日志卡片
   const [inlineLogContainer, setInlineLogContainer] = useState<string | null>(null);
@@ -318,6 +320,26 @@ const SeafileManager: React.FC = () => {
       }
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleCaptureSeahubError = async () => {
+    setCapturing(true);
+    setCaptureResult(null);
+    try {
+      const res = await api.post('/api/seafile/capture-seahub-error', {}, { timeout: 30000 });
+      if (res.data.success) {
+        setCaptureResult({ lines: res.data.lines || [], logPath: res.data.logPath });
+        setLogCardOpen(true);
+        setLogCardSource('seahub');
+      } else {
+        setCaptureResult({ lines: [], error: res.data.error || '未找到日志', logPath: '' });
+        message.warning(res.data.hint || res.data.error || '未找到 seahub.log');
+      }
+    } catch (e: any) {
+      message.error(`获取失败：${e?.message || '网络错误'}`);
+    } finally {
+      setCapturing(false);
     }
   };
 
@@ -494,6 +516,17 @@ const SeafileManager: React.FC = () => {
                   onClick={handleFix}
                 >
                   修复 MySQL 连接
+                </Button>
+              </Tooltip>
+              <Tooltip title="读取 seahub.log，显示 Seahub 启动失败的真实 Python 错误">
+                <Button
+                  icon={<FileTextOutlined />}
+                  type="primary"
+                  ghost
+                  loading={capturing}
+                  onClick={handleCaptureSeahubError}
+                >
+                  抓取 Seahub 错误
                 </Button>
               </Tooltip>
               <Button

@@ -3258,23 +3258,23 @@ app.post('/api/seafile/fix', async (_req, res) => {
     steps.push(`启动数据库容器 (${dbServiceNameEarly})...`);
     compose(`up -d ${dbServiceNameEarly}`);
 
-    // Step 3: 等待 MySQL 接受连接（最长 90 秒）
-    // 先从 docker compose ps 找到数据库服务名（db / mysql / mariadb 等任意命名）
+    // Step 3: 等待 MySQL 端口就绪（最长 60 秒）
+    // 使用 TCP 端口探测而非 mysqladmin ping（后者需要密码，会产生 Access denied 报错）
     let dbServiceName = 'db';
     try {
       const psOut = compose('ps -a --format "{{.Service}}|{{.Status}}"');
       const dbLine = psOut.split('\n').find(l => /db|mysql|mariadb/i.test(l.split('|')[0]));
       if (dbLine) dbServiceName = dbLine.split('|')[0].trim();
     } catch (_) {}
-    steps.push(`等待 ${dbServiceName} 就绪（最长 90 秒）...`);
+    steps.push(`等待 ${dbServiceName} 就绪（最长 60 秒）...`);
     let mysqlReady = false;
-    const deadline = Date.now() + 90000;
+    const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {
       try {
-        // 用 docker compose exec（自动匹配服务名，无论容器实际叫什么）
+        // 用 Python TCP 探测 3306 端口，不需要 MySQL 密码
         _execSync(
-          `docker compose exec -T ${dbServiceName} mysqladmin ping -h 127.0.0.1 --silent`,
-          { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 5000 }
+          `docker compose exec -T ${dbServiceName} python3 -c "import socket,sys; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',3306)); s.close(); print('OK')"`,
+          { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 8000 }
         );
         mysqlReady = true;
         break;
@@ -3431,6 +3431,58 @@ app.get('/api/seafile/internal-log', async (req, res) => {
   } catch (_) {}
 
   res.json({ success: false, error: `未找到 ${logName}.log（已搜索 ${SEAFILE_DIR} 下所有路径及容器内部）` });
+});
+
+// 捕获 seahub.sh 真实启动错误（在容器短暂存活窗口内 exec 执行并抓取输出）
+app.post('/api/seafile/capture-seahub-error', async (_req, res) => {
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  const compose = (args) => _execSync(`docker compose ${args}`, { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 30000 });
+
+  // 1. 先读宿主机上的 seahub.log（最可靠，不依赖容器在线）
+  const hostLogPaths = [
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),
+  ];
+  for (const logPath of hostLogPaths) {
+    if (fs.existsSync(logPath)) {
+      try {
+        const lines = fs.readFileSync(logPath, 'utf8').split('\n');
+        const last = lines.slice(-80).filter(Boolean);
+        return res.json({ success: true, source: 'seahub.log', logPath, lines: last });
+      } catch (_) {}
+    }
+  }
+  // find 兜底
+  try {
+    const found = _execSync(`find "${SEAFILE_DIR}" -name "seahub.log" 2>/dev/null | head -3`, { encoding: 'utf8', timeout: 8000, env: ENV }).trim();
+    if (found) {
+      const p = found.split('\n')[0];
+      const lines = fs.readFileSync(p, 'utf8').split('\n').slice(-80).filter(Boolean);
+      return res.json({ success: true, source: 'seahub.log', logPath: p, lines });
+    }
+  } catch (_) {}
+
+  // 2. 动态找容器名并 exec 读取 /shared/logs/seahub.log
+  let seafileContainer = 'seafile';
+  try {
+    const psOut = compose('ps -a --format "{{.Service}}|{{.Name}}"');
+    const line = psOut.split('\n').find(l => /^seafile\|/i.test(l));
+    if (line) seafileContainer = line.split('|')[1].trim();
+  } catch (_) {}
+
+  for (const logPath of ['/shared/logs/seahub.log', '/opt/seafile/logs/seahub.log']) {
+    try {
+      const out = _execSync(`docker exec "${seafileContainer}" tail -n 80 "${logPath}" 2>/dev/null`, { encoding: 'utf8', timeout: 8000, env: ENV });
+      if (out.trim()) return res.json({ success: true, source: 'docker-exec', logPath, container: seafileContainer, lines: out.split('\n').filter(Boolean) });
+    } catch (_) {}
+  }
+
+  return res.json({
+    success: false,
+    error: `未找到 seahub.log（已搜索 ${SEAFILE_DIR}/data/logs/ 和容器内 /shared/logs/）`,
+    hint: '请在服务器上运行: find ~/seafile -name seahub.log 2>/dev/null',
+  });
 });
 
 const SEAFDAV_CONF = '/Users/maiyou001/seafile/data/seafile/conf/seafdav.conf';
