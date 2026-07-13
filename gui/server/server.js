@@ -5512,8 +5512,8 @@ APP_ABI := armeabi-v7a arm64-v8a
     move-result-object v2
     if-eqz v2, :done
     iput-object v2, p0, L${shellAppPath};->mDelegate:Landroid/app/Application;
-    invoke-virtual {v2}, Landroid/app/Application;->onCreate()V
     invoke-static {p0}, L${stage2Path}/Stage2PayloadLoader;->preloadNativeLibs(Landroid/content/Context;)V
+    invoke-virtual {v2}, Landroid/app/Application;->onCreate()V
     :done
     :try_end
     .catch Ljava/lang/Throwable; {:try_start .. :try_end} :catch_all
