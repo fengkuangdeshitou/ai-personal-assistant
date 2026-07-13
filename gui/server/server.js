@@ -4302,14 +4302,83 @@ console.log('OK:' + payload.length);
     fs.writeFileSync(payloadScriptPath, payloadScript, 'utf8');
     session.progress = 15;
     const shellUnsignedApk = path.join(shellDir, 'shell-lite-unsigned.apk');
-    // Bug fix: previously this was `enableStage3StripClasses2 && !enableStage2Inject`,
-    // which meant stripping NEVER happened during payload build when stage2 was enabled.
-    // This relied entirely on stage3 to clean up, but stage3's provider-range logic could
-    // accidentally retain classes3-N, causing the plaintext DEX bug (seen in v4/v5/v8).
-    // Fix: always strip all business DEX during payload build when stage3 is requested.
     const stripDuringPayloadBuild = enableStage3StripClasses2;
     // U1: 提前生成 nativeSecret，payload 脚本加密和 SO 解密共用同一密钥
     const nativeSecret = crypto.randomBytes(32);
+
+    // ── 预处理步骤：直接向原始 Application 注入壳初始化，不替换 Application 类名 ──
+    // 这样加固后 Application 类名不变，避免 ClassCastException 和 TUtil.getT 等兼容问题
+    let preInjectSucceeded = false;
+    if (enableStage2Inject && originalApplication) {
+      try {
+        const preinjectDir = path.join(shellDir, 'preinject');
+        session.log.push(`[shell] 预处理：解码原始 APK 准备注入 Application`);
+        await execAsync(`java -jar "${apktoolJar}" d -f -s -o "${preinjectDir}" "${payloadSourceApk}"`, { timeout: 8 * 60 * 1000 });
+
+        // 查找 Application.smali（通常在 smali/ 目录，对应 classes.dex）
+        const appRelPath = originalApplication.replace(/\./g, '/') + '.smali';
+        let appSmaliPath = null;
+        const smaliRoots = fs.readdirSync(preinjectDir, { withFileTypes: true })
+          .filter(d => d.isDirectory() && /^smali(_classes\d+)?$/.test(d.name))
+          .map(d => d.name)
+          .sort();
+        for (const root of smaliRoots) {
+          const candidate = path.join(preinjectDir, root, appRelPath);
+          if (fs.existsSync(candidate)) { appSmaliPath = candidate; break; }
+        }
+
+        if (appSmaliPath) {
+          // 注入 Stage2PayloadLoader.install(context) 到 attachBaseContext 开头
+          let smaliContent = fs.readFileSync(appSmaliPath, 'utf8');
+          const installLine = `    invoke-static {p1}, L${stage2Path}/Stage2PayloadLoader;->install(Landroid/content/Context;)V`;
+          const attachRe = /(.method protected attachBaseContext\(Landroid\/content\/Context;\)V\n)([ \t]*\.locals \d+)/;
+          if (attachRe.test(smaliContent)) {
+            smaliContent = smaliContent.replace(attachRe, `$1$2\n${installLine}`);
+            session.log.push(`[shell] 预处理：已注入 attachBaseContext (${originalApplication})`);
+          } else if (smaliContent.includes('.method protected attachBaseContext')) {
+            // 方法存在但格式不同，尝试在方法开头注入
+            smaliContent = smaliContent.replace(
+              /(.method protected attachBaseContext\(Landroid\/content\/Context;\)V\n)/,
+              `$1${installLine}\n`
+            );
+            session.log.push(`[shell] 预处理：已注入 attachBaseContext（备用模式）`);
+          } else {
+            // attachBaseContext 不存在，新增
+            const newMethod = `\n.method protected attachBaseContext(Landroid/content/Context;)V\n    .locals 0\n${installLine}\n    invoke-super {p0, p1}, Landroid/app/Application;->attachBaseContext(Landroid/content/Context;)V\n    return-void\n.end method\n`;
+            smaliContent = smaliContent.replace(/\n# virtual methods\b/, newMethod + '\n# virtual methods');
+            if (!smaliContent.includes(installLine)) {
+              // 最后兜底：在文件末尾追加
+              smaliContent = smaliContent.trimEnd() + newMethod;
+            }
+            session.log.push(`[shell] 预处理：已新增 attachBaseContext (${originalApplication})`);
+          }
+          fs.writeFileSync(appSmaliPath, smaliContent, 'utf8');
+
+          // 将 Stage2PayloadLoader.smali 写入 Application 所在的同一 smali 目录
+          const appSmaliRoot = path.relative(preinjectDir, appSmaliPath).split(path.sep)[0];
+          const loaderSmaliDir = path.join(preinjectDir, appSmaliRoot, stage2Path);
+          fs.mkdirSync(loaderSmaliDir, { recursive: true });
+          // 写入精简版 Stage2PayloadLoader（仅包含 install 和辅助方法，不含 createDelegate）
+          // 完整版在 stage2 注入时会覆盖，这里确保 classes.dex 中有可被 attachBaseContext 调用的 install()
+          // 注意：这里写入的是占位版本，stage2 会用包含 JNI 解密的完整版覆盖
+          const placeholderLoader = `.class public L${stage2Path}/Stage2PayloadLoader;\n.super Ljava/lang/Object;\n\n.field private static sReady:Z\n\n.method public static install(Landroid/content/Context;)V\n    .locals 0\n    return-void\n.end method\n`;
+          fs.writeFileSync(path.join(loaderSmaliDir, 'Stage2PayloadLoader.smali'), placeholderLoader, 'utf8');
+          session.log.push(`[shell] 预处理：已写入占位 Stage2PayloadLoader 到 ${appSmaliRoot}`);
+
+          // 重建 APK（包含修改后的 Application 和占位 PayloadLoader）
+          const preinjectApk = path.join(shellDir, 'preinject-source.apk');
+          await execAsync(`java -jar "${apktoolJar}" b -o "${preinjectApk}" "${preinjectDir}"`, { timeout: 8 * 60 * 1000 });
+          payloadSourceApk = preinjectApk;
+          preInjectSucceeded = true;
+          session.log.push(`[shell] 预处理完成，使用注入后的 APK 构建 payload`);
+        } else {
+          session.log.push(`[shell] ⚠️ 预处理：未找到 ${originalApplication}.smali，跳过注入（将使用 Stage2ShellApplication 方案）`);
+        }
+      } catch (preErr) {
+        session.log.push(`[shell] ⚠️ 预处理失败，回退到 Stage2ShellApplication 方案: ${preErr.message?.split('\n')[0]}`);
+      }
+    }
+
     const { stdout: shellStdout } = await execAsync(
       `node "${payloadScriptPath}" "${payloadSourceApk}" "${shellUnsignedApk}" "${shellAssetsDir}" "${shellMetaFile}" "${shellBootstrapFile}" "${manifestPackage}" "${originalApplication}" "${stripDuringPayloadBuild ? '1' : '0'}" "${shellAppFqcn}" "${shellLoaderFqcn}" "${signerDigestForKey}" "${nativeSecret.toString('hex')}"`,
       { timeout: 10 * 60 * 1000 }
@@ -4341,10 +4410,13 @@ console.log('OK:' + payload.length);
       const shellAppClass = shellAppFqcn;
       if (appTagMatch) {
         let newAppTag = appTagMatch[0];
-        if (/android:name="[^"]*"/.test(newAppTag)) {
-          newAppTag = newAppTag.replace(/android:name="[^"]*"/, `android:name="${shellAppClass}"`);
-        } else {
-          newAppTag = newAppTag.replace('<application', `<application android:name="${shellAppClass}"`);
+        if (!preInjectSucceeded) {
+          // 预处理未成功：使用 Stage2ShellApplication 方案，替换 Application 类名
+          if (/android:name="[^"]*"/.test(newAppTag)) {
+            newAppTag = newAppTag.replace(/android:name="[^"]*"/, `android:name="${shellAppClass}"`);
+          } else {
+            newAppTag = newAppTag.replace('<application', `<application android:name="${shellAppClass}"`);
+          }
         }
         // P0: 强制关闭 debuggable，防止调试注入与内存抓取
         if (/android:debuggable="[^"]*"/.test(newAppTag)) {
@@ -5478,12 +5550,13 @@ APP_ABI := armeabi-v7a arm64-v8a
 
       fs.writeFileSync(path.join(smaliDir, 'Stage2PayloadLoader.smali'), loaderSmali, 'utf8');
 
-      // 壳 Application 使用随机包名下的 Stage2ShellApplication，避免与 payload 中的原始 Application 重名造成重复类问题
-      const shellAppPath = shellAppFqcn.replace(/\./g, '/');
-      const shellAppSmaliDir = path.join(injectDir, smaliRoot, ...shellAppFqcn.split('.').slice(0, -1));
-      fs.mkdirSync(shellAppSmaliDir, { recursive: true });
-      const shellAppSimpleName = shellAppFqcn.split('.').pop();
-      const shellSmali = `.class public L${shellAppPath};
+      if (!preInjectSucceeded) {
+        // 预处理未成功：使用 Stage2ShellApplication 方案（回退兼容）
+        const shellAppPath = shellAppFqcn.replace(/\./g, '/');
+        const shellAppSmaliDir = path.join(injectDir, smaliRoot, ...shellAppFqcn.split('.').slice(0, -1));
+        fs.mkdirSync(shellAppSmaliDir, { recursive: true });
+        const shellAppSimpleName = shellAppFqcn.split('.').pop();
+        const shellSmali = `.class public L${shellAppPath};
 .super Landroid/app/Application;
 
 .field private mDelegate:Landroid/app/Application;
@@ -5526,14 +5599,20 @@ APP_ABI := armeabi-v7a arm64-v8a
     return-void
 .end method
 `;
-      fs.writeFileSync(path.join(shellAppSmaliDir, `${shellAppSimpleName}.smali`), shellSmali, 'utf8');
+        fs.writeFileSync(path.join(shellAppSmaliDir, `${shellAppSimpleName}.smali`), shellSmali, 'utf8');
+        session.log.push(`[shell] stage2 使用回退方案: Stage2ShellApplication`);
+      } else {
+        session.log.push(`[shell] stage2 使用新方案: 原始 Application 已注入，无需 Stage2ShellApplication`);
+      }
 
       const buildCmd = `java -jar "${apktoolJar}" b -o "${shellRebuiltApk}" "${injectDir}"`;
       fs.appendFileSync(stage2LogFile, `\n[build.cmd] ${buildCmd}\n`, 'utf8');
       const buildResult = await execAsync(buildCmd, { timeout: 10 * 60 * 1000 });
       fs.appendFileSync(stage2LogFile, `[build.stdout]\n${buildResult.stdout || ''}\n[build.stderr]\n${buildResult.stderr || ''}\n`, 'utf8');
       fs.copyFileSync(shellRebuiltApk, shellUnsignedApk);
-      session.log.push('[shell] stage2 注入完成：壳 Application 已接管并桥接原 Application');
+      session.log.push(preInjectSucceeded
+        ? '[shell] stage2 注入完成：Application 直接注入（原始类名保留）'
+        : '[shell] stage2 注入完成：壳 Application 已接管并桥接原 Application');
       session.log.push(`[shell] stage2 灰度完整日志: ${stage2LogFile}`);
       stage2InjectSucceeded = true;
       } catch (e) {
