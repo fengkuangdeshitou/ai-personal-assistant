@@ -190,6 +190,9 @@ const SeafileManager: React.FC = () => {
   const [diagnoseResult, setDiagnoseResult] = useState<DiagnoseResult | null>(null);
   const [diagnoseOpen, setDiagnoseOpen] = useState(false);
 
+  const [fixing, setFixing] = useState(false);
+  const [fixSteps, setFixSteps] = useState<string[]>([]);
+
   // 日志面板：诊断区内联日志 or 底部日志卡片
   const [inlineLogContainer, setInlineLogContainer] = useState<string | null>(null);
   const [logCardOpen, setLogCardOpen] = useState(false);
@@ -271,6 +274,29 @@ const SeafileManager: React.FC = () => {
       }
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleFix = async () => {
+    setFixing(true);
+    setFixSteps(['正在执行修复流程...']);
+    setDiagnoseOpen(true);
+    try {
+      const res = await api.post('/api/seafile/fix', {}, { timeout: 120000 });
+      setFixSteps(res.data.steps || []);
+      if (res.data.success) {
+        message.success('修复完成，请等待约 30 秒后刷新状态');
+        setTimeout(() => fetchStatus(true), 30000);
+      } else {
+        message.error(`修复失败：${res.data.error || '未知错误'}`);
+      }
+      // 修复后重新诊断
+      setTimeout(handleDiagnose, 35000);
+    } catch (err: any) {
+      setFixSteps(prev => [...prev, `❌ 请求失败：${err?.message || '网络错误'}`]);
+      message.error(`修复请求失败：${err?.message || '网络错误'}`);
+    } finally {
+      setFixing(false);
     }
   };
 
@@ -416,6 +442,16 @@ const SeafileManager: React.FC = () => {
               >
                 自动诊断
               </Button>
+              <Tooltip title="MySQL 未就绪导致 Seahub 启动失败时使用：停止 seafile → 等待 MySQL 就绪 → 重启 seafile">
+                <Button
+                  icon={<MedicineBoxOutlined />}
+                  danger
+                  loading={fixing}
+                  onClick={handleFix}
+                >
+                  修复 MySQL 连接
+                </Button>
+              </Tooltip>
               <Button
                 icon={<FileTextOutlined />}
                 onClick={() => setLogCardOpen(v => !v)}
@@ -457,17 +493,49 @@ const SeafileManager: React.FC = () => {
                         showIcon
                         action={
                           !diagnoseResult.ok ? (
-                            <Button
-                              size="small"
-                              icon={<ReloadOutlined />}
-                              loading={actionLoading === 'restart'}
-                              onClick={() => handleAction('restart')}
-                            >
-                              一键重启
-                            </Button>
+                            <Space>
+                              {/* MySQL 连接失败时显示专项修复按钮 */}
+                              {diagnoseResult.checks.some(c => c.id === 'logs' && c.status === 'error' && /mysql|数据库/i.test(c.detail)) && (
+                                <Button
+                                  size="small"
+                                  type="primary"
+                                  danger
+                                  icon={<MedicineBoxOutlined />}
+                                  loading={fixing}
+                                  onClick={handleFix}
+                                >
+                                  修复 MySQL 连接
+                                </Button>
+                              )}
+                              <Button
+                                size="small"
+                                icon={<ReloadOutlined />}
+                                loading={actionLoading === 'restart'}
+                                onClick={() => handleAction('restart')}
+                              >
+                                重启
+                              </Button>
+                            </Space>
                           ) : undefined
                         }
                       />
+                      {/* 修复进度日志 */}
+                      {(fixing || fixSteps.length > 0) && (
+                        <div style={{
+                          background: '#0d1117', border: '1px solid #30363d', borderRadius: 6,
+                          padding: '10px 14px', fontFamily: 'monospace', fontSize: 12,
+                        }}>
+                          {fixSteps.map((s, i) => (
+                            <div key={i} style={{
+                              color: s.startsWith('✅') ? '#3fb950' : s.startsWith('❌') ? '#f85149' : s.startsWith('⚠️') ? '#d29922' : '#e6edf3',
+                              lineHeight: 1.7,
+                            }}>
+                              {s}
+                            </div>
+                          ))}
+                          {fixing && <div style={{ color: '#8b949e', marginTop: 4 }}>▌ 修复中，请稍候...</div>}
+                        </div>
+                      )}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {diagnoseResult.checks.map(check => (
                           <div key={check.id}>

@@ -3134,6 +3134,59 @@ app.get('/api/seafile/diagnose', async (_req, res) => {
   res.json({ success: true, ok: !hasError, summary, checks });
 });
 
+// Seafile 一键修复：停 seafile → 等 MySQL 就绪 → 重启 seafile
+// 根因：docker compose restart 时 MySQL 容器还没准备好接受连接，Seahub 连不上 db 直接失败
+app.post('/api/seafile/fix', async (_req, res) => {
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  const compose = (args) => _execSync(`docker compose ${args}`, { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 60000 });
+  const steps = [];
+
+  try {
+    // Step 1: 停止 seafile（保留 db / memcached 继续运行）
+    steps.push('停止 seafile 容器...');
+    try { compose('stop seafile'); } catch (_) {}
+
+    // Step 2: 确保 db 容器在运行
+    steps.push('启动 MySQL (db) 容器...');
+    compose('up -d db');
+
+    // Step 3: 等待 MySQL 接受连接（最长 90 秒）
+    steps.push('等待 MySQL 就绪（最长 90 秒）...');
+    let mysqlReady = false;
+    const deadline = Date.now() + 90000;
+    while (Date.now() < deadline) {
+      try {
+        // 尝试通过 mysqladmin ping 检测 MySQL 是否可用
+        _execSync(
+          'docker exec seafile-mysql mysqladmin ping -h 127.0.0.1 --silent 2>/dev/null || ' +
+          'docker exec seafile-db   mysqladmin ping -h 127.0.0.1 --silent 2>/dev/null',
+          { env: ENV, encoding: 'utf8', timeout: 5000 }
+        );
+        mysqlReady = true;
+        break;
+      } catch (_) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+    if (!mysqlReady) {
+      steps.push('⚠️ MySQL 90 秒内未就绪，仍尝试启动 seafile...');
+    } else {
+      steps.push('✅ MySQL 已就绪');
+    }
+
+    // Step 4: 启动 seafile
+    steps.push('启动 seafile 容器...');
+    compose('up -d seafile');
+    steps.push('✅ seafile 已启动，等待 Seahub 初始化（约 30 秒）后再访问页面');
+
+    res.json({ success: true, steps });
+  } catch (e) {
+    steps.push(`❌ 修复失败: ${e.message}`);
+    res.status(500).json({ success: false, steps, error: e.message });
+  }
+});
+
 // Seafile 容器日志查看
 app.get('/api/seafile/logs', async (req, res) => {
   const container = (req.query.container || 'seafile').replace(/[^a-zA-Z0-9_-]/g, '');
