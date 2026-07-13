@@ -4959,9 +4959,6 @@ APP_ABI := armeabi-v7a arm64-v8a
     new-instance v0, Ldalvik/system/DexClassLoader;
     invoke-direct {v0, v1, v2, v3, v4}, Ldalvik/system/DexClassLoader;-><init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V
     sput-object v0, L${stage2Path}/Stage2PayloadLoader;->sPayloadClassLoader:Ljava/lang/ClassLoader;
-    # 预加载已知的第三方 JNI 库，绕过 DexClassLoader native search path 限制
-    # 解决 android-gif-drawable 等 JNI 库在 DexClassLoader 上下文中静默失败的问题
-    invoke-static {p0, v3}, L${stage2Path}/Stage2PayloadLoader;->preloadNativeLibraries(Landroid/content/Context;Ljava/lang/String;)V
     invoke-static {p0, v0}, L${stage2Path}/Stage2PayloadLoader;->installGlobalClassLoader(Landroid/content/Context;Ljava/lang/ClassLoader;)V
     :try_end
     .catch Ljava/lang/Throwable; {:try_start .. :try_end} :catch_all
@@ -5139,6 +5136,8 @@ APP_ABI := armeabi-v7a arm64-v8a
     move-exception v0
     return-void
 .end method
+
+.method public static createDelegate(Ljava/lang/String;Landroid/content/Context;)Landroid/app/Application;
     .locals 8
     const/4 v0, 0x0
     :try_start
@@ -5626,6 +5625,10 @@ with zipfile.ZipFile(src_apk, 'r') as zin, zipfile.ZipFile(out_apk, 'w', zipfile
         if name == f'classes{shell_dex_num}.dex':
             new_name = 'classes2.dex'
         data = zin.read(name)
+        # 保持 .so 和 resources.arsc 为 STORED（不压缩）
+        # extractNativeLibs=false（Android 9+ 默认）时 .so 必须不压缩才能被系统加载
+        if name.endswith('.so') or name == 'resources.arsc':
+            item.compress_type = zipfile.ZIP_STORED
         if new_name == name:
             zout.writestr(item, data)
         else:
