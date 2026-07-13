@@ -4280,15 +4280,16 @@ for (const item of entries) {
   if (name.startsWith('META-INF/')) continue;
   if (lowerName.endsWith('.pem') || lowerName.endsWith('.key') || lowerName.endsWith('.p12') || lowerName.endsWith('.pfx') || lowerName.endsWith('.jks') || lowerName.endsWith('.keystore')) continue;
   if (lowerName.includes('private_key') || lowerName.includes('rsa_private') || lowerName.includes('pkcs8')) continue;
+  const originalMethod = item.header.method; // 0=STORED, 8=DEFLATED
   const data = item.getData();
   zout.addFile(name, data);
-  // Restore STORED (method=0) for resources.arsc and all .so files
-  // .so files MUST be uncompressed if the APK uses extractNativeLibs="false" (Android 9+ default)
-  // Compressing .so causes System.loadLibrary to fail silently on those devices
-  if (mustStored.has(name) || lowerName.endsWith('.so')) {
-    const e = zout.getEntry(name);
-    if (e) e.header.method = 0;
-  }
+  // Restore each entry's original compression method to avoid size bloat.
+  // resources.arsc must always be STORED per Android spec.
+  // .so files: preserve original method —
+  //   if original was STORED (extractNativeLibs=false), it stays STORED (correct);
+  //   if original was DEFLATED (extractNativeLibs=true), it stays DEFLATED (avoids ~50% size increase).
+  const e = zout.getEntry(name);
+  if (e) e.header.method = mustStored.has(name) ? 0 : originalMethod;
 }
 
 for (const entry of payload) {
@@ -5674,9 +5675,11 @@ with zipfile.ZipFile(src_apk, 'r') as zin, zipfile.ZipFile(out_apk, 'w', zipfile
         if name == f'classes{shell_dex_num}.dex':
             new_name = 'classes2.dex'
         data = zin.read(name)
-        # 保持 .so 和 resources.arsc 为 STORED（不压缩）
-        # extractNativeLibs=false（Android 9+ 默认）时 .so 必须不压缩才能被系统加载
-        if name.endswith('.so') or name == 'resources.arsc':
+        # resources.arsc 必须 STORED（Android 规范）
+        # .so 文件保持原始压缩方式，避免加固后体积增大约 50%：
+        #   原 APK 中为 STORED（extractNativeLibs=false）则保持 STORED；
+        #   原 APK 中为 DEFLATED（extractNativeLibs=true）则保持 DEFLATED。
+        if name == 'resources.arsc':
             item.compress_type = zipfile.ZIP_STORED
         if new_name == name:
             zout.writestr(item, data)
