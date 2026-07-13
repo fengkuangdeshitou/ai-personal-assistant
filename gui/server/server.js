@@ -4121,7 +4121,6 @@ app.post('/api/apk/reinforce', async (req, res) => {
       const pkgSeed = crypto.createHash('sha1')
         .update((manifestPackage || 'default') + crypto.randomBytes(4).toString('hex'))
         .digest('hex');
-      // Java 标识符不能以数字开头 — 将首位数字替换为对应字母 (0→a, 1→b, ... 9→j)
       const safeIdent = (s) => s.replace(/^[0-9]/, d => String.fromCharCode(97 + parseInt(d, 10)));
       const seg1 = safeIdent(pkgSeed.slice(0, 6));
       const seg2 = safeIdent(pkgSeed.slice(6, 10));
@@ -4971,6 +4970,50 @@ APP_ABI := armeabi-v7a arm64-v8a
     return-void
 .end method
 
+.method private static preloadNativeLibs(Landroid/content/Context;)V
+    .locals 6
+    :pn_try
+    invoke-virtual {p0}, Landroid/content/Context;->getApplicationInfo()Landroid/content/pm/ApplicationInfo;
+    move-result-object v0
+    iget-object v1, v0, Landroid/content/pm/ApplicationInfo;->nativeLibraryDir:Ljava/lang/String;
+    if-eqz v1, :pn_done
+    new-instance v0, Ljava/io/File;
+    invoke-direct {v0, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v0}, Ljava/io/File;->listFiles()[Ljava/io/File;
+    move-result-object v0
+    if-eqz v0, :pn_done
+    array-length v1, v0
+    const/4 v2, 0x0
+    const-string v4, ".so"
+    :pn_loop
+    if-ge v2, v1, :pn_done
+    aget-object v3, v0, v2
+    invoke-virtual {v3}, Ljava/io/File;->getName()Ljava/lang/String;
+    move-result-object v5
+    invoke-virtual {v5, v4}, Ljava/lang/String;->endsWith(Ljava/lang/String;)Z
+    move-result v5
+    if-eqz v5, :pn_next
+    invoke-virtual {v3}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v3
+    :pn_load_try
+    invoke-static {v3}, Ljava/lang/System;->load(Ljava/lang/String;)V
+    :pn_load_end
+    .catch Ljava/lang/Throwable; {:pn_load_try .. :pn_load_end} :pn_load_catch
+    goto :pn_next
+    :pn_load_catch
+    move-exception v3
+    :pn_next
+    add-int/lit8 v2, v2, 0x1
+    goto :pn_loop
+    :pn_done
+    :pn_try_end
+    .catch Ljava/lang/Throwable; {:pn_try .. :pn_try_end} :pn_catch
+    return-void
+    :pn_catch
+    move-exception v0
+    return-void
+.end method
+
 .method private static loadPayloadDexPath(Landroid/content/Context;Landroid/content/res/AssetManager;Ljava/lang/String;Ljava/io/File;I)Ljava/lang/String;
     .locals 10
     :try_start
@@ -5136,8 +5179,6 @@ APP_ABI := armeabi-v7a arm64-v8a
     move-exception v0
     return-void
 .end method
-
-.method public static createDelegate(Ljava/lang/String;Landroid/content/Context;)Landroid/app/Application;
     .locals 8
     const/4 v0, 0x0
     :try_start
@@ -5478,10 +5519,13 @@ APP_ABI := armeabi-v7a arm64-v8a
 
       fs.writeFileSync(path.join(smaliDir, 'Stage2PayloadLoader.smali'), loaderSmali, 'utf8');
 
-      const shellSmali = `.class public L${stage2Path}/Stage2ShellApplication;
+      // 壳 Application 使用随机包名下的 Stage2ShellApplication，避免与 payload 中的原始 Application 重名造成重复类问题
+      const shellAppPath = shellAppFqcn.replace(/\./g, '/');
+      const shellAppSmaliDir = path.join(injectDir, smaliRoot, ...shellAppFqcn.split('.').slice(0, -1));
+      fs.mkdirSync(shellAppSmaliDir, { recursive: true });
+      const shellAppSimpleName = shellAppFqcn.split('.').pop();
+      const shellSmali = `.class public L${shellAppPath};
 .super Landroid/app/Application;
-
-.field private static final ORIGINAL_APP:Ljava/lang/String; = "${escapedApp}"
 
 .field private mDelegate:Landroid/app/Application;
 
@@ -5509,7 +5553,7 @@ APP_ABI := armeabi-v7a arm64-v8a
     invoke-static {v0, p0}, L${stage2Path}/Stage2PayloadLoader;->createDelegate(Ljava/lang/String;Landroid/content/Context;)Landroid/app/Application;
     move-result-object v2
     if-eqz v2, :done
-    iput-object v2, p0, L${stage2Path}/Stage2ShellApplication;->mDelegate:Landroid/app/Application;
+    iput-object v2, p0, L${shellAppPath};->mDelegate:Landroid/app/Application;
     invoke-virtual {v2}, Landroid/app/Application;->onCreate()V
     :done
     :try_end
@@ -5523,7 +5567,7 @@ APP_ABI := armeabi-v7a arm64-v8a
     return-void
 .end method
 `;
-      fs.writeFileSync(path.join(smaliDir, 'Stage2ShellApplication.smali'), shellSmali, 'utf8');
+      fs.writeFileSync(path.join(shellAppSmaliDir, `${shellAppSimpleName}.smali`), shellSmali, 'utf8');
 
       const buildCmd = `java -jar "${apktoolJar}" b -o "${shellRebuiltApk}" "${injectDir}"`;
       fs.appendFileSync(stage2LogFile, `\n[build.cmd] ${buildCmd}\n`, 'utf8');
@@ -5540,6 +5584,9 @@ APP_ABI := armeabi-v7a arm64-v8a
         try { fs.appendFileSync(stage2LogFile, `\n[error]\n${stage2Err}\n`, 'utf8'); } catch (_) {}
         session.log.push(`[shell] stage2 注入失败，完整日志: ${stage2ErrFile}`);
         session.log.push(`[shell] stage2 灰度完整日志: ${stage2LogFile}`);
+        // 把 apktool 关键错误行显示在终端日志里，方便直接定位
+        const errLines = stage2Err.split('\n').filter(l => l.includes('ERROR') || l.includes('error') || l.includes('FATAL') || l.includes('Exception') || l.includes('smali'));
+        errLines.slice(0, 5).forEach(l => session.log.push(`[shell] apktool: ${l.trim()}`));
         session.log.push(`[shell] stage2 注入摘要: ${stage2Err.split('\n')[0]}`);
         throw new Error(`stage2 inject failed: ${stage2Err.split('\n')[0]}`);
       }
