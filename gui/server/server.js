@@ -2918,17 +2918,48 @@ async function runDockerCompose(args) {
 app.get('/api/seafile/status', async (_req, res) => {
   try {
     const { execSync } = await import('child_process');
-    const output = execSync(
-      'docker ps -a --filter "name=seafile" --format "{{.Names}}|{{.Status}}|{{.Image}}|{{.Size}}"',
-      { env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' }, encoding: 'utf8' }
-    );
-    const containers = output.trim().split('\n').filter(Boolean).map(line => {
-      const [name, status, image, sizeStr] = line.split('|');
-      // sizeStr 格式: "16.8MB (virtual 1.49GB)"，取括号内的 virtual 值
-      const virtualMatch = sizeStr?.match(/virtual\s+([\d.]+\s*\w+)/i);
-      const imageSize = virtualMatch ? virtualMatch[1] : '';
-      return { name, status, image, running: status?.startsWith('Up'), imageSize };
-    });
+    const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+
+    // 用 docker compose ps 获取该 compose 项目下所有服务容器（含 db、memcached 等任意命名）
+    let containers = [];
+    try {
+      const psOut = execSync(
+        'docker compose ps -a --format "{{.Name}}|{{.Status}}|{{.Image}}"',
+        { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 10000 }
+      );
+      containers = psOut.trim().split('\n').filter(Boolean).map(line => {
+        const [name, status, image] = line.split('|');
+        return { name: name?.trim(), status: status?.trim(), image: image?.trim(), running: status?.trim().startsWith('Up') };
+      });
+    } catch (_) {
+      // 回退：docker ps 过滤项目名（兼容旧版 compose）
+      const fallback = execSync(
+        `docker ps -a --filter "label=com.docker.compose.project.working_dir=${SEAFILE_DIR}" --format "{{.Names}}|{{.Status}}|{{.Image}}"`,
+        { env: ENV, encoding: 'utf8', timeout: 10000 }
+      );
+      containers = fallback.trim().split('\n').filter(Boolean).map(line => {
+        const [name, status, image] = line.split('|');
+        return { name: name?.trim(), status: status?.trim(), image: image?.trim(), running: status?.trim().startsWith('Up') };
+      });
+    }
+
+    // 补充每个容器的镜像大小
+    try {
+      const sizeOut = execSync(
+        'docker ps -a --format "{{.Names}}|{{.Size}}"',
+        { env: ENV, encoding: 'utf8', timeout: 8000 }
+      );
+      const sizeMap = {};
+      sizeOut.trim().split('\n').filter(Boolean).forEach(line => {
+        const [n, s] = line.split('|');
+        if (n) {
+          const m = s?.match(/virtual\s+([\d.]+\s*\w+)/i);
+          sizeMap[n.trim()] = m ? m[1] : '';
+        }
+      });
+      containers = containers.map(c => ({ ...c, imageSize: sizeMap[c.name] || '' }));
+    } catch (_) {}
+
     const allRunning = containers.length > 0 && containers.every(c => c.running);
 
     // 获取局域网 IP
@@ -2936,44 +2967,30 @@ app.get('/api/seafile/status', async (_req, res) => {
     let localIp = '';
     for (const iface of Object.values(nets)) {
       for (const addr of (iface || [])) {
-        if (addr.family === 'IPv4' && !addr.internal) {
-          localIp = addr.address;
-          break;
-        }
+        if (addr.family === 'IPv4' && !addr.internal) { localIp = addr.address; break; }
       }
       if (localIp) break;
     }
 
-    // 统计各容器关联的磁盘占用
+    // 磁盘占用：按容器名关键词匹配数据目录
     const duSize = (p) => {
       try {
-        return execSync(`du -sh "${p}" 2>/dev/null | cut -f1`, {
-          env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' },
-          encoding: 'utf8', timeout: 8000,
-        }).trim();
+        return execSync(`du -sh "${p}" 2>/dev/null | cut -f1`, { env: ENV, encoding: 'utf8', timeout: 8000 }).trim();
       } catch (_) { return ''; }
     };
-    // 容器名 → 数据目录映射
-    const containerDiskMap = {
-      seafile:           duSize(`${SEAFILE_DIR}/data/seafile/seafile-data`),
-      'seafile-mysql':   duSize(`${SEAFILE_DIR}/mysql`),
-      'seafile-memcached': '',
-    };
-    // 每个容器附上镜像大小和数据大小
+    const diskRules = [
+      { keyword: /seafile(?!.*mysql|.*db|.*memcach)/i, path: `${SEAFILE_DIR}/data/seafile/seafile-data` },
+      { keyword: /mysql|mariadb|\bdb\b/i,              path: `${SEAFILE_DIR}/mysql` },
+    ];
     const containersWithDisk = containers.map(c => {
-      // 按最长 key 优先匹配，避免 "seafile" 覆盖 "seafile-mysql"
-      const matchKey = Object.keys(containerDiskMap)
-        .sort((a, b) => b.length - a.length)
-        .find(k => c.name.includes(k));
-      return { ...c, diskUsage: matchKey ? containerDiskMap[matchKey] : '' };
+      const rule = diskRules.find(r => r.keyword.test(c.name));
+      return { ...c, diskUsage: rule ? duSize(rule.path) : '' };
     });
+
     // 镜像总占用
     let imagesSize = '';
     try {
-      const out = execSync(
-        'docker system df --format "{{.Type}}|{{.Size}}" 2>/dev/null',
-        { env: { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' }, encoding: 'utf8', timeout: 5000 }
-      );
+      const out = execSync('docker system df --format "{{.Type}}|{{.Size}}" 2>/dev/null', { env: ENV, encoding: 'utf8', timeout: 5000 });
       const line = out.split('\n').find(l => l.startsWith('Images|'));
       imagesSize = line ? line.split('|')[1] : '';
     } catch (_) {}
@@ -3017,6 +3034,620 @@ app.post('/api/seafile/restart', async (_req, res) => {
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
+});
+
+// Seafile 自动诊断
+app.get('/api/seafile/diagnose', async (_req, res) => {
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  const safeExec = (cmd, opts = {}) => {
+    try { return { ok: true, out: _execSync(cmd, { encoding: 'utf8', timeout: 10000, env: ENV, ...opts }) }; }
+    catch (e) { return { ok: false, out: e.stderr || e.stdout || e.message || '' }; }
+  };
+
+  const checks = [];
+  let hasError = false;
+
+  // 1. Docker 守护进程
+  const dockerInfo = safeExec('docker info');
+  if (!dockerInfo.ok) {
+    checks.push({ id: 'docker', label: 'Docker 服务', status: 'error', detail: 'Docker 未运行或无权限', suggestion: '请启动 Docker Desktop 后重试' });
+    return res.json({ success: true, ok: false, summary: 'Docker 未运行，无法继续诊断', checks });
+  }
+  checks.push({ id: 'docker', label: 'Docker 服务', status: 'ok', detail: 'Docker 守护进程正在运行' });
+
+  // 2. 各容器状态（用 docker compose ps 获取该项目所有服务，包括 db/mysql 等任意命名）
+  let composeServices = [];
+  try {
+    const composePs = _execSync(
+      'docker compose ps -a --format "{{.Service}}|{{.Name}}|{{.Status}}"',
+      { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 10000 }
+    );
+    composeServices = composePs.trim().split('\n').filter(Boolean).map(line => {
+      const [service, name, status] = line.split('|');
+      return {
+        service: service?.trim(),
+        name: name?.trim(),
+        status: status?.trim(),
+        running: status?.trim().startsWith('Up'),
+      };
+    });
+  } catch (_) {}
+
+  if (composeServices.length === 0) {
+    checks.push({ id: 'ctr_all', label: '所有容器', status: 'error', detail: '未找到任何 Seafile 相关容器', suggestion: `在 ${SEAFILE_DIR} 执行 docker compose up -d` });
+    hasError = true;
+  } else {
+    for (const svc of composeServices) {
+      const isDb = /db|mysql|mariadb/i.test(svc.service);
+      checks.push({
+        id: `ctr_${svc.service}`,
+        label: `${svc.service}${isDb ? '（数据库）' : ''}`,
+        status: svc.running ? 'ok' : 'error',
+        detail: svc.status || '状态未知',
+        suggestion: svc.running ? undefined : '容器已停止，建议点击"修复 MySQL 连接"或"重启"',
+      });
+      if (!svc.running) hasError = true;
+    }
+  }
+
+  // 3. Seafile 容器日志中的错误关键词（动态找 seafile 主服务容器名）
+  const seafileSvc = composeServices.find(s => /^seafile$/i.test(s.service)) || composeServices.find(s => /seafile/i.test(s.service));
+  const seafileContainerName = seafileSvc?.name || 'seafile';
+  const logsResult = safeExec(`docker logs --tail=120 "${seafileContainerName}" 2>&1`);
+  if (logsResult.ok || logsResult.out) {
+    const logText = logsResult.out || '';
+    const errorPatterns = [
+      { re: /Can't connect.*MySQL|Connection refused.*3306/i, msg: '无法连接 MySQL 数据库' },
+      { re: /OperationalError/i, msg: '数据库操作异常' },
+      { re: /unicorn.*error|worker.*exit/i, msg: 'Seahub unicorn 工作进程崩溃' },
+      { re: /Traceback \(most recent/i, msg: 'Python 异常（Traceback）' },
+      { re: /Permission denied/i, msg: '文件权限不足' },
+      { re: /No space left on device/i, msg: '磁盘空间不足' },
+      { re: /Address already in use/i, msg: '端口被占用' },
+    ];
+    const found = errorPatterns.filter(p => p.re.test(logText)).map(p => p.msg);
+    if (found.length > 0) {
+      checks.push({ id: 'logs', label: 'Seafile 容器日志', status: 'error', detail: found.join('；'), suggestion: '运行 docker logs seafile 查看完整日志' });
+      hasError = true;
+    } else {
+      checks.push({ id: 'logs', label: 'Seafile 容器日志', status: 'ok', detail: '近 120 行日志中未发现明显错误' });
+    }
+  } else {
+    checks.push({ id: 'logs', label: 'Seafile 容器日志', status: 'warn', detail: '日志读取失败（容器可能不存在）' });
+  }
+
+  // 4. 磁盘空间
+  const dfResult = safeExec('df -h /');
+  if (dfResult.ok) {
+    const line = dfResult.out.trim().split('\n').find(l => /\d+%/.test(l)) || '';
+    const pctMatch = line.match(/(\d+)%/);
+    const pct = pctMatch ? parseInt(pctMatch[1]) : 0;
+    if (pct >= 95) {
+      checks.push({ id: 'disk', label: '磁盘空间', status: 'error', detail: `使用率 ${pct}%，剩余空间严重不足`, suggestion: '清理 Docker 镜像或数据后重试：docker system prune' });
+      hasError = true;
+    } else if (pct >= 80) {
+      checks.push({ id: 'disk', label: '磁盘空间', status: 'warn', detail: `使用率 ${pct}%，建议关注磁盘剩余空间` });
+    } else {
+      checks.push({ id: 'disk', label: '磁盘空间', status: 'ok', detail: `使用率 ${pct}%，空间充足` });
+    }
+  } else {
+    checks.push({ id: 'disk', label: '磁盘空间', status: 'warn', detail: '检测失败' });
+  }
+
+  // 4.5 残留 PID 文件检测（seahub.pid / gunicorn.pid 在数据卷中持久化导致重启失败）
+  const pidSearchDirs = [
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'seafile-server-latest', 'runtime'),
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'seafile-server-11.0.13', 'runtime'),
+  ];
+  let stalePidFiles = [];
+  for (const dir of pidSearchDirs) {
+    try {
+      if (fs.existsSync(dir)) {
+        stalePidFiles.push(...fs.readdirSync(dir).filter(f => f.endsWith('.pid')).map(f => path.join(dir, f)));
+      }
+    } catch (_) {}
+  }
+  try {
+    const found = _execSync(
+      `find "${path.join(SEAFILE_DIR, 'data')}" -name "*.pid" -path "*/runtime/*" 2>/dev/null`,
+      { encoding: 'utf8', timeout: 5000, env: ENV }
+    ).trim();
+    if (found) stalePidFiles.push(...found.split('\n').filter(Boolean));
+  } catch (_) {}
+  stalePidFiles = [...new Set(stalePidFiles)];
+  if (stalePidFiles.length > 0) {
+    checks.push({
+      id: 'pid',
+      label: '残留 PID 文件',
+      status: 'error',
+      detail: `发现 ${stalePidFiles.length} 个残留 PID 文件：${stalePidFiles.map(p => path.basename(p)).join(', ')}`,
+      suggestion: '这是 Seahub 重启失败的根因！点击"修复 MySQL 连接"按钮一键清理并重启',
+    });
+    hasError = true;
+  } else {
+    checks.push({ id: 'pid', label: '残留 PID 文件', status: 'ok', detail: '未发现残留 PID 文件' });
+  }
+
+  // 5. HTTP 可达性（Nginx → Seahub）
+  const curlResult = safeExec('curl -s -o /dev/null -w "%{http_code}" --max-time 6 http://localhost/');
+  const httpCode = (curlResult.out || '').trim();
+  if (['200', '302', '301'].includes(httpCode)) {
+    checks.push({ id: 'http', label: 'Web 访问（HTTP 80）', status: 'ok', detail: `Seahub 响应正常（HTTP ${httpCode}）` });
+  } else if (httpCode === '502' || httpCode === '503') {
+    checks.push({ id: 'http', label: 'Web 访问（HTTP 80）', status: 'error', detail: `Nginx 返回 ${httpCode}，Seahub 尚未就绪或已崩溃`, suggestion: '点击"重启"按钮，等待约 60 秒后再访问' });
+    hasError = true;
+  } else if (httpCode) {
+    checks.push({ id: 'http', label: 'Web 访问（HTTP 80）', status: 'warn', detail: `HTTP 响应码 ${httpCode}` });
+  } else {
+    checks.push({ id: 'http', label: 'Web 访问（HTTP 80）', status: 'error', detail: '无法连接 localhost:80，Nginx 可能未启动', suggestion: '点击"重启"按钮重新拉起服务' });
+    hasError = true;
+  }
+
+  // 汇总
+  const errCount = checks.filter(c => c.status === 'error').length;
+  const warnCount = checks.filter(c => c.status === 'warn').length;
+  let summary = '所有检查通过，Seafile 运行正常';
+  if (errCount > 0) summary = `发现 ${errCount} 个错误${warnCount > 0 ? `、${warnCount} 个警告` : ''}，建议重启 Seafile 并查看日志`;
+  else if (warnCount > 0) summary = `发现 ${warnCount} 个警告，Seafile 整体可用`;
+
+  res.json({ success: true, ok: !hasError, summary, checks });
+});
+
+// Seafile 一键修复：停 seafile → 等 MySQL 就绪 → 重启 seafile
+// 根因：docker compose restart 时 MySQL 容器还没准备好接受连接，Seahub 连不上 db 直接失败
+app.post('/api/seafile/fix', async (_req, res) => {
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  const compose = (args) => _execSync(`docker compose ${args}`, { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 60000 });
+  const steps = [];
+
+  try {
+    // 先通过 docker compose ps 确定实际的服务名（seafile 主服务 / db 服务）
+    let seafileServiceName = 'seafile';
+    let dbServiceNameEarly = 'db';
+    try {
+      const psOut = compose('ps -a --format "{{.Service}}|{{.Status}}"');
+      for (const line of psOut.split('\n').filter(Boolean)) {
+        const svc = line.split('|')[0].trim();
+        if (/^seafile$/i.test(svc)) seafileServiceName = svc;
+        if (/db|mysql|mariadb/i.test(svc)) dbServiceNameEarly = svc;
+      }
+    } catch (_) {}
+
+    // Step 1: 停止 seafile 主服务（保留 db / memcached 继续运行）
+    steps.push(`停止 ${seafileServiceName} 容器...`);
+    try { compose(`stop ${seafileServiceName}`); } catch (_) {}
+
+    // Step 1.5: 清理残留 PID 文件（根因：seahub.pid/gunicorn.pid 在数据卷中持久化，
+    // 容器异常退出后不会自动清除，导致下次 seahub.sh start 认为进程已在运行而直接退出）
+    steps.push('清理残留 PID 文件（seahub.pid / gunicorn.pid）...');
+    const pidCleaned = [];
+    const pidSearchDirs = [
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'seafile-server-latest', 'runtime'),
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'seafile-server-11.0.13', 'runtime'),
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'seafile-server-11.0.12', 'runtime'),
+    ];
+    for (const dir of pidSearchDirs) {
+      if (fs.existsSync(dir)) {
+        for (const f of fs.readdirSync(dir)) {
+          if (f.endsWith('.pid')) {
+            try {
+              fs.unlinkSync(path.join(dir, f));
+              pidCleaned.push(f);
+            } catch (_) {}
+          }
+        }
+      }
+    }
+    // 也尝试用 find 扫描（兼容其他版本号路径）
+    try {
+      const found = _execSync(
+        `find "${path.join(SEAFILE_DIR, 'data')}" -name "*.pid" -path "*/runtime/*" 2>/dev/null`,
+        { encoding: 'utf8', timeout: 5000, env: ENV }
+      ).trim();
+      for (const pidFile of found.split('\n').filter(Boolean)) {
+        try { fs.unlinkSync(pidFile); pidCleaned.push(path.basename(pidFile)); } catch (_) {}
+      }
+    } catch (_) {}
+    steps.push(pidCleaned.length > 0
+      ? `✅ 已删除 PID 文件：${[...new Set(pidCleaned)].join(', ')}`
+      : '✅ 未发现残留 PID 文件（或已在容器内，将在容器启动时自动处理）');
+
+    // Step 2: 确保数据库容器在运行
+    steps.push(`启动数据库容器 (${dbServiceNameEarly})...`);
+    compose(`up -d ${dbServiceNameEarly}`);
+
+    // Step 3: 等待 MySQL 端口就绪（最长 60 秒）
+    // 使用 TCP 端口探测而非 mysqladmin ping（后者需要密码，会产生 Access denied 报错）
+    let dbServiceName = 'db';
+    try {
+      const psOut = compose('ps -a --format "{{.Service}}|{{.Status}}"');
+      const dbLine = psOut.split('\n').find(l => /db|mysql|mariadb/i.test(l.split('|')[0]));
+      if (dbLine) dbServiceName = dbLine.split('|')[0].trim();
+    } catch (_) {}
+    steps.push(`等待 ${dbServiceName} 就绪（最长 60 秒）...`);
+    let mysqlReady = false;
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      try {
+        // 用 Python TCP 探测 3306 端口，不需要 MySQL 密码
+        _execSync(
+          `docker compose exec -T ${dbServiceName} python3 -c "import socket,sys; s=socket.socket(); s.settimeout(3); s.connect(('127.0.0.1',3306)); s.close(); print('OK')"`,
+          { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 8000 }
+        );
+        mysqlReady = true;
+        break;
+      } catch (_) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+    if (!mysqlReady) {
+      steps.push('⚠️ MySQL 90 秒内未就绪，仍尝试启动 seafile...');
+    } else {
+      steps.push('✅ MySQL 已就绪');
+    }
+
+    // Step 4: 启动 seafile 主服务
+    steps.push(`启动 ${seafileServiceName} 容器...`);
+    compose(`up -d ${seafileServiceName}`);
+    steps.push('✅ seafile 已启动，等待 Seahub 初始化（约 30 秒）后再访问页面');
+
+    // 等待 10 秒后读取 seahub.log，帮助用户查看是否仍有错误
+    await new Promise(r => setTimeout(r, 10000));
+    let seahubLogTail = [];
+    for (const logPath of [
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),
+      path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
+    ]) {
+      if (fs.existsSync(logPath)) {
+        try {
+          const lines = fs.readFileSync(logPath, 'utf8').split('\n');
+          seahubLogTail = lines.slice(-30).filter(Boolean);
+          break;
+        } catch (_) {}
+      }
+    }
+    if (seahubLogTail.length > 0) {
+      // 找最后一个错误
+      const errLines = seahubLogTail.filter(l => /error|exception|traceback|critical/i.test(l));
+      if (errLines.length > 0) {
+        steps.push(`⚠️ seahub.log 最新错误（请查看「Seahub 日志」了解详情）：`);
+        steps.push(...errLines.slice(-5).map(l => `    ${l.trim()}`));
+      } else {
+        steps.push('✅ seahub.log 未发现明显错误，Seahub 可能正在初始化中...');
+      }
+    }
+
+    res.json({ success: true, steps, seahubLogTail });
+  } catch (e) {
+    steps.push(`❌ 修复失败: ${e.message}`);
+    res.status(500).json({ success: false, steps, error: e.message });
+  }
+});
+
+// Seafile 容器日志查看（docker logs）
+app.get('/api/seafile/logs', async (req, res) => {
+  const container = (req.query.container || 'seafile').replace(/[^a-zA-Z0-9_-]/g, '');
+  const tail = Math.min(parseInt(req.query.tail) || 200, 1000);
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  try {
+    const out = _execSync(`docker logs --tail=${tail} --timestamps "${container}" 2>&1`, {
+      encoding: 'utf8', timeout: 15000, env: ENV,
+    });
+    const lines = out.split('\n');
+    res.json({ success: true, container, tail, lines, total: lines.length });
+  } catch (e) {
+    res.json({ success: false, error: e.message });
+  }
+});
+
+// 读取容器内部日志文件（seahub.log / seafile.log 等 docker logs 看不到的日志）
+// 优先从宿主机直接读取（容器可能快速重启，docker exec 时机不可靠）
+const LOG_HOST_PATHS = {
+  // seafileltd/seafile-mc: /shared/seafile/logs/ → host SEAFILE_DIR/data/seafile/logs/
+  // /shared/logs/ → host SEAFILE_DIR/data/logs/
+  seahub: [
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),  // 确认路径
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
+  ],
+  seafile: [
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seafile.log'),
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seafile.log'),
+  ],
+  ccnet: [
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'ccnet.log'),
+    path.join(SEAFILE_DIR, 'data', 'logs', 'ccnet.log'),
+  ],
+  seafdav: [
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seafdav.log'),
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seafdav.log'),
+  ],
+};
+// 容器内路径（作为 docker exec 回退）
+const LOG_CONTAINER_PATHS = {
+  seahub:  ['/shared/logs/seahub.log',  '/opt/seafile/logs/seahub.log'],
+  seafile: ['/shared/logs/seafile.log', '/opt/seafile/logs/seafile.log'],
+  ccnet:   ['/shared/logs/ccnet.log',   '/opt/seafile/logs/ccnet.log'],
+  seafdav: ['/shared/logs/seafdav.log', '/opt/seafile/logs/seafdav.log'],
+};
+
+app.get('/api/seafile/internal-log', async (req, res) => {
+  const logName = (req.query.log || 'seahub').replace(/[^a-z]/g, '');
+  const tail = Math.min(parseInt(req.query.tail) || 300, 2000);
+  const hostPaths = LOG_HOST_PATHS[logName];
+  const containerPaths = LOG_CONTAINER_PATHS[logName];
+  if (!hostPaths) return res.json({ success: false, error: `未知日志类型: ${logName}` });
+
+  // 方案1：直接从宿主机文件系统读取（最可靠，容器无需在线）
+  for (const logPath of hostPaths) {
+    if (fs.existsSync(logPath)) {
+      try {
+        const all = fs.readFileSync(logPath, 'utf8');
+        const lines = all.split('\n');
+        const slice = lines.slice(-tail);
+        return res.json({ success: true, logPath, source: 'host', tail, lines: slice, totalLines: lines.length });
+      } catch (_) {}
+    }
+  }
+
+  // 方案2：docker exec 读取（容器需在线）
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  let containerName = 'seafile';
+  try {
+    const psOut = _execSync(
+      'docker compose ps -a --format "{{.Service}}|{{.Name}}"',
+      { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 8000 }
+    );
+    const line = psOut.split('\n').find(l => /^seafile\|/i.test(l));
+    if (line) containerName = line.split('|')[1].trim();
+  } catch (_) {}
+
+  for (const logPath of containerPaths) {
+    try {
+      const out = _execSync(
+        `docker exec "${containerName}" tail -n ${tail} "${logPath}" 2>/dev/null`,
+        { encoding: 'utf8', timeout: 10000, env: ENV }
+      );
+      if (out.trim()) {
+        return res.json({ success: true, logPath, source: 'container', container: containerName, tail, lines: out.split('\n') });
+      }
+    } catch (_) {}
+  }
+
+  // 方案3：自动搜索宿主机上的所有 seahub.log
+  try {
+    const found = _execSync(
+      `find "${SEAFILE_DIR}" -name "${logName}.log" 2>/dev/null | head -5`,
+      { encoding: 'utf8', timeout: 8000, env: ENV }
+    ).trim();
+    if (found) {
+      const firstPath = found.split('\n')[0];
+      const all = fs.readFileSync(firstPath, 'utf8');
+      const lines = all.split('\n');
+      return res.json({ success: true, logPath: firstPath, source: 'host-search', tail, lines: lines.slice(-tail), totalLines: lines.length });
+    }
+  } catch (_) {}
+
+  res.json({ success: false, error: `未找到 ${logName}.log（已搜索 ${SEAFILE_DIR} 下所有路径及容器内部）` });
+});
+
+// 重建容器（保留数据卷）：down → up db+memcached → 等就绪 → up seafile
+app.post('/api/seafile/rebuild', async (_req, res) => {
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  const compose = (args) => _execSync(`docker compose ${args}`, { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 120000 });
+  const steps = [];
+
+  try {
+    // 1. 停止并移除所有容器（保留数据卷）
+    steps.push('停止并移除所有容器（保留数据卷）...');
+    compose('down --timeout 15');
+    steps.push('✅ 容器已清理');
+
+    // 2. 清理残留 PID 文件
+    steps.push('清理残留 PID 文件...');
+    try {
+      _execSync(`find "${path.join(SEAFILE_DIR, 'data')}" -name "*.pid" -path "*/runtime/*" -delete 2>/dev/null`, { env: ENV, encoding: 'utf8', timeout: 8000 });
+    } catch (_) {}
+    steps.push('✅ PID 文件已清理');
+
+    // 3. 先启动 db 和 memcached
+    steps.push('启动数据库和缓存服务（db + memcached）...');
+    compose('up -d db memcached');
+    steps.push('✅ db / memcached 已启动，等待就绪（15 秒）...');
+    await new Promise(r => setTimeout(r, 15000));
+
+    // 4. 等待 MySQL 端口就绪（最长 60 秒）
+    let dbReady = false;
+    const t0 = Date.now();
+    while (Date.now() - t0 < 60000) {
+      try {
+        _execSync(
+          `docker compose exec -T db python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',3306)); s.close(); print('OK')"`,
+          { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 8000 }
+        );
+        dbReady = true;
+        break;
+      } catch (_) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+    steps.push(dbReady ? '✅ MySQL 已就绪' : '⚠️ MySQL 等待超时，仍继续启动（可能需要更长时间）');
+
+    // 5. 启动 seafile
+    steps.push('启动 Seafile 主服务...');
+    compose('up -d seafile');
+    steps.push('✅ Seafile 已启动，等待 Seahub 初始化（约 30 秒后访问页面）...');
+
+    // 6. 等 15 秒后读 seahub.log 检查是否有错误
+    await new Promise(r => setTimeout(r, 15000));
+    let seahubStatus = '（日志读取中）';
+    const logPath = path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log');
+    if (fs.existsSync(logPath)) {
+      const lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
+      const recent = lines.slice(-20);
+      const hasError = recent.some(l => /error|failed|exception|traceback/i.test(l));
+      const hasStarted = recent.some(l => /seahub is started|starting success/i.test(l));
+      if (hasStarted) seahubStatus = '✅ Seahub 已成功启动！';
+      else if (hasError) seahubStatus = '⚠️ seahub.log 中有错误，请查看日志';
+      else seahubStatus = '⏳ Seahub 启动中，请稍候再访问';
+    }
+    steps.push(seahubStatus);
+
+    return res.json({ success: true, steps });
+  } catch (e) {
+    steps.push(`❌ 重建失败: ${e.message}`);
+    return res.status(500).json({ success: false, steps, error: e.message });
+  }
+});
+
+// 暂停自动重启 → exec 读 seahub.log → 恢复重启
+// 解决容器每次只存活 5 秒、docker exec 时机不可靠的问题
+app.post('/api/seafile/debug-seahub', async (_req, res) => {
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  const compose = (args) => _execSync(`docker compose ${args}`, { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 60000 });
+  const steps = [];
+
+  // 动态找容器名
+  let seafileContainer = 'seafile';
+  try {
+    const psOut = _execSync('docker compose ps -a --format "{{.Service}}|{{.Name}}"', { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 8000 });
+    const line = psOut.split('\n').find(l => /^seafile\|/i.test(l));
+    if (line) seafileContainer = line.split('|')[1].trim();
+  } catch (_) {}
+
+  try {
+    // Step 1: 暂停自动重启，让容器保持存活供调试
+    steps.push(`停止 seafile 并暂时关闭自动重启（容器名: ${seafileContainer}）...`);
+    try { _execSync(`docker update --restart=no "${seafileContainer}"`, { env: ENV, encoding: 'utf8', timeout: 10000 }); } catch (_) {}
+    try { compose('stop seafile'); } catch (_) {}
+
+    // Step 2: 清理 PID 文件
+    steps.push('清理残留 PID 文件...');
+    try {
+      _execSync(`find "${path.join(SEAFILE_DIR, 'data')}" -name "*.pid" -path "*/runtime/*" -delete 2>/dev/null`, { env: ENV, encoding: 'utf8', timeout: 8000 });
+    } catch (_) {}
+
+    // Step 3: 启动容器（无自动重启）
+    steps.push('启动 seafile 容器（调试模式，不自动重启）...');
+    compose('start seafile');
+    await new Promise(r => setTimeout(r, 5000)); // 等待 seahub 尝试启动
+
+    // Step 4: 读取 seahub.log（最长等 20 秒）
+    steps.push('读取 seahub.log（等待 Seahub 产生日志）...');
+    let seahubLog = [];
+    const logPaths = [
+      path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),  // 确认路径
+      path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
+    ];
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) {
+      // 先从宿主机读
+      for (const logPath of logPaths) {
+        if (fs.existsSync(logPath)) {
+          try {
+            const lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
+            if (lines.length > 0) { seahubLog = lines.slice(-100); break; }
+          } catch (_) {}
+        }
+      }
+      if (seahubLog.length > 0) break;
+      // 再尝试 docker exec
+      for (const p of ['/shared/logs/seahub.log', '/opt/seafile/logs/seahub.log']) {
+        try {
+          const out = _execSync(`docker exec "${seafileContainer}" cat "${p}" 2>/dev/null`, { env: ENV, encoding: 'utf8', timeout: 5000 });
+          if (out.trim()) { seahubLog = out.split('\n').filter(Boolean).slice(-100); break; }
+        } catch (_) {}
+      }
+      if (seahubLog.length > 0) break;
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // Step 5: 恢复正常自动重启
+    steps.push('恢复 seafile 自动重启策略...');
+    try { _execSync(`docker update --restart=always "${seafileContainer}"`, { env: ENV, encoding: 'utf8', timeout: 10000 }); } catch (_) {}
+    compose('start seafile');
+
+    if (seahubLog.length === 0) {
+      // find 全局搜索
+      try {
+        const found = _execSync(`find "${SEAFILE_DIR}" -name "seahub.log" 2>/dev/null | head -3`, { env: ENV, encoding: 'utf8', timeout: 8000 }).trim();
+        if (found) {
+          const p = found.split('\n')[0];
+          seahubLog = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean).slice(-100);
+          steps.push(`找到日志: ${p}`);
+        }
+      } catch (_) {}
+    }
+
+    const errLines = seahubLog.filter(l => /error|exception|traceback|critical|warning/i.test(l));
+    return res.json({
+      success: true, steps, seahubLog,
+      errors: errLines.slice(-20),
+      logFound: seahubLog.length > 0,
+    });
+  } catch (e) {
+    // 确保恢复重启
+    try { _execSync(`docker update --restart=always "${seafileContainer}"`, { env: ENV, encoding: 'utf8', timeout: 10000 }); } catch (_) {}
+    steps.push(`❌ 失败: ${e.message}`);
+    return res.status(500).json({ success: false, steps, error: e.message });
+  }
+});
+
+// 捕获 seahub.sh 真实启动错误（在容器短暂存活窗口内 exec 执行并抓取输出）
+app.post('/api/seafile/capture-seahub-error', async (_req, res) => {
+  const { execSync: _execSync } = await import('child_process');
+  const ENV = { ...process.env, PATH: '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin' };
+  const compose = (args) => _execSync(`docker compose ${args}`, { cwd: SEAFILE_DIR, env: ENV, encoding: 'utf8', timeout: 30000 });
+
+  // 1. 先读宿主机上的 seahub.log（最可靠，不依赖容器在线）
+  const hostLogPaths = [
+    path.join(SEAFILE_DIR, 'data', 'seafile', 'logs', 'seahub.log'),
+    path.join(SEAFILE_DIR, 'data', 'logs', 'seahub.log'),
+  ];
+  for (const logPath of hostLogPaths) {
+    if (fs.existsSync(logPath)) {
+      try {
+        const lines = fs.readFileSync(logPath, 'utf8').split('\n');
+        const last = lines.slice(-80).filter(Boolean);
+        return res.json({ success: true, source: 'seahub.log', logPath, lines: last });
+      } catch (_) {}
+    }
+  }
+  // find 兜底
+  try {
+    const found = _execSync(`find "${SEAFILE_DIR}" -name "seahub.log" 2>/dev/null | head -3`, { encoding: 'utf8', timeout: 8000, env: ENV }).trim();
+    if (found) {
+      const p = found.split('\n')[0];
+      const lines = fs.readFileSync(p, 'utf8').split('\n').slice(-80).filter(Boolean);
+      return res.json({ success: true, source: 'seahub.log', logPath: p, lines });
+    }
+  } catch (_) {}
+
+  // 2. 动态找容器名并 exec 读取 /shared/logs/seahub.log
+  let seafileContainer = 'seafile';
+  try {
+    const psOut = compose('ps -a --format "{{.Service}}|{{.Name}}"');
+    const line = psOut.split('\n').find(l => /^seafile\|/i.test(l));
+    if (line) seafileContainer = line.split('|')[1].trim();
+  } catch (_) {}
+
+  for (const logPath of ['/shared/logs/seahub.log', '/opt/seafile/logs/seahub.log']) {
+    try {
+      const out = _execSync(`docker exec "${seafileContainer}" tail -n 80 "${logPath}" 2>/dev/null`, { encoding: 'utf8', timeout: 8000, env: ENV });
+      if (out.trim()) return res.json({ success: true, source: 'docker-exec', logPath, container: seafileContainer, lines: out.split('\n').filter(Boolean) });
+    } catch (_) {}
+  }
+
+  return res.json({
+    success: false,
+    error: `未找到 seahub.log（已搜索 ${SEAFILE_DIR}/data/logs/ 和容器内 /shared/logs/）`,
+    hint: '请在服务器上运行: find ~/seafile -name seahub.log 2>/dev/null',
+  });
 });
 
 const SEAFDAV_CONF = '/Users/maiyou001/seafile/data/seafile/conf/seafdav.conf';
@@ -4250,7 +4881,12 @@ for (const item of entries) {
 }
 
 if (payload.length === 0) {
-  throw new Error('no core dex found (classes2+.dex)');
+  throw new Error('no core dex found (classes2+.dex) — 请检查输入 APK：若只有 classes.dex 和 classes2.dex，可能是对已加固 APK 再次加固，请使用原始未加固 APK');
+}
+// 输入 APK 完整性检查：若只找到 1 个业务 DEX，可能是已加固过的 APK 再次输入
+// 正常原始 APK 通常有 2 个以上业务 DEX（classes2 + classes3+）
+if (payload.length === 1) {
+  console.warn('[shell] ⚠️ 警告：输入 APK 仅有 1 个业务 DEX，极可能已是加固版本（正常 APK 通常 2+ 个 DEX）。建议检查是否使用了原始 APK。');
 }
 
 const meta = {
@@ -4270,6 +4906,7 @@ fs.writeFileSync(bootstrapFile, JSON.stringify(bootstrap, null, 2), 'utf8');
 // files that Android requires to be STORED (uncompressed) in the APK
 const mustStored = new Set(['resources.arsc']);
 
+
 const zout = new AdmZip();
 for (const item of entries) {
   const name = item.entryName;
@@ -4279,14 +4916,16 @@ for (const item of entries) {
   if (name.startsWith('META-INF/')) continue;
   if (lowerName.endsWith('.pem') || lowerName.endsWith('.key') || lowerName.endsWith('.p12') || lowerName.endsWith('.pfx') || lowerName.endsWith('.jks') || lowerName.endsWith('.keystore')) continue;
   if (lowerName.includes('private_key') || lowerName.includes('rsa_private') || lowerName.includes('pkcs8')) continue;
+  const originalMethod = item.header.method; // 0=STORED, 8=DEFLATED
   const data = item.getData();
   zout.addFile(name, data);
-  // Restore STORED (method=0) for resources.arsc — AdmZip defaults to DEFLATE which
-  // breaks Android 6+ mmap requirements and fails Google Play validation.
-  if (mustStored.has(name)) {
-    const e = zout.getEntry(name);
-    if (e) e.header.method = 0;
-  }
+  // Restore each entry's original compression method to avoid size bloat.
+  // resources.arsc must always be STORED per Android spec.
+  // .so files: preserve original method —
+  //   if original was STORED (extractNativeLibs=false), it stays STORED (correct);
+  //   if original was DEFLATED (extractNativeLibs=true), it stays DEFLATED (avoids ~50% size increase).
+  const e = zout.getEntry(name);
+  if (e) e.header.method = mustStored.has(name) ? 0 : originalMethod;
 }
 
 for (const entry of payload) {
@@ -4316,6 +4955,11 @@ console.log('OK:' + payload.length);
     );
     const shellResult = (shellStdout || '').trim();
     session.log.push(`[shell] payload 处理结果: ${shellResult || 'OK'}`);
+    // 检测是否对已加固 APK 再次加固（只有 1 个 payload）
+    const payloadCountMatch = shellResult.match(/^OK:(\d+)$/);
+    if (payloadCountMatch && parseInt(payloadCountMatch[1]) === 1) {
+      session.log.push('[shell] ⚠️ 警告：只检测到 1 个业务 DEX（正常 APK 通常有 2+ 个）。如果加固后运行时出现 ClassNotFoundException，请确认使用的是原始未加固 APK，而非已加固 APK 重复加固。');
+    }
     session.timing.preMs += Date.now() - preStart;
 
     // Stage2: 注入壳 Application（灰度开关，默认关闭，先保证稳定可启动）
@@ -4957,7 +5601,6 @@ APP_ABI := armeabi-v7a arm64-v8a
     invoke-direct {v0, v1, v2, v3, v4}, Ldalvik/system/DexClassLoader;-><init>(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V
     sput-object v0, L${stage2Path}/Stage2PayloadLoader;->sPayloadClassLoader:Ljava/lang/ClassLoader;
     invoke-static {p0, v0}, L${stage2Path}/Stage2PayloadLoader;->installGlobalClassLoader(Landroid/content/Context;Ljava/lang/ClassLoader;)V
-    invoke-static {p0}, L${stage2Path}/Stage2PayloadLoader;->preloadNativeLibs(Landroid/content/Context;)V
     :try_end
     .catch Ljava/lang/Throwable; {:try_start .. :try_end} :catch_all
     goto :ret
@@ -5016,6 +5659,32 @@ APP_ABI := armeabi-v7a arm64-v8a
 .method private static loadPayloadDexPath(Landroid/content/Context;Landroid/content/res/AssetManager;Ljava/lang/String;Ljava/io/File;I)Ljava/lang/String;
     .locals 10
     :try_start
+    # 快速路径：缓存命中时直接返回，无需重新解密（跨进程/跨重启均有效）
+    # 文件名：payload_classes{N}.dex（不含 PID，多进程共享同一份缓存）
+    new-instance v5, Ljava/lang/StringBuilder;
+    invoke-direct {v5}, Ljava/lang/StringBuilder;-><init>()V
+    const-string v6, "payload_classes"
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    move-result-object v5
+    invoke-static {p4}, Ljava/lang/String;->valueOf(I)Ljava/lang/String;
+    move-result-object v6
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    move-result-object v5
+    const-string v6, ".dex"
+    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    move-result-object v5
+    invoke-virtual {v5}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v6
+    new-instance v7, Ljava/io/File;
+    invoke-direct {v7, p3, v6}, Ljava/io/File;-><init>(Ljava/io/File;Ljava/lang/String;)V
+    invoke-virtual {v7}, Ljava/io/File;->exists()Z
+    move-result v8
+    if-eqz v8, :need_decrypt
+    # 缓存命中：文件已存在，直接返回路径（避免重复解密）
+    invoke-virtual {v7}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v0
+    return-object v0
+    :need_decrypt
     new-instance v0, Ljava/lang/StringBuilder;
     invoke-direct {v0}, Ljava/lang/StringBuilder;-><init>()V
     const-string v1, "payload/classes"
@@ -5040,6 +5709,8 @@ APP_ABI := armeabi-v7a arm64-v8a
     if-eqz v4, :catch_ignore
     invoke-static {v4}, L${stage2Path}/Stage2PayloadLoader;->inflate([B)[B
     move-result-object v4
+    # 使用稳定文件名（不含 PID），使多进程可复用已解密的缓存文件，
+    # 避免每次进程重启都重新解密，解决华为等设备 ContentProvider 5 秒超时崩溃问题
     new-instance v5, Ljava/lang/StringBuilder;
     invoke-direct {v5}, Ljava/lang/StringBuilder;-><init>()V
     const-string v6, "payload_classes"
@@ -5048,15 +5719,6 @@ APP_ABI := armeabi-v7a arm64-v8a
     invoke-static {p4}, Ljava/lang/String;->valueOf(I)Ljava/lang/String;
     move-result-object v6
     invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    move-result-object v5
-    const-string v6, "_"
-    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
-    move-result-object v5
-    invoke-static {}, Landroid/os/Process;->myPid()I
-    move-result v8
-    invoke-static {v8}, Ljava/lang/String;->valueOf(I)Ljava/lang/String;
-    move-result-object v9
-    invoke-virtual {v5, v9}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
     move-result-object v5
     const-string v6, ".dex"
     invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
@@ -5134,6 +5796,48 @@ APP_ABI := armeabi-v7a arm64-v8a
     const-string v1, "global_loader"
     invoke-static {p0, v1, v0}, L${stage2Path}/Stage2PayloadLoader;->logException(Landroid/content/Context;Ljava/lang/String;Ljava/lang/Throwable;)V
     :ret
+    return-void
+.end method
+
+# 预加载 nativeLibraryDir 下所有 .so，解决 DexClassLoader 上下文中
+# System.loadLibrary 找不到第三方 JNI 库（如 libpl_droidsonroids_gif.so）的问题
+.method public static preloadNativeLibraries(Landroid/content/Context;Ljava/lang/String;)V
+    .locals 6
+    :pre_try_start
+    new-instance v0, Ljava/io/File;
+    invoke-direct {v0, p1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v0}, Ljava/io/File;->listFiles()[Ljava/io/File;
+    move-result-object v1
+    if-eqz v1, :pre_done
+    array-length v2, v1
+    const/4 v3, 0x0
+    :pre_loop
+    if-ge v3, v2, :pre_done
+    aget-object v4, v1, v3
+    invoke-virtual {v4}, Ljava/io/File;->getName()Ljava/lang/String;
+    move-result-object v5
+    const-string v0, ".so"
+    invoke-virtual {v5, v0}, Ljava/lang/String;->endsWith(Ljava/lang/String;)Z
+    move-result v0
+    if-eqz v0, :pre_next
+    invoke-virtual {v4}, Ljava/io/File;->getAbsolutePath()Ljava/lang/String;
+    move-result-object v0
+    :load_try_start
+    invoke-static {v0}, Ljava/lang/System;->load(Ljava/lang/String;)V
+    :load_try_end
+    .catch Ljava/lang/Throwable; {:load_try_start .. :load_try_end} :load_catch
+    goto :pre_next
+    :load_catch
+    move-exception v0
+    :pre_next
+    add-int/lit8 v3, v3, 0x1
+    goto :pre_loop
+    :pre_done
+    :pre_try_end
+    .catch Ljava/lang/Throwable; {:pre_try_start .. :pre_try_end} :pre_catch_all
+    return-void
+    :pre_catch_all
+    move-exception v0
     return-void
 .end method
 
@@ -5631,6 +6335,12 @@ with zipfile.ZipFile(src_apk, 'r') as zin, zipfile.ZipFile(out_apk, 'w', zipfile
         if name == f'classes{shell_dex_num}.dex':
             new_name = 'classes2.dex'
         data = zin.read(name)
+        # resources.arsc 必须 STORED（Android 规范）
+        # .so 文件保持原始压缩方式，避免加固后体积增大约 50%：
+        #   原 APK 中为 STORED（extractNativeLibs=false）则保持 STORED；
+        #   原 APK 中为 DEFLATED（extractNativeLibs=true）则保持 DEFLATED。
+        if name == 'resources.arsc':
+            item.compress_type = zipfile.ZIP_STORED
         if new_name == name:
             zout.writestr(item, data)
         else:
