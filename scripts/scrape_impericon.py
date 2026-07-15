@@ -14,34 +14,15 @@ import requests
 BASE_URL = "https://www.impericon.com"
 
 CATEGORIES = [
-    {"handle": "new",                   "label": "New In"},
-    {"handle": "topseller",             "label": "Top Sellers"},
-    {"handle": "t-shirts",              "label": "T-Shirts"},
-    {"handle": "band-shirts",           "label": "Band T-Shirts"},
+    {"handle": "gothic-tops",           "label": "Tops"},
     {"handle": "tanks",                 "label": "Tank Tops"},
-    {"handle": "crop-tops",             "label": "Crop Tops"},
-    {"handle": "polos",                 "label": "Polos"},
-    {"handle": "hoodies-sweater-zipper","label": "Hoodies, Sweaters & Zippers"},
-    {"handle": "band-hoodies",          "label": "Band Hoodies"},
-    {"handle": "jackets",               "label": "Jackets"},
-    {"handle": "pants-shorts",          "label": "Pants & Shorts"},
-    {"handle": "band-shorts",           "label": "Band Shorts"},
     {"handle": "dresses",               "label": "Dresses"},
-    {"handle": "gothic-dresses",        "label": "Gothic Dresses"},
-    {"handle": "gothic-tops",           "label": "Gothic Tops"},
-    {"handle": "gothic-pants",          "label": "Gothic Pants"},
-    {"handle": "gothic-skirts",         "label": "Gothic Skirts"},
-    {"handle": "dark-fashion",          "label": "Dark Fashion"},
-    {"handle": "streetwear",            "label": "Streetwear"},
-    {"handle": "band-merch",            "label": "Band Merch"},
-    {"handle": "sneakers",              "label": "Sneakers"},
-    {"handle": "boots",                 "label": "Boots"},
-    {"handle": "shoes",                 "label": "Shoes"},
-    {"handle": "accessories",           "label": "Accessories"},
-    {"handle": "jewelry",               "label": "Jewelry"},
-    {"handle": "socks",                 "label": "Socks"},
-    {"handle": "sale",                  "label": "Sale"},
-    {"handle": "band-merch-sale",       "label": "Band Merch Sale"},
+    {"handle": "gothic-pants",          "label": "Pants"},
+    {"handle": "pants-shorts",          "label": "Shorts"},
+    {"handle": "skirts",                "label": "Skirts"},
+    {"handle": "swimwear",              "label": "Swimwear"},
+    {"handle": "jackets",               "label": "Outerwear"},
+    {"handle": "sweaters",              "label": "Sweaters"},
 ]
 
 HEADERS = {
@@ -53,7 +34,7 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-TARGET = 30
+TARGET = 50
 
 
 def fetch_products(handle: str, limit: int = 30) -> list[dict]:

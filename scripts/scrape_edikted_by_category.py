@@ -13,25 +13,16 @@ BASE_URL = "https://edikted.com"
 
 # Known Edikted collection handles (verified via Shopify collections API)
 CATEGORIES = [
-    {"handle": "new-in",        "label": "New In"},
-    {"handle": "tops",          "label": "Tops"},
-    {"handle": "crop-tops",     "label": "Crop Tops"},
-    {"handle": "tank-tops",     "label": "Tank Tops"},
-    {"handle": "dresses",       "label": "Dresses"},
-    {"handle": "pants",         "label": "Pants"},
-    {"handle": "jeans",         "label": "Jeans"},
-    {"handle": "shorts",        "label": "Shorts"},
-    {"handle": "mini-skirts",   "label": "Skirts"},
-    {"handle": "swim",          "label": "Swimwear"},
-    {"handle": "outerwear",     "label": "Outerwear"},
-    {"handle": "sets",          "label": "Sets"},
-    {"handle": "hoodies",       "label": "Hoodies"},
-    {"handle": "sweaters",      "label": "Sweaters"},
-    {"handle": "loungewear",    "label": "Loungewear"},
-    {"handle": "bodysuits",     "label": "Bodysuits"},
-    {"handle": "corsets",       "label": "Corsets"},
-    {"handle": "accessories",   "label": "Accessories"},
-    {"handle": "best-sellers",  "label": "Best Sellers"},
+    {"handle": "tops",        "label": "Tops"},
+    {"handle": "tank-tops",   "label": "Tank Tops"},
+    {"handle": "dresses",     "label": "Dresses"},
+    {"handle": "pants",       "label": "Pants"},
+    {"handle": "shorts",      "label": "Shorts"},
+    {"handle": "mini-skirts", "label": "Skirts"},
+    {"handle": "swim",        "label": "Swimwear"},
+    {"handle": "outerwear",   "label": "Outerwear"},
+    {"handle": "sweaters",    "label": "Sweaters"},
+    {"handle": "loungewear",  "label": "Loungewear"},
 ]
 
 HEADERS = {
@@ -43,7 +34,7 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-TARGET_PER_CATEGORY = 30
+TARGET_PER_CATEGORY = 50
 
 
 def fetch_products(handle: str, limit: int = 30) -> list[dict]:

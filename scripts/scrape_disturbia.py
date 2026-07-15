@@ -14,35 +14,16 @@ import requests
 BASE_URL = "https://www.disturbia.co.uk"
 
 CATEGORIES = [
-    {"handle": "womens-new",                 "label": "New In"},
-    {"handle": "trending",                   "label": "Trending"},
-    {"handle": "back-in-stock",              "label": "Back In Stock"},
-    {"handle": "womens-dresses",             "label": "Dresses"},
-    {"handle": "womens-tops",                "label": "Tops"},
-    {"handle": "womens-t-shirts",            "label": "T-Shirts"},
-    {"handle": "womens-shirts",              "label": "Shirts & Blouses"},
-    {"handle": "womens-crop-tops",           "label": "Crop Tops"},
-    {"handle": "womens-corsets",             "label": "Corsets"},
-    {"handle": "womens-knitwear",            "label": "Knitwear"},
-    {"handle": "womens-jumpers",             "label": "Jumpers"},
-    {"handle": "womens-hoodies-sweatshirts", "label": "Hoodies & Sweatshirts"},
-    {"handle": "womens-trousers",            "label": "Trousers"},
-    {"handle": "womens-jeans",               "label": "Jeans"},
-    {"handle": "womens-shorts",              "label": "Shorts"},
-    {"handle": "womens-skirts",              "label": "Skirts"},
-    {"handle": "womens-outerwear",           "label": "Outerwear"},
-    {"handle": "womens-jackets",             "label": "Jackets"},
-    {"handle": "womens-coats",               "label": "Coats"},
-    {"handle": "womens-blazers",             "label": "Blazers"},
-    {"handle": "womens-loungewear",          "label": "Loungewear"},
-    {"handle": "womens-swimwear",            "label": "Swimwear"},
-    {"handle": "womens-playsuits",           "label": "Playsuits"},
-    {"handle": "womens-jumpsuits-dungarees", "label": "Jumpsuits & Dungarees"},
-    {"handle": "womens-nightwear",           "label": "Nightwear"},
-    {"handle": "womens-jewellery",           "label": "Jewellery"},
-    {"handle": "womens-bags",                "label": "Bags"},
-    {"handle": "womens-accessories-and-footwear", "label": "Accessories & Footwear"},
-    {"handle": "womens-sale",                "label": "Sale"},
+    {"handle": "womens-tops",       "label": "Tops"},
+    {"handle": "womens-t-shirts",   "label": "Tank Tops"},
+    {"handle": "womens-dresses",    "label": "Dresses"},
+    {"handle": "womens-trousers",   "label": "Pants"},
+    {"handle": "womens-shorts",     "label": "Shorts"},
+    {"handle": "womens-skirts",     "label": "Skirts"},
+    {"handle": "womens-swimwear",   "label": "Swimwear"},
+    {"handle": "womens-outerwear",  "label": "Outerwear"},
+    {"handle": "womens-jumpers",    "label": "Sweaters"},
+    {"handle": "womens-loungewear", "label": "Loungewear"},
 ]
 
 HEADERS = {
@@ -54,7 +35,7 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-TARGET = 30
+TARGET = 50
 
 
 def fetch_products(handle: str, limit: int = 30) -> list[dict]:
