@@ -67,12 +67,14 @@ interface SignProfileOption {
   id: string;
   label: string;
   configured: boolean;
+  v2SigningEnabled?: boolean;
+  signingScheme?: string;
 }
 
 const FALLBACK_SIGN_PROFILES: SignProfileOption[] = [
-  { id: 'milu', label: '咪噜', configured: true },
-  { id: 'wan52', label: '52wan', configured: true },
-  { id: 'youxiaobao', label: '游小宝', configured: true },
+  { id: 'milu', label: '咪噜', configured: true, v2SigningEnabled: true, signingScheme: 'V1+V2' },
+  { id: 'wan52', label: '52wan', configured: true, v2SigningEnabled: true, signingScheme: 'V1+V2' },
+  { id: 'youxiaobao', label: '游小宝', configured: true, v2SigningEnabled: false, signingScheme: 'V1' },
 ];
 
 let envCheckInFlight: Promise<EnvStatus> | null = null;
@@ -240,6 +242,8 @@ const ApkReinforce: React.FC = () => {
         setSignProfiles(data.profiles.map((p: SignProfileOption) => ({
           ...p,
           configured: p.configured !== false,
+          v2SigningEnabled: p.v2SigningEnabled !== false,
+          signingScheme: p.signingScheme || (p.v2SigningEnabled === false ? 'V1' : 'V1+V2'),
         })));
         if (data.defaultProfile) setSignProfile(data.defaultProfile);
       }
@@ -929,7 +933,11 @@ const ApkReinforce: React.FC = () => {
                   </Space>
                   <Space>
                     <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                    <Text>签名方式：Release 签名（{selectedSignProfile?.label || '咪噜'}）</Text>
+                    <Text>
+                      签名方式：Release 签名 {selectedSignProfile?.signingScheme || 'V1+V2'}
+                      （{selectedSignProfile?.label || '咪噜'}
+                      {selectedSignProfile?.v2SigningEnabled === false ? '，保持 V1' : '，targetSdk=33'}）
+                    </Text>
                   </Space>
                   <Space>
                     <CheckCircleOutlined style={{ color: '#52c41a' }} />

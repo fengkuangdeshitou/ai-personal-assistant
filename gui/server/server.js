@@ -4312,7 +4312,7 @@ if (!fs.existsSync(APK_REINFORCE_NATIVE_CACHE_DIR)) fs.mkdirSync(APK_REINFORCE_N
 const APK_KEYSTORE_DIR = path.join(__dirname, 'keystores');
 if (!fs.existsSync(APK_KEYSTORE_DIR)) fs.mkdirSync(APK_KEYSTORE_DIR, { recursive: true });
 
-/** @type {Record<string, { label: string, keystorePath: string, keyAlias: string, keystorePass: string, keyPass: string }>} */
+/** @type {Record<string, { label: string, keystorePath: string, keyAlias: string, keystorePass: string, keyPass: string, v2SigningEnabled?: boolean }>} */
 const APK_SIGN_PROFILES = {
   milu: {
     label: '咪噜',
@@ -4320,6 +4320,7 @@ const APK_SIGN_PROFILES = {
     keyAlias: '985game',
     keystorePass: '985game2017',
     keyPass: '985game2017',
+    v2SigningEnabled: true, // targetSdk=33 需要 V1+V2
   },
   wan52: {
     label: '52wan',
@@ -4327,6 +4328,7 @@ const APK_SIGN_PROFILES = {
     keyAlias: 'heigu',
     keystorePass: 'heigu2020',
     keyPass: 'heigu2020',
+    v2SigningEnabled: true, // targetSdk=33 需要 V1+V2
   },
   youxiaobao: {
     label: '游小宝',
@@ -4334,6 +4336,7 @@ const APK_SIGN_PROFILES = {
     keyAlias: 'cps',
     keystorePass: 'cps2018',
     keyPass: 'cps2018',
+    v2SigningEnabled: false, // 游小宝保持 V1-only
   },
 };
 const DEFAULT_SIGN_PROFILE = 'milu';
@@ -4565,19 +4568,24 @@ app.post('/api/apk/setup-dex2c', async (req, res) => {
 
 // 签名配置列表（供前端下拉选择）
 app.get('/api/apk/sign-profiles', (_req, res) => {
-  const profiles = Object.entries(APK_SIGN_PROFILES).map(([id, cfg]) => ({
-    id,
-    label: cfg.label,
-    configured: !!(
-      cfg.keystorePath &&
-      cfg.keyAlias &&
-      cfg.keystorePass &&
-      cfg.keyPass &&
-      cfg.keystorePass !== 'TODO' &&
-      cfg.keyPass !== 'TODO' &&
-      fs.existsSync(cfg.keystorePath)
-    ),
-  }));
+  const profiles = Object.entries(APK_SIGN_PROFILES).map(([id, cfg]) => {
+    const v2 = cfg.v2SigningEnabled !== false;
+    return {
+      id,
+      label: cfg.label,
+      v2SigningEnabled: v2,
+      signingScheme: v2 ? 'V1+V2' : 'V1',
+      configured: !!(
+        cfg.keystorePath &&
+        cfg.keyAlias &&
+        cfg.keystorePass &&
+        cfg.keyPass &&
+        cfg.keystorePass !== 'TODO' &&
+        cfg.keyPass !== 'TODO' &&
+        fs.existsSync(cfg.keystorePath)
+      ),
+    };
+  });
   res.json({ success: true, profiles, defaultProfile: DEFAULT_SIGN_PROFILE });
 });
 
@@ -6413,12 +6421,14 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
     }
 
     if (resolvedApksigner && hasReleaseSigning) {
-      // targetSdkVersion=29，V1（JAR signing）在所有 Android 版本可安装
-      // V2 强制要求仅针对 targetSdkVersion >= 30
+      // 按渠道签名方案：咪噜/52wan 用 V1+V2（targetSdk=33）；游小宝保持 V1-only
+      // 注意：必须先 zipalign 再签名（上方已完成），签完后不可再对齐
+      const enableV2 = resolvedSignProfile.v2SigningEnabled !== false;
+      const schemeLabel = enableV2 ? 'V1+V2' : 'V1-only';
       await execAsync(
         `"${resolvedApksigner}" sign` +
         ` --v1-signing-enabled true` +
-        ` --v2-signing-enabled false` +
+        ` --v2-signing-enabled ${enableV2 ? 'true' : 'false'}` +
         ` --v3-signing-enabled false` +
         ` --v4-signing-enabled false` +
         ` --ks "${resolvedReleaseKeystorePath}"` +
@@ -6427,7 +6437,7 @@ print('OK:strip classes2+ keep shell->classes2; shellDexNum=' + str(shell_dex_nu
         ` --key-pass pass:${resolvedReleaseKeyPass}` +
         ` "${outputApk}"`
       );
-      session.log.push(`[shell] 签名完成: ${resolvedSignProfile.label} (V1-only, targetSdk=29)`);
+      session.log.push(`[shell] 签名完成: ${resolvedSignProfile.label} (${schemeLabel}${enableV2 ? ', targetSdk=33' : ''})`);
     } else {
       throw new Error('APK signing failed: apksigner not available');
     }
