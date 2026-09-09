@@ -3716,13 +3716,38 @@ async function scanFrameworksFromDisk(ipaPath) {
   const entries = entryNames.map(name => ({ entryName: name, header: { size: 0 } }));
   const frameworks = scanFrameworksFromEntries(entries);
 
+  const parsePlistFromIpa = async (plistPath, plistLib) => {
+    // 优先用 plutil 处理二进制 plist，再回退到原始文本解析
+    try {
+      const xml = await runCmd(`unzip -p "${ipaPath}" "${plistPath}" | plutil -convert xml1 -o - -`);
+      return plistLib.parse(xml);
+    } catch (_) {
+      try {
+        const raw = await runCmd(`unzip -p "${ipaPath}" "${plistPath}"`);
+        return plistLib.parse(raw);
+      } catch (_) {
+        return null;
+      }
+    }
+  };
+
   // 并行提取每个 framework/bundle 的 Info.plist 版本号
   const plist = await import('plist');
   await Promise.all(frameworks.map(async (fw) => {
     try {
-      const plistPath = fw.path.replace(/\/$/, '') + '/Info.plist';
-      const plistContent = await runCmd(`unzip -p "${ipaPath}" "${plistPath}"`);
-      const data = plist.parse(plistContent);
+      const basePath = fw.path.replace(/\/$/, '');
+      const candidates = [
+        `${basePath}/Info.plist`,
+        `${basePath}/Contents/Info.plist`,
+      ];
+
+      let data = null;
+      for (const plistPath of candidates) {
+        data = await parsePlistFromIpa(plistPath, plist);
+        if (data) break;
+      }
+
+      if (!data) throw new Error('plist not found or parse failed');
       fw.version = data.CFBundleShortVersionString || data.CFBundleVersion || '';
       fw.bundleVersion = data.CFBundleVersion || '';
     } catch (_) {
@@ -3768,6 +3793,25 @@ async function parseIpaInfo(ipaBuffer) {
   const plist = await import('plist');
   const zip = new AdmZip(ipaBuffer);
   const entries = zip.getEntries();
+
+  // 复用 SDK 替换页同源版本扫描逻辑，避免两处实现不一致
+  let mysdkFrameworkVersion = '';
+  let mysdkBundleVersion = '';
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipa-parse-'));
+  const tmpIpaPath = path.join(tmpDir, 'parse.ipa');
+  try {
+    fs.writeFileSync(tmpIpaPath, ipaBuffer);
+    const frameworks = await scanFrameworksFromDisk(tmpIpaPath);
+    const fw = frameworks.find(item => (item.name || '').toLowerCase() === 'mysdk.framework');
+    const bundle = frameworks.find(item => (item.name || '').toLowerCase() === 'mysdk.bundle');
+    mysdkFrameworkVersion = fw?.version || '';
+    mysdkBundleVersion = bundle?.version || '';
+  } catch (_) {
+    mysdkFrameworkVersion = '';
+    mysdkBundleVersion = '';
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
 
   const infoPlistEntry = entries.find(e =>
     /^Payload\/[^/]+\.app\/Info\.plist$/.test(e.entryName)
@@ -3850,6 +3894,8 @@ async function parseIpaInfo(ipaBuffer) {
       platform: plistData.DTPlatformName || plistData.CFBundleSupportedPlatforms?.[0] || '',
       sdkVersion: plistData.DTSDKName || '',
       executable: plistData.CFBundleExecutable || '',
+      mysdkFrameworkVersion,
+      mysdkBundleVersion,
     },
     permissions,
     urlSchemes,

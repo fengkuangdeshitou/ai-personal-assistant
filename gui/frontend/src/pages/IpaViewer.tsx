@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { getApiBaseUrl } from '../utils/api';
 import {
   Card, Upload, Button, Typography, Table, Tag, Descriptions,
-  Space, message, Empty, Collapse, Badge, Input, Tabs, Spin,
+  Space, message, Empty, Collapse, Badge, Input, Spin,
   Tree, Modal,
 } from 'antd';
 import {
@@ -11,7 +11,6 @@ import {
   LinkOutlined,
   SafetyOutlined,
   ClearOutlined,
-  CloudDownloadOutlined,
   FileOutlined,
   FileImageOutlined,
   CodeOutlined,
@@ -25,13 +24,14 @@ import type { DataNode } from 'antd/es/tree';
 const { Dragger } = Upload;
 const { Text, Title } = Typography;
 const { Panel } = Collapse;
-const { TabPane } = Tabs;
 const { DirectoryTree } = Tree;
 
 // ─── 类型 ──────────────────────────────────────────────────────────
 interface AppInfo {
   name: string; bundleId: string; version: string; build: string;
   minOS: string; platform: string; sdkVersion: string; executable: string;
+  mysdkFrameworkVersion?: string;
+  mysdkBundleVersion?: string;
 }
 interface UrlScheme { scheme: string; name: string; }
 interface Permission { key: string; label: string; description: string; }
@@ -279,8 +279,6 @@ const IpaViewer: React.FC = () => {
   const [result, setResult]       = useState<ParseResult | null>(null);
   const [loading, setLoading]     = useState(false);
   const [fileName, setFileName]   = useState('');
-  const [seafileUrl, setSeafileUrl] = useState('');
-  const [directUrl, setDirectUrl] = useState('');
   const [loadingMsg, setLoadingMsg] = useState('');
   const [treeSearch, setTreeSearch] = useState('');
 
@@ -308,25 +306,9 @@ const IpaViewer: React.FC = () => {
     return false;
   };
 
-  const parseFromUrl = (url: string, label: string) => {
-    if (!url.trim()) { message.warning('请输入链接'); return; }
-    if (!url.startsWith('http')) { message.warning('请输入有效的 HTTP 链接'); return; }
-    setLoading(true);
-    setLoadingMsg('后端下载中，大文件请耐心等待...');
-    fetch(`${baseUrl}/api/ipa/parse-from-url`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
-    })
-      .then(r => r.json())
-      .then(data => handleParsed(data, label))
-      .catch(() => message.error('请求失败，请确认后端服务正在运行'))
-      .finally(() => { setLoading(false); setLoadingMsg(''); });
-  };
-
   const handleClear = () => {
     setResult(null); setFileName('');
-    setSeafileUrl(''); setDirectUrl(''); setTreeSearch('');
+    setTreeSearch('');
   };
 
   const permColumns = [
@@ -361,62 +343,15 @@ const IpaViewer: React.FC = () => {
           extra={result && <Button icon={<ClearOutlined />} size="small" onClick={handleClear}>清除</Button>}
         >
           <Spin spinning={loading} tip={loadingMsg}>
-            <Tabs defaultActiveKey="upload">
-              <TabPane tab={<Space><InboxOutlined />本地上传</Space>} key="upload">
-                <Dragger
-                  accept=".ipa" showUploadList={false}
-                  beforeUpload={(file: UploadFile) => { handleUpload(file as unknown as File); return false; }}
-                  disabled={loading} style={{ padding: '12px 0' }}
-                >
-                  <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-                  <p className="ant-upload-text">点击或拖拽 .ipa 文件到此处</p>
-                  <p className="ant-upload-hint">支持单文件上传，文件大小上限 500 MB</p>
-                </Dragger>
-              </TabPane>
-
-              <TabPane tab={<Space><CloudDownloadOutlined />Seafile 链接</Space>} key="seafile">
-                <div style={{ padding: '8px 0' }}>
-                  <p style={{ color: '#666', marginBottom: 12 }}>
-                    在 Seafile 中分享文件，复制链接后粘贴到此处，后端直接下载解析。
-                  </p>
-                  <Space.Compact style={{ width: '100%' }}>
-                    <Input
-                      placeholder="http://192.168.110.158/f/xxxxxxxx/?dl=1"
-                      value={seafileUrl} onChange={e => setSeafileUrl(e.target.value)}
-                      onPressEnter={() => parseFromUrl(seafileUrl, seafileUrl.split('/').filter(Boolean).pop() || 'from-seafile.ipa')}
-                      disabled={loading} prefix={<LinkOutlined style={{ color: '#aaa' }} />}
-                    />
-                    <Button type="primary" loading={loading} icon={<CloudDownloadOutlined />}
-                      onClick={() => parseFromUrl(seafileUrl, seafileUrl.split('/').filter(Boolean).pop() || 'from-seafile.ipa')}>
-                      下载并解析
-                    </Button>
-                  </Space.Compact>
-                  <p style={{ color: '#999', fontSize: 12, marginTop: 8 }}>
-                    提示：分享链接末尾加 <Text code>?dl=1</Text> 强制直接下载
-                  </p>
-                </div>
-              </TabPane>
-
-              <TabPane tab={<Space><LinkOutlined />URL</Space>} key="url">
-                <div style={{ padding: '8px 0' }}>
-                  <p style={{ color: '#666', marginBottom: 12 }}>
-                    输入任意可直接下载的 HTTP/HTTPS 链接，后端流式下载解析。
-                  </p>
-                  <Space.Compact style={{ width: '100%' }}>
-                    <Input
-                      placeholder="https://example.com/path/to/app.ipa"
-                      value={directUrl} onChange={e => setDirectUrl(e.target.value)}
-                      onPressEnter={() => parseFromUrl(directUrl, directUrl.split('/').filter(Boolean).pop() || 'from-url.ipa')}
-                      disabled={loading} prefix={<LinkOutlined style={{ color: '#aaa' }} />}
-                    />
-                    <Button type="primary" loading={loading} icon={<CloudDownloadOutlined />}
-                      onClick={() => parseFromUrl(directUrl, directUrl.split('/').filter(Boolean).pop() || 'from-url.ipa')}>
-                      下载并解析
-                    </Button>
-                  </Space.Compact>
-                </div>
-              </TabPane>
-            </Tabs>
+            <Dragger
+              accept=".ipa" showUploadList={false}
+              beforeUpload={(file: UploadFile) => { handleUpload(file as unknown as File); return false; }}
+              disabled={loading} style={{ padding: '12px 0' }}
+            >
+              <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+              <p className="ant-upload-text">点击或拖拽 .ipa 文件到此处</p>
+              <p className="ant-upload-hint">支持单文件上传，文件大小上限 500 MB</p>
+            </Dragger>
           </Spin>
 
           {fileName && !loading && (
@@ -455,6 +390,12 @@ const IpaViewer: React.FC = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="平台">
                   <Text type="secondary">{result.info.platform || '—'}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="MYSDK.framework 版本">
+                  <Tag color="purple">{result.info.mysdkFrameworkVersion || '—'}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="MYSDK.bundle 版本">
+                  <Tag color="magenta">{result.info.mysdkBundleVersion || '—'}</Tag>
                 </Descriptions.Item>
               </Descriptions>
             </Card>
