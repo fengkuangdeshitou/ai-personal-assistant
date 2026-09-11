@@ -6,7 +6,6 @@ import {
   ProjectOutlined,
   ClockCircleOutlined,
   SettingOutlined,
-  UnorderedListOutlined,
   MenuOutlined,
   UnlockOutlined,
   CloudServerOutlined,
@@ -82,11 +81,6 @@ const Sidebar: React.FC<SidebarProps> = () => {
       key: '/timeline',
       icon: <ClockCircleOutlined />,
       label: '工作记录',
-    },
-    {
-      key: '/auth-schemes',
-      icon: <UnorderedListOutlined />,
-      label: '认证方案',
     },
     {
       key: '/settings',

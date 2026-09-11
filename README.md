@@ -75,9 +75,8 @@
 | simple-git | Git 操作封装 |
 | ali-oss | 阿里云 OSS 上传 |
 | archiver | ZIP 打包 |
-| @alicloud/dypnsapi | 阿里云号码认证 |
 | less | Less 文件编译 |
-| dotenv | 环境变量（`server/.env`） |
+| dotenv | 环境变量 |
 
 ---
 
@@ -90,8 +89,6 @@
 | `/data-decrypt` | 数据解密 | AES-ECB 解密（SDK/Box 两套 Key），支持上传抓包文件自动解析 |
 | `/seafile` | Seafile 管理 | Docker Compose 容器启动/停止/重启/状态，显示局域网访问地址 |
 | `/timeline` | 工作记录 | 时间轴形式的工作日志 |
-| `/auth-schemes` | 认证方案 | 阿里云号码认证方案管理 |
-| `/create-scheme` | 新建认证方案 | 创建号码认证配置 |
 | `/settings` | 设置 | 应用配置 |
 
 ---
@@ -146,12 +143,6 @@
 |---|---|---|
 | GET | `/api/channels/:projectName` | 获取项目渠道列表 |
 | POST | `/api/switch-channel` | 切换渠道配置 |
-
-### 号码认证
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/api/create-scheme` | 创建认证方案 |
-| POST | `/api/query-scheme-secret` | 查询方案密钥 |
 
 ### Seafile 管理
 | 方法 | 路径 | 说明 |
@@ -229,7 +220,8 @@ seafile logs           # 实时日志
 | `gui/server/.env` | 阿里云 AccessKey、OSS 配置等敏感信息（**不入库**） |
 | `gui/server/projects.json` | 手动定义的项目路径列表 |
 | `gui/server/project-versions.json` | 各项目最后部署记录（自动更新） |
-| `gui/server/oss-connection-config.json` | OSS Bucket 连接配置 |
+| `gui/server/oss-connection-config.json` | OSS Bucket / CDN 配置 |
+| `gui/server/oss-credentials.json` | OSS AccessKey（仓库须为私有） |
 | `gui/server/channel-config.json` | 多渠道打包配置 |
 
 ---
@@ -241,7 +233,7 @@ seafile logs           # 实时日志
    lsof -i :5178
    ```
 
-2. **敏感配置不入库**：`gui/server/.env` 含阿里云密钥，已在 `.gitignore` 中排除，切勿手动提交。
+2. **仓库须为私有**：`gui/server/oss-credentials.json` 含明文 AccessKey，切勿推送到公开仓库。
 
 3. **Seafile 依赖 Docker**：点击启动/停止前须确保 Docker Desktop 已运行，否则操作会失败。
 
@@ -300,7 +292,6 @@ seafile start
 ### v1.6.x
 - 新增 Seafile 私有云管理页面（启动/停止/重启/状态）
 - 新增数据解密功能（支持 SDK/Box AES 解密、Stream 抓包文件解析）
-- 新增认证方案管理
 
 ### v1.0.0 (2025-11-07)
 - 首次发布，项目管理、Git 集成、OSS 部署核心功能

@@ -23,26 +23,17 @@ fi
 # 设置生产环境端口 (后端API使用5178)
 export PORT=5178
 
-# 检查环境变量配置
-echo "🔍 检查阿里云配置..."
-if [ -n "$ALICLOUD_ACCESS_KEY_ID" ]; then
-    echo "✅ ALICLOUD_ACCESS_KEY_ID 已设置"
+# 检查 OSS 配置
+echo "🔍 检查 OSS 配置..."
+if [ -f "oss-connection-config.json" ]; then
+    echo "✅ 发现 oss-connection-config.json"
 else
-    echo "❌ ALICLOUD_ACCESS_KEY_ID 未设置"
+    echo "❌ 未发现 oss-connection-config.json（项目管理上传 OSS 需要此文件）"
 fi
-
-if [ -n "$ALICLOUD_ACCESS_KEY_SECRET" ]; then
-    echo "✅ ALICLOUD_ACCESS_KEY_SECRET 已设置"
+if [ -f "oss-credentials.json" ]; then
+    echo "✅ 发现 oss-credentials.json"
 else
-    echo "❌ ALICLOUD_ACCESS_KEY_SECRET 未设置"
-fi
-
-# 检查.env文件
-if [ -f ".env" ]; then
-    echo "📄 发现 .env 文件"
-    grep -E "^ALICLOUD_ACCESS_KEY" .env || echo "⚠️  .env文件中未找到阿里云密钥配置"
-else
-    echo "❌ 未发现 .env 文件"
+    echo "❌ 未发现 oss-credentials.json"
 fi
 echo ""
 

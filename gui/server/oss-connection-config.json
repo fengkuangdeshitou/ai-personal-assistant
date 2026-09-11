@@ -1,0 +1,81 @@
+{
+  "note": "阿里云 OSS 项目/Bucket/CDN 配置。AccessKey 见同目录 oss-credentials.json（均可入库，仓库须私有）。",
+  "connection": {
+    "region": "oss-cn-hangzhou"
+  },
+  "projects": {
+    "hg-bookmark": {
+      "name": "hg-bookmark",
+      "description": "嘿咕游戏书签版（多渠道：嘿咕游戏 / 0.05折手游 / 0.01折游戏 / 惠爪游戏）",
+      "channels": {
+        "hg": {
+          "name": "嘿咕游戏",
+          "buckets": {
+            "dev": "testagentmilu",
+            "prod": "heiguyx",
+            "cdnDomains": [
+              "https://webbox.heigu.com/"
+            ]
+          }
+        },
+        "05": {
+          "name": "0.05折手游",
+          "buckets": {
+            "dev": "testagentmilu",
+            "prod": "005zhegame",
+            "cdnDomains": [
+              "https://web.005zhegame.com/"
+            ]
+          }
+        },
+        "01": {
+          "name": "0.01折游戏",
+          "buckets": {
+            "dev": "testagentmilu",
+            "prod": "01zhegame",
+            "cdnDomains": [
+              "https://web.01zhegame.com/"
+            ]
+          }
+        },
+        "hz": {
+          "name": "惠爪游戏",
+          "buckets": {
+            "dev": "testagentmilu",
+            "prod": "ihuizhua",
+            "cdnDomains": [
+              "https://webbox.ihuizhua.com/"
+            ]
+          }
+        }
+      }
+    },
+    "react-agent-website": {
+      "name": "react-agent-website",
+      "description": "咪噜游戏 Web 盒子",
+      "buckets": {
+        "dev": "testagentmilu",
+        "prod": [
+          "iossign",
+          "web99maiyou"
+        ],
+        "cdnDomains": [
+          "https://webbox.99maiyou.cn/",
+          "https://web.milu.com/",
+          "https://web.99maiyou.cn/"
+        ]
+      }
+    },
+    "games-52-play-web": {
+      "name": "games-52-play-web",
+      "description": "52玩手游 Web 盒子",
+      "buckets": {
+        "dev": "web99maiyou",
+        "prod": "i52wan",
+        "cdnDomains": [
+          "https://webbox.i52wan.com/"
+        ]
+      }
+    }
+  }
+}

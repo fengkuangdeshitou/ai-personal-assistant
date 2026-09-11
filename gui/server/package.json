@@ -8,8 +8,6 @@
     "dev": "node server.js"
   },
   "dependencies": {
-    "@alicloud/dypnsapi20170525": "^2.0.0",
-    "@alicloud/openapi-client": "^0.4.15",
     "adm-zip": "^0.5.17",
     "ali-oss": "^6.23.0",
     "archiver": "^7.0.1",

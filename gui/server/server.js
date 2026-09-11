@@ -15,25 +15,12 @@ import archiver from 'archiver';
 import OSS from 'ali-oss';
 import less from 'less'; // 🚨 新增 Less 库导入
 import dotenv from 'dotenv';
-import { createVerifyScheme } from './aliyun-dypns-sdk.js';
-import { querySchemeSecret } from './query-scheme-secret.js';
-import Client from '@alicloud/dypnsapi20170525';
-import * as $Dypnsapi from '@alicloud/dypnsapi20170525';
-import OpenApi, * as $OpenApi from '@alicloud/openapi-client';
-import Util from '@alicloud/tea-util';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // 加载环境变量，并明确指定 .env 文件路径
 dotenv.config({ path: path.resolve(__dirname, '.env') });
-
-// 验证环境变量是否加载成功
-if (process.env.ALICLOUD_ACCESS_KEY_ID) {
-  console.log(`✅ Access Key ID Loaded: ${process.env.ALICLOUD_ACCESS_KEY_ID.substring(0, 8)}...`);
-} else {
-  console.error('❌ ALICLOUD_ACCESS_KEY_ID not found. Please check your .env file in the server directory.');
-}
 
 const app = express();
 const PORT = process.env.PORT || 5178;
@@ -44,6 +31,28 @@ const DEFAULT_DIR = '/Users/maiyou001/Project';
 // 配置文件路径
 const CONFIG_PATH = path.join(__dirname, 'projects.json');
 const OSS_CONFIG_PATH = path.join(__dirname, 'oss-connection-config.json');
+const OSS_CREDENTIALS_PATH = path.join(__dirname, 'oss-credentials.json');
+
+/** 读取 OSS 公开配置，并合并凭证文件 oss-credentials.json */
+function loadOssConfigs() {
+  if (!fs.existsSync(OSS_CONFIG_PATH)) {
+    const err = new Error('OSS connection config not found');
+    err.code = 'OSS_CONFIG_MISSING';
+    throw err;
+  }
+  const ossConfigs = JSON.parse(fs.readFileSync(OSS_CONFIG_PATH, 'utf-8'));
+  if (!ossConfigs.connection) ossConfigs.connection = {};
+
+  if (fs.existsSync(OSS_CREDENTIALS_PATH)) {
+    const creds = JSON.parse(fs.readFileSync(OSS_CREDENTIALS_PATH, 'utf-8'));
+    const fromConn = creds.connection || {};
+    ossConfigs.connection.accessKeyId =
+      creds.accessKeyId || fromConn.accessKeyId || ossConfigs.connection.accessKeyId;
+    ossConfigs.connection.accessKeySecret =
+      creds.accessKeySecret || fromConn.accessKeySecret || ossConfigs.connection.accessKeySecret;
+  }
+  return ossConfigs;
+}
 const CHANNEL_CONFIG_PATH = path.join(__dirname, 'channel-config.json');
 let statsCache = { ts: 0, data: null };
 let statsInFlight = null;
@@ -447,110 +456,8 @@ async function getTodayCommits(repoPath) {
 
 // 阿里云RFC3986编码函数
 
-// 创建阿里云认证方案的函数
-// 已移至 aliyun-dypns-sdk.js
-
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, port: PORT, projectsDir: DEFAULT_DIR });
-});
-
-// 创建阿里云认证方案
-app.post('/api/create-scheme', async (req, res) => {
-  const clientIP = req.ip || req.connection.remoteAddress || req.socket.remoteAddress || 'unknown';
-  console.log('创建认证方案请求来自:', clientIP, 'body:', req.body);
-  try {
-    const schemeData = req.body;
-    console.log('创建认证方案:', schemeData);
-
-    // 阿里云配置
-    const accessKeyId = process.env.ALICLOUD_ACCESS_KEY_ID;
-    const accessKeySecret = process.env.ALICLOUD_ACCESS_KEY_SECRET;
-
-    if (!accessKeyId || !accessKeySecret) {
-      return res.status(400).json({
-        success: false,
-        error: '阿里云访问密钥未配置'
-      });
-    }
-
-    // 准备API参数 (注意：aliyun-dypns-sdk.js 期望 camelCase 属性名)
-    const apiData = {
-      schemeName: schemeData.SchemeName,
-      appName: schemeData.AppName,
-      osType: schemeData.AccessEnd === 'iOS' ? 'iOS' : 'Web'
-    };
-
-    // 根据类型添加特定参数
-    if (schemeData.AccessEnd === 'iOS') {
-      // 兼容前端可能传递的 PackName
-      apiData.bundleId = schemeData.PackName || schemeData.BundleId;
-    } else if (schemeData.AccessEnd === 'Web') {
-      apiData.origin = schemeData.Origin;
-      apiData.url = schemeData.Url;
-    }
-
-    console.log('调用阿里云API - 入参:', apiData); // 新增的日志打印
-    // return res.json({ success: true, message: '直接返回成功', data: {} });
-
-    // 调用阿里云API创建方案
-    const result = await createVerifyScheme(accessKeyId, accessKeySecret, apiData);
-
-    if (result.success) {
-      res.json({
-        success: true,
-        message: '认证方案创建成功',
-        data: result.data
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result.error
-      });
-    }
-  } catch (error) {
-    console.error('创建方案失败:', error);
-    res.status(500).json({
-      success: false,
-      error: '创建方案失败: ' + error.message
-    });
-  }
-});
-
-// 查询方案秘钥
-app.post('/api/query-scheme-secret', async (req, res) => {
-  try {
-    const { schemeCode } = req.body;
-
-    if (!schemeCode) {
-      return res.status(400).json({
-        success: false,
-        error: '缺少方案代码参数'
-      });
-    }
-
-    console.log('查询方案秘钥:', schemeCode);
-
-    const result = await querySchemeSecret(schemeCode);
-
-    if (result && result.success) {
-      res.json({
-        success: true,
-        message: '秘钥查询成功',
-        data: result.data
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: result?.error || '查询秘钥失败'
-      });
-    }
-  } catch (error) {
-    console.error('查询秘钥失败:', error);
-    res.status(500).json({
-      success: false,
-      error: '查询秘钥失败: ' + error.message
-    });
-  }
 });
 
 app.get('/api/projects', async (_req, res) => {
@@ -1015,7 +922,7 @@ app.get('/api/channels/:projectName', (req, res) => {
     
     // 从oss-connection-config.json读取buckets配置并合并
     if (fs.existsSync(OSS_CONFIG_PATH)) {
-      const ossConfig = JSON.parse(fs.readFileSync(OSS_CONFIG_PATH, 'utf-8'));
+      const ossConfig = loadOssConfigs();
       const projectConfig = ossConfig.projects[projectName];
       
       if (projectConfig && projectConfig.channels) {
@@ -1102,7 +1009,7 @@ app.get('/api/project-buckets/:projectName', (req, res) => {
       return res.status(404).json({ error: 'OSS config not found' });
     }
     
-    const config = JSON.parse(fs.readFileSync(OSS_CONFIG_PATH, 'utf-8'));
+    const config = loadOssConfigs();
     const projectConfig = config.projects[projectName];
     
     if (!projectConfig) {
@@ -1546,8 +1453,7 @@ app.get('/api/upload-stream', async (req, res) => {
     
     let ossConfig, allBuckets;
     try {
-      const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
-      const ossConfigs = JSON.parse(ossData);
+      const ossConfigs = loadOssConfigs();
       ossConfig = ossConfigs.connection;
       
       // 获取所有可用 buckets
@@ -1719,8 +1625,7 @@ app.get('/api/upload-zip-stream', async (req, res) => {
     
     let ossConfig, allBuckets;
     try {
-      const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
-      const ossConfigs = JSON.parse(ossData);
+      const ossConfigs = loadOssConfigs();
       
       if (!ossConfigs.connection) {
         res.write(`data: ${JSON.stringify({ type: 'error', message: 'OSS connection config missing connection section' })}\n\n`);
@@ -1937,8 +1842,7 @@ app.post('/api/oss/upload-channel', async (req, res) => {
     
     let ossConfig, allBuckets;
     try {
-      const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
-      const ossConfigs = JSON.parse(ossData);
+      const ossConfigs = loadOssConfigs();
       ossConfig = ossConfigs.connection;
       
       // 获取所有可用 buckets
@@ -2057,8 +1961,7 @@ app.post('/api/oss/upload-simple', async (req, res) => {
     
     let ossConfig, bucketConfig;
     try {
-      const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
-      const ossConfigs = JSON.parse(ossData);
+      const ossConfigs = loadOssConfigs();
       ossConfig = ossConfigs.connection;
       
       // 使用新的查找函数
@@ -2175,8 +2078,7 @@ app.post('/api/oss/upload-stream', async (req, res) => {
     // 读取 OSS 配置
     let ossConfig, bucketConfig;
     try {
-      const ossData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
-      const ossConfigs = JSON.parse(ossData);
+      const ossConfigs = loadOssConfigs();
       ossConfig = ossConfigs.connection;
       
       bucketConfig = getBucketConfig(ossConfigs, projectName, null, env);
@@ -2510,8 +2412,7 @@ app.post('/api/backup-build', async (req, res) => {
     });
     
     // 读取 OSS 配置
-    const ossConfigData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
-    const ossConfigs = JSON.parse(ossConfigData);
+    const ossConfigs = loadOssConfigs();
     
     if (!ossConfigs.connection) {
       return res.status(500).json({ ok: false, error: 'OSS connection config not found' });
@@ -2560,8 +2461,7 @@ app.post('/api/oss/get-bucket-info', async (req, res) => {
   try {
     const { projectName, channelId, env } = req.body;
     
-    const ossConfigData = fs.readFileSync(OSS_CONFIG_PATH, 'utf-8');
-    const ossConfigs = JSON.parse(ossConfigData);
+    const ossConfigs = loadOssConfigs();
     
     const bucketConfig = getBucketConfig(ossConfigs, projectName, channelId, env);
     
@@ -2809,7 +2709,7 @@ async function refreshCDNCache(projectName, channelId = null, res = null) {
     if (res) res.write(`data: ${JSON.stringify({ type: 'cdn_refresh_start', message: `开始刷新 ${projectName} 的CDN缓存` })}\n\n`);
     
     // 读取OSS配置
-    const ossConfig = JSON.parse(fs.readFileSync(OSS_CONFIG_PATH, 'utf-8'));
+    const ossConfig = loadOssConfigs();
     const projectConfig = ossConfig.projects[projectName];
     
     let cdnDomains = [];
@@ -7193,6 +7093,26 @@ function enrichOptionsFromLog(item) {
   return item;
 }
 
+/** 解析加固产物路径：优先内存 session，其次磁盘 session 目录 */
+function resolveReinforcedApkFile(sessionId, filenameParam = null) {
+  const session = reinforceSessions.get(sessionId);
+  if (session && session.status === 'done' && session.outputPath && fs.existsSync(session.outputPath)) {
+    return {
+      filePath: session.outputPath,
+      filename: String(filenameParam || session.outputName || path.basename(session.outputPath)),
+    };
+  }
+
+  const sessionDir = path.join(APK_SESSION_DIR, sessionId);
+  if (!fs.existsSync(sessionDir)) return null;
+  const apkFiles = fs.readdirSync(sessionDir).filter(
+    f => f.endsWith('.apk') && f.includes('-reinforce')
+  );
+  if (apkFiles.length === 0) return null;
+  const target = filenameParam && apkFiles.includes(filenameParam) ? filenameParam : apkFiles[0];
+  return { filePath: path.join(sessionDir, target), filename: target };
+}
+
 // 查询历史加固耗时日志（用于复盘瓶颈）
 app.get('/api/apk/reinforce-history', (req, res) => {
   const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 30));
@@ -7332,33 +7252,69 @@ app.get('/api/apk/download-reinforced/:sessionId', (req, res) => {
   const { sessionId } = req.params;
   const filenameParam = req.query.filename ? String(req.query.filename) : null;
 
-  // 1. 优先从内存 session 查找
-  const session = reinforceSessions.get(sessionId);
-  if (session && session.status === 'done' && session.outputPath && fs.existsSync(session.outputPath)) {
-    const filename = filenameParam || session.outputName;
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(String(filename))}"`);
-    return res.sendFile(session.outputPath);
+  const resolved = resolveReinforcedApkFile(sessionId, filenameParam);
+  if (!resolved) {
+    return res.status(404).json({ success: false, error: '文件不存在或加固未完成' });
   }
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(resolved.filename)}"`);
+  return res.sendFile(resolved.filePath);
+});
 
-  // 2. 内存中没有（服务重启后）则从磁盘 sessionDir 查找
-  const sessionDir = path.join(APK_SESSION_DIR, sessionId);
-  if (fs.existsSync(sessionDir)) {
-    // 找该目录下带 -reinforce 的 APK 文件
-    const apkFiles = fs.readdirSync(sessionDir).filter(
-      f => f.endsWith('.apk') && f.includes('-reinforce')
-    );
-    if (apkFiles.length > 0) {
-      // 优先匹配 filename 参数，否则取第一个
-      const target = filenameParam && apkFiles.includes(filenameParam)
-        ? filenameParam
-        : apkFiles[0];
-      const filePath = path.join(sessionDir, target);
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(target)}"`);
-      return res.sendFile(filePath);
+/** 按渠道批量打包下载已完成的加固 APK（避免浏览器拦截多次 a.click） */
+app.post('/api/apk/download-reinforced-batch', async (req, res) => {
+  try {
+    const sessionIds = Array.isArray(req.body?.sessionIds) ? req.body.sessionIds.map(String) : [];
+    const signProfile = typeof req.body?.signProfile === 'string' ? req.body.signProfile : '';
+    const label = typeof req.body?.label === 'string' ? req.body.label : (signProfile || 'batch');
+    if (sessionIds.length === 0) {
+      return res.status(400).json({ success: false, error: '未指定 sessionIds' });
     }
-  }
 
-  return res.status(404).json({ success: false, error: '文件不存在或加固未完成' });
+    const zip = new AdmZip();
+    const usedNames = new Set();
+    let added = 0;
+    const missing = [];
+
+    for (const sessionId of sessionIds) {
+      const resolved = resolveReinforcedApkFile(sessionId, null);
+      if (!resolved) {
+        missing.push(sessionId);
+        continue;
+      }
+      let name = resolved.filename;
+      if (usedNames.has(name)) {
+        const ext = path.extname(name);
+        const base = path.basename(name, ext);
+        let i = 2;
+        while (usedNames.has(`${base}-${i}${ext}`)) i += 1;
+        name = `${base}-${i}${ext}`;
+      }
+      usedNames.add(name);
+      zip.addFile(name, fs.readFileSync(resolved.filePath));
+      added += 1;
+    }
+
+    if (added === 0) {
+      return res.status(404).json({
+        success: false,
+        error: '没有可下载的 APK（文件可能已被清理）',
+        missing,
+      });
+    }
+
+    const zipName = `reinforced-${label}-${new Date().toISOString().slice(0, 10)}.zip`;
+    const buf = zip.toBuffer();
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(zipName)}"`);
+    res.setHeader('X-Download-Count', String(added));
+    if (missing.length > 0) {
+      res.setHeader('X-Download-Missing', String(missing.length));
+    }
+    return res.send(buf);
+  } catch (e) {
+    console.error('[download-reinforced-batch]', e);
+    return res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 // ── 后端管理 ────────────────────────────────────────────────────────

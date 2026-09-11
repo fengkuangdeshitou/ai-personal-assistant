@@ -7,8 +7,6 @@ import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
 import Timeline from './pages/Timeline';
 import Settings from './pages/Settings';
-import CreateScheme from './pages/CreateScheme';
-import AuthSchemes from './pages/AuthSchemes';
 import DataDecrypt from './pages/DataDecrypt';
 import SeafileManager from './pages/SeafileManager';
 import IpaViewer from './pages/IpaViewer';
@@ -33,8 +31,6 @@ function App() {
                   <Route path="/dashboard" element={<Dashboard />} />
                   <Route path="/projects" element={<Projects />} />
                   <Route path="/timeline" element={<Timeline />} />
-                  <Route path="/auth-schemes" element={<AuthSchemes />} />
-                  <Route path="/create-scheme" element={<CreateScheme />} />
                   <Route path="/data-decrypt" element={<DataDecrypt />} />
                   <Route path="/seafile" element={<SeafileManager />} />
                   <Route path="/ipa-viewer" element={<IpaViewer />} />
