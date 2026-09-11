@@ -1,5 +1,5 @@
 {
-  "note": "阿里云 OSS 项目/Bucket/CDN 配置。AccessKey 见同目录 oss-credentials.json（均可入库，仓库须私有）。",
+  "note": "阿里云 OSS 项目/Bucket/CDN 配置。AccessKey 见同目录 oss-credentials.json（aki/aks 为 Base64，运行时解码；仓库须私有）。",
   "connection": {
     "region": "oss-cn-hangzhou"
   },

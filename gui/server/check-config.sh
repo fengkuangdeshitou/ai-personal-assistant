@@ -26,13 +26,33 @@ echo "2. 检查 OSS 凭证文件..."
 if [ -f "oss-credentials.json" ]; then
     echo "✅ 发现 oss-credentials.json"
     python3 - <<'PY'
-import json
+import json, base64
 from pathlib import Path
+
+def pick(creds, b64_keys, plain_keys):
+    fromConn = creds.get('connection') or {}
+    for k in b64_keys:
+        raw = creds.get(k) or fromConn.get(k)
+        if not raw:
+            continue
+        try:
+            dec = base64.b64decode(str(raw).strip()).decode('utf-8').strip()
+            if dec:
+                return dec
+        except Exception:
+            pass
+    for k in plain_keys:
+        raw = (creds.get(k) or fromConn.get(k) or '')
+        s = str(raw).strip()
+        if s:
+            return s
+    return ''
+
 creds = json.loads(Path('oss-credentials.json').read_text())
-ak = (creds.get('accessKeyId') or (creds.get('connection') or {}).get('accessKeyId') or '').strip()
-sk = (creds.get('accessKeySecret') or (creds.get('connection') or {}).get('accessKeySecret') or '').strip()
+ak = pick(creds, ['aki'], ['accessKeyId'])
+sk = pick(creds, ['aks'], ['accessKeySecret'])
 ok = bool(ak and sk and not ak.startswith('YOUR_') and not sk.startswith('YOUR_'))
-print(('✅' if ok else '❌') + ' accessKeyId/Secret ' + ('已配置' if ok else '未配置或仍为占位符'))
+print(('✅' if ok else '❌') + ' aki/aks(Base64) ' + ('已配置并可解码' if ok else '未配置或仍为占位符'))
 PY
 else
     echo "❌ 未发现 oss-credentials.json"

@@ -15,9 +15,6 @@ reminders.json
 *.swp
 .DS_Store
 
-# OSS 凭证（含 AccessKey，勿提交；仅提交 oss-connection-config.json）
-gui/server/oss-credentials.json
-
 # 旧版遗留配置名（已不再使用）
 gui/server/oss-config.json
 gui/server/bucket-config.json

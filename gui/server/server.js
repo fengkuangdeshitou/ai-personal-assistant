@@ -33,6 +33,33 @@ const CONFIG_PATH = path.join(__dirname, 'projects.json');
 const OSS_CONFIG_PATH = path.join(__dirname, 'oss-connection-config.json');
 const OSS_CREDENTIALS_PATH = path.join(__dirname, 'oss-credentials.json');
 
+/** 解析凭证字段：aki/aks 按 Base64 解码；仍兼容旧明文 accessKeyId/Secret */
+function decodeOssCredentialValue(raw, { base64 = false } = {}) {
+  if (raw == null) return undefined;
+  const s = String(raw).trim();
+  if (!s) return undefined;
+  if (!base64) return s;
+  try {
+    const decoded = Buffer.from(s, 'base64').toString('utf8').trim();
+    return decoded || undefined;
+  } catch (_) {
+    return undefined;
+  }
+}
+
+function pickOssCredential(creds, { b64Keys = [], plainKeys = [] }) {
+  const fromConn = creds.connection || {};
+  for (const k of b64Keys) {
+    const v = decodeOssCredentialValue(creds[k] ?? fromConn[k], { base64: true });
+    if (v) return v;
+  }
+  for (const k of plainKeys) {
+    const v = decodeOssCredentialValue(creds[k] ?? fromConn[k], { base64: false });
+    if (v) return v;
+  }
+  return undefined;
+}
+
 /** 读取 OSS 公开配置，并合并凭证文件 oss-credentials.json */
 function loadOssConfigs() {
   if (!fs.existsSync(OSS_CONFIG_PATH)) {
@@ -45,11 +72,10 @@ function loadOssConfigs() {
 
   if (fs.existsSync(OSS_CREDENTIALS_PATH)) {
     const creds = JSON.parse(fs.readFileSync(OSS_CREDENTIALS_PATH, 'utf-8'));
-    const fromConn = creds.connection || {};
-    ossConfigs.connection.accessKeyId =
-      creds.accessKeyId || fromConn.accessKeyId || ossConfigs.connection.accessKeyId;
-    ossConfigs.connection.accessKeySecret =
-      creds.accessKeySecret || fromConn.accessKeySecret || ossConfigs.connection.accessKeySecret;
+    const ak = pickOssCredential(creds, { b64Keys: ['aki'], plainKeys: ['accessKeyId'] });
+    const sk = pickOssCredential(creds, { b64Keys: ['aks'], plainKeys: ['accessKeySecret'] });
+    if (ak) ossConfigs.connection.accessKeyId = ak;
+    if (sk) ossConfigs.connection.accessKeySecret = sk;
   }
   return ossConfigs;
 }

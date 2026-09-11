@@ -47,14 +47,14 @@ cd server
 | 文件 | 说明 |
 |---|---|
 | `oss-connection-config.json` | region、项目/渠道 bucket、cdnDomains |
-| `oss-credentials.json` | AccessKeyId / AccessKeySecret |
+| `oss-credentials.json` | 凭证字段 `aki` / `aks`（值为 Base64，运行时解码） |
 
-`oss-credentials.json` 示例：
+`oss-credentials.json` 示例（值为明文 Base64，可用 `echo -n '明文' | base64` 生成）：
 
 ```json
 {
-  "accessKeyId": "YOUR_ACCESS_KEY_ID",
-  "accessKeySecret": "YOUR_ACCESS_KEY_SECRET"
+  "aki": "BASE64_OF_ACCESS_KEY_ID",
+  "aks": "BASE64_OF_ACCESS_KEY_SECRET"
 }
 ```
 
