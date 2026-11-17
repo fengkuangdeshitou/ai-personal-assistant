@@ -7,7 +7,7 @@ echo "🚀 开始执行生产环境部署后任务..."
 
 # 项目名称从环境变量获取
 PROJECT_NAME="${PROJECT_NAME:-unknown-project}"
-PROJECT_PATH="${PROJECT_PATH:-/Users/maiyou001/Project/$PROJECT_NAME}"
+PROJECT_PATH="${PROJECT_PATH:-$HOME/Project/$PROJECT_NAME}"
 
 echo "📦 项目: $PROJECT_NAME"
 echo "📁 路径: $PROJECT_PATH"

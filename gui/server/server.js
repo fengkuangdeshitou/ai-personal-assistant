@@ -26,7 +26,7 @@ const app = express();
 const PORT = process.env.PORT || 5178;
 
 // 默认项目目录
-const DEFAULT_DIR = '/Users/maiyou001/Project';
+const DEFAULT_DIR = path.join(os.homedir(), 'Project');
 
 // 配置文件路径
 const CONFIG_PATH = path.join(__dirname, 'projects.json');
@@ -113,13 +113,12 @@ function flushGitQueue() {
   }
 }
 
-// 内存存储（用于小文件，如 IPA 解析时直接读取）
+// 内存存储（小文件；IPA 解析已改用磁盘，避免大包被拒）
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 500 * 1024 * 1024 },
 });
 
-// 磁盘存储（用于大文件，如 SDK 替换资源 zip）
+// 磁盘存储（IPA 解析 / SDK 替换等大文件，不设单文件大小上限）
 const MULTER_TMP_DIR = path.join(os.tmpdir(), 'multer-fw-uploads');
 if (!fs.existsSync(MULTER_TMP_DIR)) fs.mkdirSync(MULTER_TMP_DIR, { recursive: true });
 const uploadToDisk = multer({
@@ -127,7 +126,6 @@ const uploadToDisk = multer({
     destination: (_req, _file, cb) => cb(null, MULTER_TMP_DIR),
     filename: (_req, file, cb) => cb(null, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${file.originalname}`),
   }),
-  limits: { fileSize: 500 * 1024 * 1024 },
 });
 
 // 初始化AI服务
@@ -2830,7 +2828,7 @@ async function refreshCDNCache(projectName, channelId = null, res = null) {
 }
 
 // ─── Seafile 管理 API ──────────────────────────────────────────────
-const SEAFILE_DIR = '/Users/maiyou001/seafile';
+const SEAFILE_DIR = path.join(os.homedir(), 'seafile');
 
 async function runDockerCompose(args) {
   const { execSync } = await import('child_process');
@@ -2888,15 +2886,24 @@ app.get('/api/seafile/status', async (_req, res) => {
 
     const allRunning = containers.length > 0 && containers.every(c => c.running);
 
-    // 获取局域网 IP
+    // 获取局域网 IP（跳过 169.254 链路本地地址，优先 192.168/10/172.16 私网）
     const nets = os.networkInterfaces();
-    let localIp = '';
+    const isV4 = (addr) => addr.family === 'IPv4' || addr.family === 4;
+    const candidates = [];
     for (const iface of Object.values(nets)) {
       for (const addr of (iface || [])) {
-        if (addr.family === 'IPv4' && !addr.internal) { localIp = addr.address; break; }
+        if (!isV4(addr) || addr.internal) continue;
+        const ip = addr.address;
+        if (ip.startsWith('169.254.')) continue;
+        candidates.push(ip);
       }
-      if (localIp) break;
     }
+    const prefer = (ip) =>
+      ip.startsWith('192.168.') ? 0 :
+      ip.startsWith('10.') ? 1 :
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip) ? 2 : 3;
+    candidates.sort((a, b) => prefer(a) - prefer(b));
+    let localIp = candidates[0] || '';
 
     // 磁盘占用：按容器名关键词匹配数据目录
     const duSize = (p) => {
@@ -3576,7 +3583,7 @@ app.post('/api/seafile/capture-seahub-error', async (_req, res) => {
   });
 });
 
-const SEAFDAV_CONF = '/Users/maiyou001/seafile/data/seafile/conf/seafdav.conf';
+const SEAFDAV_CONF = path.join(os.homedir(), 'seafile/data/seafile/conf/seafdav.conf');
 
 // 读取 SeafDAV 配置状态
 app.get('/api/seafile/seafdav/status', (_req, res) => {
@@ -3628,6 +3635,19 @@ function downloadFile(url) {
     }
     doRequest(url);
   });
+}
+
+/**
+ * 解析 plist，兼容二进制 (bplist00) 与 XML。
+ * 注意：不能对二进制内容直接 toString('utf-8')，会损坏字节并触发
+ * "Unsupported int size: 0"。
+ */
+function parsePlistData(plistLib, data) {
+  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (buf.length >= 6 && buf.subarray(0, 6).toString('ascii') === 'bplist') {
+    return plistLib.parse(new Uint8Array(buf));
+  }
+  return plistLib.parse(buf.toString('utf-8'));
 }
 
 /** 扫描 IPA 包内所有 Framework / Bundle / Dylib */
@@ -3714,20 +3734,56 @@ function scanFrameworksFromEntries(entries) {
   return Array.from(sdkMap.values());
 }
 
-/** 解析 IPA 信息（用于 IPA 信息查看页） */
-async function parseIpaInfo(ipaBuffer) {
+/** 从 embedded.mobileprovision 提取签名证书 CN 与描述文件名称 */
+async function parseIpaSigningInfo(entries, plistLib) {
+  const provEntry = entries.find(e =>
+    /^Payload\/[^/]+\.app\/embedded\.mobileprovision$/.test(e.entryName) && !e.isDirectory
+  );
+  if (!provEntry) return { signingCertificate: '', provisioningProfile: '' };
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipa-prov-'));
+  try {
+    const provPath = path.join(tmpDir, 'embedded.mobileprovision');
+    fs.writeFileSync(provPath, provEntry.getData());
+    const xml = await runCmd(`security cms -D -i "${provPath}"`);
+    const profile = plistLib.parse(xml);
+    const provisioningProfile = profile.Name || '';
+
+    const certNames = [];
+    for (const [i, cert] of (profile.DeveloperCertificates || []).entries()) {
+      try {
+        const derPath = path.join(tmpDir, `cert-${i}.der`);
+        fs.writeFileSync(derPath, Buffer.from(cert));
+        const subject = await runCmd(
+          `openssl x509 -inform DER -in "${derPath}" -noout -subject -nameopt RFC2253`
+        );
+        const match = String(subject).match(/CN=([^,/]+)/);
+        if (match) certNames.push(match[1].trim());
+      } catch (_) {}
+    }
+
+    return {
+      signingCertificate: certNames.join('; '),
+      provisioningProfile,
+    };
+  } catch (_) {
+    return { signingCertificate: '', provisioningProfile: '' };
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+/** 解析 IPA 信息（用于 IPA 信息查看页；入参为磁盘路径，支持超大包） */
+async function parseIpaInfo(ipaPath) {
   const plist = await import('plist');
-  const zip = new AdmZip(ipaBuffer);
+  const zip = new AdmZip(ipaPath);
   const entries = zip.getEntries();
 
   // 复用 SDK 替换页同源版本扫描逻辑，避免两处实现不一致
   let mysdkFrameworkVersion = '';
   let mysdkBundleVersion = '';
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipa-parse-'));
-  const tmpIpaPath = path.join(tmpDir, 'parse.ipa');
   try {
-    fs.writeFileSync(tmpIpaPath, ipaBuffer);
-    const frameworks = await scanFrameworksFromDisk(tmpIpaPath);
+    const frameworks = await scanFrameworksFromDisk(ipaPath);
     const fw = frameworks.find(item => (item.name || '').toLowerCase() === 'mysdk.framework');
     const bundle = frameworks.find(item => (item.name || '').toLowerCase() === 'mysdk.bundle');
     mysdkFrameworkVersion = fw?.version || '';
@@ -3735,8 +3791,6 @@ async function parseIpaInfo(ipaBuffer) {
   } catch (_) {
     mysdkFrameworkVersion = '';
     mysdkBundleVersion = '';
-  } finally {
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
   }
 
   const infoPlistEntry = entries.find(e =>
@@ -3744,7 +3798,8 @@ async function parseIpaInfo(ipaBuffer) {
   );
   if (!infoPlistEntry) throw new Error('未找到 Info.plist');
 
-  const plistData = plist.parse(infoPlistEntry.getData().toString('utf-8'));
+  const plistData = parsePlistData(plist, infoPlistEntry.getData());
+  const { signingCertificate, provisioningProfile } = await parseIpaSigningInfo(entries, plist);
 
   // 构建文件树（FileNode 格式）
   const buildFileTree = (ents) => {
@@ -3790,7 +3845,7 @@ async function parseIpaInfo(ipaBuffer) {
     const result = {};
     ents.filter(e => e.entryName.endsWith('.plist') && !e.isDirectory).forEach(e => {
       try {
-        result[e.entryName] = plist.parse(e.getData().toString('utf-8'));
+        result[e.entryName] = parsePlistData(plist, e.getData());
       } catch (_) {}
     });
     return result;
@@ -3822,6 +3877,8 @@ async function parseIpaInfo(ipaBuffer) {
       executable: plistData.CFBundleExecutable || '',
       mysdkFrameworkVersion,
       mysdkBundleVersion,
+      signingCertificate,
+      provisioningProfile,
     },
     permissions,
     urlSchemes,
@@ -3957,25 +4014,33 @@ async function replaceFrameworksOnDisk(ipaPath, fwFilePaths, ipaBaseName) {
 
 // ── IPA 信息查看 ─────────────────────────────────────────────────────
 
-app.post('/api/ipa/parse', upload.single('ipa'), async (req, res) => {
+app.post('/api/ipa/parse', uploadToDisk.single('ipa'), async (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, error: '未上传文件' });
+  const tmpPath = req.file.path;
   try {
-    const info = await parseIpaInfo(req.file.buffer);
+    const info = await parseIpaInfo(tmpPath);
     res.json({ success: true, ...info });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
+  } finally {
+    try { if (tmpPath && fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (_) {}
   }
 });
 
 app.post('/api/ipa/parse-from-url', async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ success: false, error: '缺少 URL' });
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipa-url-'));
+  const tmpPath = path.join(tmpDir, 'download.ipa');
   try {
     const buf = await downloadFile(url);
-    const info = await parseIpaInfo(buf);
+    fs.writeFileSync(tmpPath, buf);
+    const info = await parseIpaInfo(tmpPath);
     res.json({ success: true, ...info });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
   }
 });
 
@@ -4205,12 +4270,14 @@ app.post('/api/ipa/init-session-from-path', async (req, res) => {
     const ipaName = path.basename(fullPath);
     const frameworks = await scanFrameworksFromDisk(destPath);
 
-    // 从 Payload/*.app/Info.plist 读取手机显示名称
+    // 从 Payload/*.app/Info.plist 读取手机显示名称（经 plutil 兼容二进制 plist）
     let appName = '';
     try {
       const plist = await import('plist');
-      const infoPlistContent = await runCmd(`unzip -p "${destPath}" "Payload/*.app/Info.plist"`);
-      const infoPlist = plist.parse(infoPlistContent);
+      const infoPlistXml = await runCmd(
+        `unzip -p "${destPath}" "Payload/*.app/Info.plist" | plutil -convert xml1 -o - -`
+      );
+      const infoPlist = plist.parse(infoPlistXml);
       appName = infoPlist.CFBundleDisplayName || infoPlist.CFBundleName || '';
     } catch (_) {}
 
@@ -7500,7 +7567,7 @@ app.get('/api/code-sync/git-status', (req, res) => {
   }
 });
 
-// 列出所有可同步的项目（/Users/maiyou001/Project 下的 git 项目）
+// 列出所有可同步的项目（~/Project 下的 git 项目）
 app.get('/api/code-sync/projects', (_req, res) => {
   const entries = [];
   try {

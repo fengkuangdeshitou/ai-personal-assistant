@@ -41,7 +41,7 @@
         "hz": {
           "name": "惠爪游戏",
           "buckets": {
-            "dev": "testagentmilu",
+            "dev": "test52wan",
             "prod": "ihuizhua",
             "cdnDomains": [
               "https://webbox.ihuizhua.com/"
@@ -70,7 +70,7 @@
       "name": "games-52-play-web",
       "description": "52玩手游 Web 盒子",
       "buckets": {
-        "dev": "web99maiyou",
+        "dev": "test52wan",
         "prod": "i52wan",
         "cdnDomains": [
           "https://webbox.i52wan.com/"

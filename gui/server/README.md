@@ -75,7 +75,7 @@ cd server
 {
   "ok": true,
   "port": 5178,
-  "projectsDir": "/Users/maiyou001/Projects"
+  "projectsDir": "/Users/maiyou/Projects"
 }
 ```
 
@@ -88,7 +88,7 @@ cd server
   "projects": [
     {
       "name": "ai-personal-assistant",
-      "path": "/Users/maiyou001/Projects/ai-personal-assistant",
+      "path": "/Users/maiyou/Projects/ai-personal-assistant",
       "lastCommitTime": "2025-01-08T10:30:00.000Z"
     }
   ]
@@ -117,7 +117,7 @@ cd server
 **请求体：**
 ```json
 {
-  "path": "/Users/maiyou001/Projects/ai-personal-assistant"
+  "path": "/Users/maiyou/Projects/ai-personal-assistant"
 }
 ```
 
@@ -142,7 +142,7 @@ cd server
 **请求体：**
 ```json
 {
-  "path": "/Users/maiyou001/Projects/ai-personal-assistant",
+  "path": "/Users/maiyou/Projects/ai-personal-assistant",
   "message": "可选的提交信息"
 }
 ```

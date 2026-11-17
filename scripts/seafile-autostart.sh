@@ -4,7 +4,7 @@
 # 由 macOS LaunchAgent 在用户登录时调用
 # 会等待 Docker Desktop 启动后再启动 Seafile 容器
 
-SEAFILE_DIR="/Users/maiyou001/seafile"
+SEAFILE_DIR="$HOME/seafile"
 LOG_PREFIX="[Seafile AutoStart]"
 MAX_WAIT=120   # 最多等待 Docker 120 秒
 INTERVAL=5     # 每 5 秒检测一次

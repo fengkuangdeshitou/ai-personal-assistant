@@ -3,7 +3,7 @@
 # Seafile 服务管理脚本
 # 管理本机 Docker Compose 部署的 Seafile 私有云
 
-SEAFILE_DIR="/Users/maiyou001/seafile"
+SEAFILE_DIR="$HOME/seafile"
 COMPOSE_CMD="docker compose"
 
 # 颜色
@@ -136,7 +136,7 @@ cmd_logs() {
 }
 
 cmd_autostart_on() {
-    local plist_src="$HOME/Library/LaunchAgents/com.maiyou001.seafile.plist"
+    local plist_src="$HOME/Library/LaunchAgents/com.maiyou.seafile.plist"
     if [ -f "$plist_src" ]; then
         launchctl load "$plist_src" 2>/dev/null
         log_info "开机自启已启用 ✓"
@@ -147,7 +147,7 @@ cmd_autostart_on() {
 }
 
 cmd_autostart_off() {
-    local plist_src="$HOME/Library/LaunchAgents/com.maiyou001.seafile.plist"
+    local plist_src="$HOME/Library/LaunchAgents/com.maiyou.seafile.plist"
     if [ -f "$plist_src" ]; then
         launchctl unload "$plist_src" 2>/dev/null
         log_warn "开机自启已禁用"

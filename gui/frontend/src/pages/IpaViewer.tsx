@@ -32,6 +32,8 @@ interface AppInfo {
   minOS: string; platform: string; sdkVersion: string; executable: string;
   mysdkFrameworkVersion?: string;
   mysdkBundleVersion?: string;
+  signingCertificate?: string;
+  provisioningProfile?: string;
 }
 interface UrlScheme { scheme: string; name: string; }
 interface Permission { key: string; label: string; description: string; }
@@ -350,7 +352,7 @@ const IpaViewer: React.FC = () => {
             >
               <p className="ant-upload-drag-icon"><InboxOutlined /></p>
               <p className="ant-upload-text">点击或拖拽 .ipa 文件到此处</p>
-              <p className="ant-upload-hint">支持单文件上传，文件大小上限 500 MB</p>
+              <p className="ant-upload-hint">支持单文件上传，无大小限制</p>
             </Dragger>
           </Spin>
 
@@ -373,15 +375,6 @@ const IpaViewer: React.FC = () => {
                 <Descriptions.Item label="Bundle ID">
                   <Text copyable code>{result.info.bundleId}</Text>
                 </Descriptions.Item>
-                <Descriptions.Item label="可执行文件">
-                  <Text code>{result.info.executable}</Text>
-                </Descriptions.Item>
-                <Descriptions.Item label="版本号">
-                  <Tag color="blue">{result.info.version}</Tag>
-                </Descriptions.Item>
-                <Descriptions.Item label="Build 号">
-                  <Tag color="geekblue">{result.info.build}</Tag>
-                </Descriptions.Item>
                 <Descriptions.Item label="最低 iOS 版本">
                   <Tag color="cyan">{result.info.minOS || '—'}</Tag>
                 </Descriptions.Item>
@@ -396,6 +389,16 @@ const IpaViewer: React.FC = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="MYSDK.bundle 版本">
                   <Tag color="magenta">{result.info.mysdkBundleVersion || '—'}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="签名证书" span={2}>
+                  <Text copyable={!!result.info.signingCertificate} code={!!result.info.signingCertificate}>
+                    {result.info.signingCertificate || '—'}
+                  </Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="描述文件" span={2}>
+                  <Text copyable={!!result.info.provisioningProfile} code={!!result.info.provisioningProfile}>
+                    {result.info.provisioningProfile || '—'}
+                  </Text>
                 </Descriptions.Item>
               </Descriptions>
             </Card>
